@@ -93,8 +93,9 @@ def debug(
 
     caps = trace.target.capabilities
     typer.echo(f"Profile: {trace.profile}")
-    typer.echo(f"Neo4j: {trace.target.server_version} ({trace.target.edition})")
-    typer.echo(f"Database: {trace.target.database}")
+    typer.echo(f"Neo4j version: {trace.target.server_version}")
+    typer.echo(f"Edition: {trace.target.edition}")
+    typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
     typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
