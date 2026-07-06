@@ -213,9 +213,10 @@ class Totals(BaseModel):
 
 
 class Score(_Strict):
+    # Frozen shape: a non-null score is { value, method, weights } — all present, no defaults.
     value: int
-    method: Literal["weighted-by-severity"] = "weighted-by-severity"
-    weights: dict[str, int] = Field(default_factory=lambda: {"error": 3, "warn": 1})
+    method: Literal["weighted-by-severity"]
+    weights: dict[str, int]
 
     @model_validator(mode="after")
     def _weights_locked(self) -> Score:
@@ -271,7 +272,7 @@ class Suite(_Strict):
 
 
 class Results(_Strict):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0"]  # frozen top-level key, required and present
     run: Run
     score: Score | None
     totals: Totals

@@ -87,6 +87,14 @@ def _default_severity(verdict):
     return Severity.WARN if verdict is Verdict.WARN else Severity.ERROR
 
 
+def _score(value, weights=None):
+    return Score(
+        value=value,
+        method="weighted-by-severity",
+        weights=weights if weights is not None else {"error": 3, "warn": 1},
+    )
+
+
 def _base(**over):
     """A valid record for the given verdict; override any field to make it invalid."""
     verdict = over.get("verdict", Verdict.PASS)
@@ -249,7 +257,7 @@ def _results(checks, status=RunStatus.COMPLETE, **run_over):
     return Results(
         schema_version="1.0",
         run=_run(status=status, exit_code=exit_code(status, checks), **run_over),
-        score=None if sc is None else Score(value=sc),
+        score=None if sc is None else _score(sc),
         totals=totals(checks),
         suites=[{"id": "s", "source_sha": "x", "score": sc, "totals": totals(checks)}],
         checks=checks,
@@ -265,7 +273,7 @@ def test_wrong_totals_rejected():
         Results(
             schema_version="1.0",
             run=_run(exit_code=0),
-            score=Score(value=100),
+            score=_score(100),
             totals={"checks": 9, "pass": 9, "fail": 0, "warn": 0, "errored": 0, "skipped": 0},
             suites=[],
             checks=[_chk(Verdict.PASS)],
@@ -300,7 +308,7 @@ def test_complete_requires_target():
         Results(
             schema_version="1.0",
             run=_run(target=None, exit_code=0),
-            score=Score(value=100),
+            score=_score(100),
             totals=totals(checks),
             suites=[{"id": "s", "source_sha": "x", "score": 100, "totals": totals(checks)}],
             checks=checks,
@@ -318,7 +326,7 @@ def test_per_suite_totals_checked():
         Results(
             schema_version="1.0",
             run=_run(exit_code=0),
-            score=Score(value=100),
+            score=_score(100),
             totals=totals(checks),
             suites=[
                 {
@@ -341,7 +349,24 @@ def test_per_suite_totals_checked():
 
 def test_bogus_score_weights_rejected():
     with pytest.raises(ValidationError):
-        Score(value=50, weights={"error": 1, "warn": 1})
+        _score(50, {"error": 1, "warn": 1})
+
+
+def test_score_requires_method_and_weights():
+    with pytest.raises(ValidationError):
+        Score(value=100)  # method + weights are frozen keys, not defaulted
+
+
+def test_schema_version_required():
+    checks = [_chk(Verdict.PASS)]
+    with pytest.raises(ValidationError):
+        Results(
+            run=_run(exit_code=0),
+            score=_score(100),
+            totals=totals(checks),
+            suites=[{"id": "s", "source_sha": "x", "score": 100, "totals": totals(checks)}],
+            checks=checks,
+        )  # missing schema_version
 
 
 def test_duplicate_check_identity_rejected():
@@ -355,7 +380,7 @@ def test_duplicate_suite_id_rejected():
         Results(
             schema_version="1.0",
             run=_run(exit_code=0),
-            score=Score(value=100),
+            score=_score(100),
             totals=totals(checks),
             suites=[
                 {"id": "s", "source_sha": "x", "score": 100, "totals": totals(checks)},
