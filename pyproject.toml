@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
+    "neo4j>=5.20",
     "typer>=0.12",
     "pydantic>=2.6",
     "pyyaml>=6.0",
@@ -26,6 +27,7 @@ dev = [
     "jsonschema>=4",
     "ruff>=0.6",
     "pre-commit>=3.7",
+    "testcontainers[neo4j]>=4.8",
 ]
 
 [tool.hatch.build.targets.wheel]
