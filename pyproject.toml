@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "graphcheck"
+version = "0.1.0"
+description = "Semantic observability for property graphs — pytest for knowledge graphs."
+requires-python = ">=3.10"
+license = "Apache-2.0"
+readme = "README.md"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+graphcheck = "graphcheck.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "jsonschema>=4",
+    "ruff>=0.6",
+    "pre-commit>=3.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/graphcheck"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Coverage is enforced in CI (.github/workflows/ci.yml), not here — so focused
+# `pytest -k ...` runs don't trip the package-wide 80% gate.
