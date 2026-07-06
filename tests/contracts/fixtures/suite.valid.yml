@@ -1,0 +1,21 @@
+suite: customer-360
+defaults: { severity: error, tags: [production] }
+
+conformance:
+  - id: cust-tax-id-present
+    check: completeness
+    with: { label: Customer, property: tax_id, threshold: 1.0 }
+    tags: [pii, kyc]
+
+competency:
+  - id: cq-001
+    question: "Which accounts does a customer control?"
+    query: "MATCH (c:Customer {id:$id})-[:CONTROLS]->(a:Account) RETURN a.id AS account_id"
+    params: { id: "$first-active-customer" }
+    expect: { rows: { min: 1, max: 200 }, columns: [account_id], unique: true }
+
+  - id: cq-001-regression
+    question: "Known-good"
+    query: "MATCH (c:Customer {id:$id})-[:CONTROLS]->(a:Account) RETURN a.id AS account_id"
+    params: { id: "CUST-1042" }
+    expect: { contains: ["ACC-9001"] }
