@@ -1,0 +1,5 @@
+suite: s
+conformance:
+  - id: x
+    check: no_such_check
+    with: {}

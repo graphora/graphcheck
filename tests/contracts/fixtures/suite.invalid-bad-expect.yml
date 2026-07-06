@@ -1,0 +1,6 @@
+suite: s
+competency:
+  - id: x
+    question: q
+    query: "RETURN 1"
+    expect: { bogus: 1 }
