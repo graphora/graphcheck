@@ -55,7 +55,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Compiled Query"
         },
         "duration_ms": {
@@ -67,7 +66,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Duration Ms"
         },
         "error": {
@@ -78,8 +76,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "estimate": {
           "anyOf": [
@@ -91,7 +88,6 @@
               "type": "boolean"
             }
           ],
-          "default": false,
           "title": "Estimate"
         },
         "evidence": {
@@ -102,8 +98,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "expected": {
           "additionalProperties": true,
@@ -124,7 +119,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Measured"
         },
         "name": {
@@ -141,7 +135,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Params"
         },
         "pattern": {
@@ -156,7 +149,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Provenance"
         },
         "severity": {
@@ -170,8 +162,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "started_at": {
           "anyOf": [
@@ -182,7 +173,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Started At"
         },
         "suite_id": {
@@ -198,9 +188,19 @@
         "suite_id",
         "pattern",
         "name",
+        "provenance",
         "severity",
         "verdict",
-        "expected"
+        "skip_reason",
+        "started_at",
+        "duration_ms",
+        "compiled_query",
+        "params",
+        "measured",
+        "expected",
+        "estimate",
+        "evidence",
+        "error"
       ],
       "title": "CheckResult",
       "type": "object"
@@ -386,8 +386,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "exit_code": {
           "title": "Exit Code",
@@ -418,7 +417,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Partial Reason"
         },
         "redaction": {
@@ -442,8 +440,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         }
       },
       "required": [
@@ -453,9 +450,12 @@
         "graphcheck_version",
         "pack_version",
         "status",
+        "partial_reason",
         "exit_code",
         "selection",
-        "redaction"
+        "redaction",
+        "target",
+        "error"
       ],
       "title": "Run",
       "type": "object"

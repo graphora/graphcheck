@@ -30,7 +30,7 @@ Every model forbids unknown keys (`extra="forbid"`).
 
 ## Field presence by verdict
 
-Always present: `id`, `suite_id`, `pattern`, `name`, `provenance`, `severity`, `verdict`, `expected`. The rest are execution-derived:
+**Every key is present in every record** — the model requires all of them, so a producer that omits one fails validation; the nullable/`false` keys below carry `null`/`false` when unused. Always non-null: `id`, `suite_id`, `pattern`, `name`, `severity`, `verdict`, `expected`. `provenance` and the rest are populated by `verdict`:
 
 | Field | pass | fail / warn | errored | skipped |
 | --- | --- | --- | --- | --- |
@@ -60,7 +60,7 @@ Always present: `id`, `suite_id`, `pattern`, `name`, `provenance`, `severity`, `
 3. **`errored` carries the fix** (`{code, message, fix}`); a `failed` run carries the same at `run.error`.
 4. **Estimates are labeled** (`estimate:false` = exact, else `{sample_size, population, confidence, ci}`). `errored`/`skipped` are never estimates.
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
-6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. Weights are locked.
+6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. `round` is **half-to-even** (Python's `round()`); re-implementations must match. Weights are locked. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
 7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry IDs + labels only; `compiled_query` keeps placeholders.
 8. **Coverage-status invariant:** any `skip_reason ∈ {unsupported, not_run}` ⇒ `run.status:partial` (a `partial` run never exits 0). `generated` skips do not force partial.
 

@@ -67,7 +67,8 @@ class _Envelope(_Strict):
 
 
 class ConformanceCheck(_Envelope):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # No populate_by_name: the external key is the frozen `with` alias only, never `with_`.
+    model_config = ConfigDict(extra="forbid")
     check: str
     with_: dict = Field(alias="with")  # required — SPEC-02 freezes `check` + `with` for conformance
 

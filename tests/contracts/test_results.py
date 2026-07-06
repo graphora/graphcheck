@@ -18,6 +18,7 @@ from graphcheck.contracts.results import (
     Score,
     Severity,
     SkipReason,
+    Totals,
     Verdict,
     exit_code,
     score_value,
@@ -45,17 +46,26 @@ def test_check_error_shape():
     assert err.fix == "f"
 
 
-def _base(**over):
-    """A valid record for the given verdict; override any field to make it invalid."""
-    verdict = over.get("verdict", Verdict.PASS)
+def _full_check(verdict, severity):
+    """A complete check-result dict (every frozen key present) for the given verdict/severity."""
     data = dict(
         id="c1",
         suite_id="s",
         pattern=Pattern.CONFORMANCE,
         name="n",
-        severity=Severity.ERROR,
+        provenance=None,
+        severity=severity,
         verdict=verdict,
+        skip_reason=None,
+        started_at=None,
+        duration_ms=None,
+        compiled_query=None,
+        params=None,
+        measured=None,
         expected={},
+        estimate=False,
+        evidence=None,
+        error=None,
     )
     if verdict is not Verdict.SKIPPED:
         data.update(started_at="t", duration_ms=5)
@@ -69,6 +79,19 @@ def _base(**over):
         data["error"] = CheckError(code="c", message="m", fix="f")
     if verdict is Verdict.SKIPPED:
         data["skip_reason"] = SkipReason.GENERATED
+    return data
+
+
+def _default_severity(verdict):
+    # fail must be error-severity, warn must be warn-severity (SPEC-01 rule 1).
+    return Severity.WARN if verdict is Verdict.WARN else Severity.ERROR
+
+
+def _base(**over):
+    """A valid record for the given verdict; override any field to make it invalid."""
+    verdict = over.get("verdict", Verdict.PASS)
+    severity = over.get("severity", _default_severity(verdict))
+    data = _full_check(verdict, severity)
     data.update(over)
     return data
 
@@ -123,28 +146,36 @@ def test_errored_and_skipped_forbid_estimate_object():
         CheckResult(**_base(verdict=Verdict.SKIPPED, estimate=est))
 
 
-def _chk(verdict, severity=Severity.ERROR, **over):
-    data = dict(
-        id="x",
-        suite_id="s",
-        pattern=Pattern.CONFORMANCE,
-        name="n",
-        severity=severity,
-        verdict=verdict,
-        expected={},
-    )
-    if verdict is not Verdict.SKIPPED:
-        data.update(started_at="t", duration_ms=5)
-    if verdict in (Verdict.PASS, Verdict.FAIL, Verdict.WARN):
-        data.update(compiled_query="RETURN 1", params={}, measured={})
-    if verdict in (Verdict.FAIL, Verdict.WARN):
-        data["evidence"] = Evidence(
-            message="m", elements=[], truncated=False, cap=50, total_count=0
-        )
-    if verdict is Verdict.ERRORED:
-        data["error"] = CheckError(code="c", message="m", fix="f")
-    if verdict is Verdict.SKIPPED:
-        data["skip_reason"] = SkipReason.GENERATED
+def test_severity_verdict_mismatch_rejected():
+    with pytest.raises(ValidationError):
+        CheckResult(
+            **_base(verdict=Verdict.WARN, severity=Severity.ERROR)
+        )  # warn needs warn-severity
+    with pytest.raises(ValidationError):
+        CheckResult(
+            **_base(verdict=Verdict.FAIL, severity=Severity.WARN)
+        )  # fail needs error-severity
+
+
+def test_check_result_requires_all_frozen_keys_present():
+    for key in ("provenance", "skip_reason", "estimate", "evidence", "error"):
+        data = _base(verdict=Verdict.PASS)
+        data.pop(key)
+        with pytest.raises(ValidationError):
+            CheckResult(**data)
+
+
+def test_totals_rejects_passed_field_name():
+    ok = {"checks": 0, "pass": 0, "fail": 0, "warn": 0, "errored": 0, "skipped": 0}
+    Totals.model_validate(ok)  # alias `pass` accepted
+    renamed = {k: v for k, v in ok.items() if k != "pass"} | {"passed": 0}
+    with pytest.raises(ValidationError):
+        Totals.model_validate(renamed)
+
+
+def _chk(verdict, severity=None, **over):
+    data = _full_check(verdict, severity or _default_severity(verdict))
+    data["id"] = "x"
     data.update(over)
     return CheckResult(**data)
 
@@ -196,6 +227,7 @@ def _run(**over):
         graphcheck_version="0.1.0",
         pack_version="0.1.0",
         status=RunStatus.COMPLETE,
+        partial_reason=None,
         exit_code=0,
         selection={"suites": [], "tags": [], "fail_fast": False},
         redaction={"policy": RedactionPolicy.NONE, "applied": False},
@@ -206,6 +238,7 @@ def _run(**over):
             "fingerprint": "sha256:x",
             "capabilities": {"apoc": True, "count_store": True},
         },
+        error=None,
     )
     data.update(over)
     return data

@@ -114,7 +114,9 @@ def test_suite_name_required_without_key_or_source():
 def test_loaded_check_forbids_unknown_keys():
     from graphcheck.contracts.check import ConformanceCheck, LoadedCheck
 
-    spec = ConformanceCheck(id="x", check="completeness", with_={"label": "C", "property": "p"})
+    spec = ConformanceCheck(
+        id="x", check="completeness", **{"with": {"label": "C", "property": "p"}}
+    )
     with pytest.raises(ValidationError):
         LoadedCheck(
             id="x",
@@ -130,6 +132,15 @@ def test_loaded_check_forbids_unknown_keys():
 def test_conformance_requires_with():
     with pytest.raises(ValidationError):
         load_suite("suite: s\nconformance:\n  - id: x\n    check: completeness\n")
+
+
+def test_with_underscore_key_rejected():
+    # The frozen key is `with`; `with_` (the internal field name) must not be accepted.
+    with pytest.raises(ValidationError):
+        load_suite(
+            "suite: s\nconformance:\n  - id: x\n    check: completeness\n"
+            "    with_: {label: C, property: p}\n"
+        )
 
 
 def test_conformance_with_defaults_are_normalized_onto_spec():

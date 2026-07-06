@@ -12,6 +12,7 @@ def test_version_flag_prints_version():
     assert __version__ in result.stdout
 
 
-def test_help_lists_no_hidden_commands():
+def test_help_documents_version_option():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
+    assert "--version" in result.stdout
