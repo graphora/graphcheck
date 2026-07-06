@@ -83,23 +83,25 @@ class CheckError(_Strict):
 
 
 class CheckResult(_Strict):
+    # SPEC-01 freezes the shape: every key is present. The nullable/false keys carry
+    # null/false when unused (no defaults), so a producer that omits one fails validation.
     id: str
     suite_id: str
     pattern: Pattern
     name: str
-    provenance: str | None = None
+    provenance: str | None
     severity: Severity
     verdict: Verdict
-    skip_reason: SkipReason | None = None
-    started_at: str | None = None
-    duration_ms: int | None = None
-    compiled_query: str | None = None
-    params: dict[str, object] | None = None
-    measured: dict[str, object] | None = None
+    skip_reason: SkipReason | None
+    started_at: str | None
+    duration_ms: int | None
+    compiled_query: str | None
+    params: dict[str, object] | None
+    measured: dict[str, object] | None
     expected: dict[str, object]
-    estimate: Estimate | Literal[False] = False
-    evidence: Evidence | None = None
-    error: CheckError | None = None
+    estimate: Estimate | Literal[False]
+    evidence: Evidence | None
+    error: CheckError | None
 
     @property
     def executed(self) -> bool:
@@ -109,6 +111,14 @@ class CheckResult(_Strict):
     def _field_presence(self) -> CheckResult:
         v = self.verdict
         run_outcomes = (Verdict.PASS, Verdict.FAIL, Verdict.WARN)
+
+        # An assertion failure encodes its severity in the verdict (SPEC-01 rule 1): a fail is an
+        # error-severity failure, a warn is a warn-severity failure. Reject mismatches — otherwise
+        # exit_code could downgrade (e.g. severity:error + verdict:warn would exit 2, not 1).
+        if v is Verdict.FAIL and self.severity is not Severity.ERROR:
+            raise ValueError(f"fail check {self.id!r} must have severity:error")
+        if v is Verdict.WARN and self.severity is not Severity.WARN:
+            raise ValueError(f"warn check {self.id!r} must have severity:warn")
 
         # Only an attempted, measured check can be sampled; errored/skipped are never estimates.
         if v not in run_outcomes and self.estimate is not False:
@@ -145,7 +155,7 @@ class CheckResult(_Strict):
             for field in ("compiled_query", "params", "measured"):
                 if getattr(self, field) is None:
                     raise ValueError(f"{v.value} check {self.id!r} must carry {field}")
-        elif v is Verdict.ERRORED and self.measured is not None:
+        elif self.measured is not None:  # v is ERRORED here
             raise ValueError(
                 f"errored check {self.id!r} must not carry measured (it did not measure)"
             )
@@ -192,7 +202,8 @@ def exit_code(status: RunStatus, checks: list[CheckResult]) -> int:
 
 
 class Totals(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # No populate_by_name: the external key is the frozen `pass` alias only, never `passed`.
+    model_config = ConfigDict(extra="forbid")
     checks: int
     passed: int = Field(alias="pass")
     fail: int
@@ -244,12 +255,12 @@ class Run(_Strict):
     graphcheck_version: str
     pack_version: str
     status: RunStatus
-    partial_reason: str | None = None
+    partial_reason: str | None  # present-but-nullable; non-null iff status is partial
     exit_code: int
     selection: Selection
     redaction: Redaction
-    target: RunTarget | None = None
-    error: CheckError | None = None
+    target: RunTarget | None  # present-but-nullable; null only for failed runs
+    error: CheckError | None  # present-but-nullable; non-null only for failed runs
 
 
 class Suite(_Strict):
