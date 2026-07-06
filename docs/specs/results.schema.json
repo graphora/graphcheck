@@ -507,7 +507,6 @@
       "properties": {
         "method": {
           "const": "weighted-by-severity",
-          "default": "weighted-by-severity",
           "title": "Method",
           "type": "string"
         },
@@ -524,7 +523,9 @@
         }
       },
       "required": [
-        "value"
+        "value",
+        "method",
+        "weights"
       ],
       "title": "Score",
       "type": "object"
@@ -676,7 +677,6 @@
     },
     "schema_version": {
       "const": "1.0",
-      "default": "1.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -702,6 +702,7 @@
     }
   },
   "required": [
+    "schema_version",
     "run",
     "score",
     "totals",
