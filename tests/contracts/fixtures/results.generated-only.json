@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "run": {
+    "id": "run_01HXATZ",
+    "started_at": "2026-07-06T09:00:00Z",
+    "finished_at": "2026-07-06T09:02:41Z",
+    "graphcheck_version": "0.1.0",
+    "pack_version": "0.1.0",
+    "status": "complete",
+    "partial_reason": null,
+    "exit_code": 2,
+    "selection": {
+      "suites": [
+        "customer-360"
+      ],
+      "tags": [],
+      "fail_fast": false
+    },
+    "redaction": {
+      "policy": "none",
+      "applied": false
+    },
+    "target": {
+      "database": "neo4j",
+      "server_version": "5.18.0",
+      "edition": "community",
+      "fingerprint": "sha256:abc123",
+      "capabilities": {
+        "apoc": true,
+        "count_store": true
+      }
+    },
+    "error": null
+  },
+  "score": null,
+  "totals": {
+    "checks": 1,
+    "pass": 0,
+    "fail": 0,
+    "warn": 0,
+    "errored": 0,
+    "skipped": 1
+  },
+  "suites": [
+    {
+      "id": "customer-360",
+      "source_sha": "a1b2c3",
+      "score": null,
+      "totals": {
+        "checks": 1,
+        "pass": 0,
+        "fail": 0,
+        "warn": 0,
+        "errored": 0,
+        "skipped": 1
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": "cq-draft",
+      "suite_id": "customer-360",
+      "pattern": "competency-shape",
+      "name": "draft competency check awaiting approval",
+      "provenance": null,
+      "severity": "error",
+      "verdict": "skipped",
+      "skip_reason": "generated",
+      "started_at": null,
+      "duration_ms": null,
+      "compiled_query": null,
+      "params": null,
+      "measured": null,
+      "expected": {
+        "rows": {
+          "min": 1
+        }
+      },
+      "estimate": false,
+      "evidence": null,
+      "error": null
+    }
+  ]
+}
