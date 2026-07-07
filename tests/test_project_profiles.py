@@ -29,7 +29,7 @@ def test_profiles_default_to_local(tmp_path: Path):
 
     assert name == "local"
     assert profile.uri == "bolt://localhost:7687"
-    assert profile.password == "neo4j"
+    assert profile.password == "graphora"
 
 
 def test_missing_profiles_is_loud(tmp_path: Path):
@@ -126,3 +126,73 @@ def test_project_config_rejects_unknown_keys():
 
     with pytest.raises(ValidationError):
         ProjectConfig(project="x", checks="checks", artifacts=".graphcheck", bogus=True)
+
+
+def test_find_project_root_accepts_file_path(tmp_path: Path):
+    write_default_project(tmp_path)
+    suite = tmp_path / "checks" / "suite.yml"
+    suite.write_text("suite: x\n", encoding="utf-8")
+
+    assert find_project_root(suite) == tmp_path
+
+
+def test_find_project_root_missing_is_loud(tmp_path: Path):
+    with pytest.raises(GraphCheckError) as caught:
+        find_project_root(tmp_path)
+
+    assert caught.value.error.code == "project.missing"
+
+
+def test_load_project_config_reads_yaml(tmp_path: Path):
+    from graphcheck.project import load_project_config
+
+    write_default_project(tmp_path)
+
+    config = load_project_config(tmp_path)
+
+    assert config.project == "graphcheck"
+    assert config.checks == "checks"
+    assert config.artifacts == ".graphcheck"
+
+
+def test_load_project_config_rejects_invalid_yaml(tmp_path: Path):
+    from graphcheck.project import load_project_config
+
+    (tmp_path / "graphcheck.yml").write_text("project: [\n", encoding="utf-8")
+
+    with pytest.raises(GraphCheckError) as caught:
+        load_project_config(tmp_path)
+
+    assert caught.value.error.code == "profile.invalid"
+
+
+def test_gitignore_entries_are_not_duplicated(tmp_path: Path):
+    (tmp_path / ".gitignore").write_text("profiles.yml\n.graphcheck/\n", encoding="utf-8")
+
+    ensure_gitignore_entries(tmp_path)
+
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "profiles.yml\n.graphcheck/\n"
+
+
+def test_write_example_suite_does_not_overwrite_existing_file(tmp_path: Path):
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    example = checks / "example.yml"
+    example.write_text("suite: custom\n", encoding="utf-8")
+
+    write_example_suite(tmp_path)
+
+    assert example.read_text(encoding="utf-8") == "suite: custom\n"
+
+
+def test_profile_without_password_or_env_is_loud(tmp_path: Path):
+    (tmp_path / "profiles.yml").write_text(
+        "default: local\nprofiles:\n  local:\n    uri: bolt://x\n"
+        "    user: neo4j\n    database: neo4j\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        select_profile(load_profiles(tmp_path))
+
+    assert caught.value.error.code == "profile.invalid"
