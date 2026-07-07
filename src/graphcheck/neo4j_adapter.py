@@ -123,7 +123,15 @@ class Neo4jClient:
         return str(rows[0]["version"]), str(rows[0]["edition"]).lower()
 
     def _apoc_usable(self) -> bool:
-        rows = self.run_read("CALL apoc.version() YIELD version RETURN version")
+        try:
+            rows = self.run_read("CALL apoc.version() YIELD version RETURN version")
+        except GraphCheckError as exc:
+            if not _is_apoc_absent_error(exc):
+                raise
+            rows = self.run_read(
+                "SHOW PROCEDURES YIELD name WHERE name STARTS WITH 'apoc.' RETURN count(*) AS count"
+            )
+            return bool(rows and int(rows[0]["count"]) > 0)
         return bool(rows)
 
     def _counts(self) -> Counts:

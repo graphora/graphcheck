@@ -60,9 +60,7 @@ def init() -> None:
         typer.echo(exc.error.message)
         typer.echo(f"Fix: {exc.error.fix}")
     else:
-        typer.echo(
-            f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})"
-        )
+        typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
     typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
 
 

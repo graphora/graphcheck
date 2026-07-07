@@ -134,6 +134,40 @@ def test_counts_are_converted_to_ints():
     assert client._counts() == Counts(nodes=3, relationships=4)
 
 
+def test_apoc_probe_falls_back_to_show_procedures_when_version_is_missing():
+    client = object.__new__(Neo4jClient)
+
+    def run_read(query):
+        if query == "CALL apoc.version() YIELD version RETURN version":
+            raise GraphCheckError(
+                "neo4j.query_failed",
+                "Neo4j query failed: no procedure with the name apoc.version is registered",
+                "fix",
+            )
+        return [{"count": 3}]
+
+    client.run_read = run_read
+
+    assert client._apoc_usable() is True
+
+
+def test_apoc_probe_returns_false_when_no_apoc_procedures_are_visible():
+    client = object.__new__(Neo4jClient)
+
+    def run_read(query):
+        if query == "CALL apoc.version() YIELD version RETURN version":
+            raise GraphCheckError(
+                "neo4j.query_failed",
+                "Neo4j query failed: no procedure with the name apoc.version is registered",
+                "fix",
+            )
+        return [{"count": 0}]
+
+    client.run_read = run_read
+
+    assert client._apoc_usable() is False
+
+
 def test_probe_handles_permission_denied_apoc_probe():
     client = object.__new__(Neo4jClient)
     client._profile = ConnectionProfile(
