@@ -17,7 +17,7 @@ The contracts land first because the rest of Week 1 references them: the connect
 
 | Deliverable | Owner | Acceptance |
 | --- | --- | --- |
-| Repo scaffold + governance | Ezhil | Done — packaging, minimal CLI, CI (ruff + pytest matrix 3.10–3.13), Apache-2.0, CODEOWNERS, PR template, ruleset. |
+| Repo scaffold + governance | Ezhil | Done — packaging, minimal CLI, CI (ruff + pytest matrix 3.12–3.13), Apache-2.0, CODEOWNERS, PR template, ruleset. |
 | SPEC-01 `results.json` | Ezhil | Done — models + generated schema + fixtures + tests. |
 | SPEC-02 check YAML | Ezhil | Done — envelope + loader + registry + generated schemas + tests. |
 | `[C2]` Neo4j adapter + capability probe | Ghilda / Keval | `graphcheck debug` reports server version, edition, APOC presence; integration test passes against Neo4j 4.4 and 5.x containers. `graphcheck debug` is the one Week-1 CLI command; the rest of the surface is Week 3 (C6). |

@@ -20,14 +20,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv and select the matrix Python
         uses: astral-sh/setup-uv@v5
         with:
           # Sets UV_PYTHON, which overrides the committed .python-version so uv
-          # runs on the matrix interpreter (not the pinned 3.10).
+          # runs on the matrix interpreter (not the pinned 3.12).
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)
@@ -35,3 +35,13 @@ jobs:
           WANT: ${{ matrix.python-version }}
         run: uv run python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
       - run: uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      GRAPHCHECK_NEO4J_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - run: uv run pytest tests/integration -v

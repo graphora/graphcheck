@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "graphcheck"
 version = "0.1.0"
 description = "Semantic observability for property graphs — pytest for knowledge graphs."
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
@@ -35,7 +35,7 @@ packages = ["src/graphcheck"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

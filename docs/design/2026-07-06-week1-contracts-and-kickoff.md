@@ -42,11 +42,11 @@ graphcheck/
 ├── CONTRIBUTING.md             branch flow, DoD, decision rights, anti-slop, no-AI-attribution
 ├── pyproject.toml              PEP 621 · hatchling · deps · ruff + pytest config inline
 ├── uv.lock                     committed
-├── .python-version             3.10
+├── .python-version             3.12
 ├── .gitignore                  extend: profiles.yml, .graphcheck/, .venv, dist/
 ├── .pre-commit-config.yaml     ruff format + ruff check, run locally before push
 ├── .github/
-│   ├── workflows/ci.yml        ruff + pytest on every PR (matrix 3.10–3.13)
+│   ├── workflows/ci.yml        ruff + pytest on every PR (matrix 3.12–3.13)
 │   ├── CODEOWNERS              path → required reviewer, enforced by the ruleset
 │   ├── pull_request_template.md   the §14.1 definition-of-done checklist
 │   └── ISSUE_TEMPLATE/deliverable.md   owner · acceptance criteria · DoD
@@ -80,7 +80,7 @@ Regardless of that decision, these land in the bootstrap commit and cost nothing
 - **Branches.** `development` is created and set as the repository default; `main` is retained for release tags (v0.1.0). Feature branches → PR into `development`.
 - **CI** (`.github/workflows/ci.yml`) on every PR and on pushes to `development`/`main`. Stable **job** names, because required status checks match job/check names, not step names:
   - `lint` — `ruff check` + `ruff format --check`
-  - `test (3.10)` / `test (3.11)` / `test (3.12)` / `test (3.13)` — a matrix; each runs `pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80` (coverage is enforced *inside* the test job, since the DoD requires ≥ 80%).
+  - `test (3.12)` / `test (3.13)` — a matrix; each runs `pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80` (coverage is enforced *inside* the test job, since the DoD requires ≥ 80%).
 - **CODEOWNERS** (lean, to paths that exist; grows as component directories land). CODEOWNERS applies the **last matching pattern only — owners do not accumulate across lines** — so each path lists every required reviewer explicitly:
   - `*` → `@ezhilvendhan`
   - `/docs/specs/`, `/src/graphcheck/contracts/` → `@ghilda-graphora @kev-graphora` (the SPEC-01/02 reviewers per §11.2; Ezhil authors these and GitHub excludes a PR's author from its own required review — see "CODEOWNERS ownership of contracts" below)
@@ -90,7 +90,7 @@ Regardless of that decision, these land in the bootstrap commit and cost nothing
 
 **Enforcement mechanism — decided: GitHub Team on the `graphora` org.** `graphcheck` is org-owned, so the plan that governs it is the *organization's* plan — **GitHub Team** (~US$4/user/month), not personal GitHub Pro (Pro applies only to a user account's own repos and would not affect this org repo). Upgrading the `graphora` org to Team enables rulesets + branch protection while keeping the repo private. The org upgrade is a billing action Ezhil performs; the ruleset application is a setup step and is verified by re-checking the rulesets API (currently HTTP 403 on Free, expected to succeed once Team is active).
 
-Once `graphora` is on Team, the setup step applies a **ruleset** via `gh api` to both `development` and `main`: require a pull request; require 1 approving review; require review from Code Owners; require the `lint` and `test (3.10)`–`test (3.13)` status checks to pass; require the branch to be up to date; require conversation resolution; block force-pushes and deletions.
+Once `graphora` is on Team, the setup step applies a **ruleset** via `gh api` to both `development` and `main`: require a pull request; require 1 approving review; require review from Code Owners; require the `lint` and `test (3.12)`–`test (3.13)` status checks to pass; require the branch to be up to date; require conversation resolution; block force-pushes and deletions.
 
 **CODEOWNERS ownership of contracts (decided).** Contract paths (`/docs/specs/`, `/src/graphcheck/contracts/`) list `@ghilda-graphora @kev-graphora` — the SPEC-01/02 reviewers named in §11.2. Ezhil authors the initial contracts (GitHub excludes a PR's author from its own required review) and retains authority over *post-freeze* contract changes through §13 escalation and org-admin review, so he is not added as a code owner on those lines. Note the mechanics: "require review from Code Owners" is satisfied by approval from **any one** listed owner of a changed path — it does not force approval from every listed owner — so adding `@ezhilvendhan` would auto-request him and let his approval count, but would not *hard-require* it. Forcing his specific sign-off on contract changes remains the §13 process gate, not a CODEOWNERS guarantee.
 

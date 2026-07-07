@@ -6,14 +6,14 @@
 
 **Architecture:** A `src`-layout Python package (`graphcheck`) whose `contracts/` subpackage holds Pydantic v2 models that are the single source of truth for both contracts; JSON Schemas are *generated* from those models. A `packs/` subpackage exposes a `REGISTRY` that validates conformance `with` payloads. The CLI is a minimal Typer entry point only (the full surface is C6, Week 3). Governance (branch protection, CODEOWNERS, CI) is applied to the repo before any contract code merges via PR.
 
-**Tech Stack:** Python 3.10+, hatchling build backend, uv (dev), Typer (CLI), Pydantic v2, PyYAML, ruff, pytest, pytest-cov, Hypothesis, pre-commit. Repo: `graphora/graphcheck` (private, GitHub Team).
+**Tech Stack:** Python 3.12+, hatchling build backend, uv (dev), Typer (CLI), Pydantic v2, PyYAML, ruff, pytest, pytest-cov, Hypothesis, pre-commit. Repo: `graphora/graphcheck` (private, GitHub Team).
 
 ## Global Constraints
 
 Copied verbatim from `docs/design/2026-07-06-week1-contracts-and-kickoff.md`. Every task's requirements implicitly include this section.
 
 - **No AI attribution anywhere** — no `Co-Authored-By`, no "Generated with…", nothing AI-attributed in commits, PRs, issues, docs, comments, or CHANGELOG.
-- **Python 3.10+**; compatible through 3.13. `requires-python = ">=3.10"`.
+- **Python 3.12+**; compatible through 3.13. `requires-python = ">=3.12"`.
 - **Strict validation** — every Pydantic model uses `model_config = ConfigDict(extra="forbid")`. Unknown keys error loudly.
 - **Contracts are the source of truth in Pydantic**; JSON Schema is generated and is **structural only** — derived invariants live in `model_validator`s, never in the schema.
 - `results.json` `schema_version` is `"1.0"`, versioned independently of `graphcheck_version`.
@@ -37,11 +37,11 @@ graphcheck/
 ├── CONTRIBUTING.md                      branch flow, DoD, decision rights, anti-slop, no-attribution
 ├── pyproject.toml                       PEP 621 · hatchling · deps · ruff + pytest config
 ├── uv.lock                              committed
-├── .python-version                      3.10
+├── .python-version                      3.12
 ├── .gitignore                           extend
 ├── .pre-commit-config.yaml              ruff
 ├── .github/
-│   ├── workflows/ci.yml                 jobs: lint, test (3.10–3.13)
+│   ├── workflows/ci.yml                 jobs: lint, test (3.12–3.13)
 │   ├── CODEOWNERS
 │   ├── pull_request_template.md         DoD checklist
 │   └── ISSUE_TEMPLATE/deliverable.md
@@ -98,7 +98,7 @@ build-backend = "hatchling.build"
 name = "graphcheck"
 version = "0.1.0"
 description = "Semantic observability for property graphs — pytest for knowledge graphs."
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
@@ -125,7 +125,7 @@ packages = ["src/graphcheck"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -139,7 +139,7 @@ testpaths = ["tests"]
 - [ ] **Step 2: Create `.python-version`**
 
 ```
-3.10
+3.12
 ```
 
 - [ ] **Step 3: Extend `.gitignore`** (append to the existing file)
@@ -237,7 +237,7 @@ git commit -m "feat: scaffold graphcheck package with minimal CLI"
 - Create: `.github/workflows/ci.yml`
 
 **Interfaces:**
-- Produces: required status-check **job** names `lint` and `test (3.10)`…`test (3.13)` (referenced by the ruleset in Task 4).
+- Produces: required status-check **job** names `lint` and `test (3.12)`…`test (3.13)` (referenced by the ruleset in Task 4).
 
 - [ ] **Step 1: Create `.github/workflows/ci.yml`**
 
@@ -264,14 +264,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv and select the matrix Python
         uses: astral-sh/setup-uv@v5
         with:
           # Sets UV_PYTHON, which overrides the committed .python-version so uv
-          # runs on the matrix interpreter (not the pinned 3.10).
+          # runs on the matrix interpreter (not the pinned 3.12).
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)
@@ -482,8 +482,6 @@ cat > /tmp/ruleset.json <<'JSON'
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
           { "context": "lint" },
-          { "context": "test (3.10)" },
-          { "context": "test (3.11)" },
           { "context": "test (3.12)" },
           { "context": "test (3.13)" }
         ]
