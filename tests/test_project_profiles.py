@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.errors import GraphCheckError
-from graphcheck.profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.project import (
     ensure_gitignore_entries,
     find_project_root,

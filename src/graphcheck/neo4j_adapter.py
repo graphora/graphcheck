@@ -4,9 +4,9 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError
-from graphcheck.connection_profiles import ConnectionProfile
 
 
 @dataclass(frozen=True)
@@ -174,6 +174,7 @@ def _plan_has_operator(plan: object, operator: str) -> bool:
 def map_neo4j_error(exc: Exception) -> GraphCheckError:
     name = exc.__class__.__name__
     message = str(exc)
+    lowered = message.lower()
     if name in {"AuthError", "TokenExpired"}:
         return GraphCheckError(
             "neo4j.auth_failed",
@@ -186,13 +187,13 @@ def map_neo4j_error(exc: Exception) -> GraphCheckError:
             "Neo4j is unreachable at the configured Bolt URI.",
             "Start Neo4j Desktop, check the Bolt URI in profiles.yml, then run `graphcheck debug`.",
         )
-    if "database" in message.lower() and "not found" in message.lower():
+    if "database" in lowered and ("not found" in lowered or "does not exist" in lowered):
         return GraphCheckError(
             "neo4j.database_not_found",
             "The configured Neo4j database was not found.",
             "Update the database in profiles.yml, or create/start that database in Neo4j.",
         )
-    if "permission" in message.lower() or "forbidden" in message.lower():
+    if "permission" in lowered or "forbidden" in lowered:
         return GraphCheckError(
             "neo4j.permission_denied",
             "Neo4j denied a read or probe query for the configured user.",
