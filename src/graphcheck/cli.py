@@ -6,7 +6,7 @@ import typer
 from graphcheck import __version__
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import debug_trace, error_json
-from graphcheck.profiles import load_profiles, select_profile, write_default_profiles
+from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,

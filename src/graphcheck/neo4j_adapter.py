@@ -6,7 +6,7 @@ from typing import Any
 
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError
-from graphcheck.profiles import ConnectionProfile
+from graphcheck.connection_profiles import ConnectionProfile
 
 
 @dataclass(frozen=True)
