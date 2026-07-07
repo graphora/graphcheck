@@ -97,8 +97,8 @@ class Neo4jClient:
         except GraphCheckError as exc:
             if exc.error.code == "neo4j.permission_denied":
                 can_show_procedures = False
-            else:
-                apoc = False
+            elif not _is_apoc_absent_error(exc):
+                raise
         counts = self._counts()
         target = RunTarget(
             database=self._profile.database,
@@ -169,6 +169,18 @@ def _plan_has_operator(plan: object, operator: str) -> bool:
     if current and operator in str(current):
         return True
     return any(_plan_has_operator(child, operator) for child in children or [])
+
+
+def _is_apoc_absent_error(exc: GraphCheckError) -> bool:
+    if exc.error.code != "neo4j.query_failed":
+        return False
+    message = exc.error.message.lower()
+    return "apoc.version" in message and (
+        "no procedure" in message
+        or "procedure not found" in message
+        or "unknown procedure" in message
+        or "not registered" in message
+    )
 
 
 def map_neo4j_error(exc: Exception) -> GraphCheckError:

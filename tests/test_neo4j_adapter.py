@@ -9,6 +9,7 @@ from graphcheck.neo4j_adapter import (
     Neo4jClient,
     Visibility,
     _fingerprint,
+    _is_apoc_absent_error,
     _plan_has_operator,
     debug_trace,
     error_json,
@@ -154,6 +155,64 @@ def test_probe_handles_permission_denied_apoc_probe():
     assert target.capabilities.count_store is True
     assert visibility.can_show_procedures is False
     assert counts == Counts(nodes=1, relationships=2)
+
+
+def test_probe_treats_missing_apoc_as_absent_capability():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+    client._counts = lambda: Counts(nodes=1, relationships=2)
+    client._count_store_usable = lambda: True
+
+    def missing_apoc():
+        raise GraphCheckError(
+            "neo4j.query_failed",
+            "Neo4j query failed: no procedure with the name apoc.version is registered",
+            "fix",
+        )
+
+    client._apoc_usable = missing_apoc
+
+    target, visibility, counts = client.probe()
+
+    assert target.capabilities.apoc is False
+    assert visibility.can_show_procedures is True
+    assert counts == Counts(nodes=1, relationships=2)
+
+
+def test_probe_reraises_unexpected_apoc_probe_error():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+
+    def broken_apoc_probe():
+        raise GraphCheckError("neo4j.query_failed", "Neo4j query failed: broken query", "fix")
+
+    client._apoc_usable = broken_apoc_probe
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.probe()
+
+    assert caught.value.error.code == "neo4j.query_failed"
+
+
+def test_apoc_absent_detection_is_specific_to_apoc_procedure_errors():
+    assert _is_apoc_absent_error(
+        GraphCheckError(
+            "neo4j.query_failed",
+            "Neo4j query failed: unknown procedure apoc.version",
+            "fix",
+        )
+    )
+    assert not _is_apoc_absent_error(
+        GraphCheckError("neo4j.query_failed", "Neo4j query failed: broken query", "fix")
+    )
 
 
 def test_debug_trace_closes_client(monkeypatch):
