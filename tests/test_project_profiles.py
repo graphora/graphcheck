@@ -195,4 +195,4 @@ def test_profile_without_password_or_env_is_loud(tmp_path: Path):
     with pytest.raises(GraphCheckError) as caught:
         select_profile(load_profiles(tmp_path))
 
-    assert caught.value.error.code == "profile.invalid"
+    assert caught.value.error.code == "profile.password_missing"

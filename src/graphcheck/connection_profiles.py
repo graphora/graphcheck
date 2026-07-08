@@ -32,7 +32,7 @@ class ConnectionProfile(BaseModel):
             if self.password is None:
                 raise profile_password_missing(name, self.password_env)
         if self.password is None:
-            raise profile_invalid(f"Profile {name!r} must define password or password_env.")
+            raise profile_password_missing(name)
         return self.model_copy(update={"password_env": None})
 
 

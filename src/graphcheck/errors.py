@@ -33,9 +33,17 @@ def profile_not_found(name: str) -> GraphCheckError:
     )
 
 
-def profile_password_missing(profile: str, env_var: str) -> GraphCheckError:
+def profile_password_missing(profile: str, env_var: str | None = None) -> GraphCheckError:
+    if env_var is None:
+        message = f"Profile {profile!r} has no resolved password."
+        fix = "Add password or password_env to profiles.yml."
+    else:
+        message = (
+            f"Profile {profile!r} references ${env_var}, but that environment variable is not set."
+        )
+        fix = f"Set {env_var}, or add a password value to profiles.yml."
     return GraphCheckError(
         "profile.password_missing",
-        f"Profile {profile!r} references ${env_var}, but that environment variable is not set.",
-        f"Set {env_var}, or add a password value to profiles.yml.",
+        message,
+        fix,
     )
