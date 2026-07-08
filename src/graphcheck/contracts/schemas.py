@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from graphcheck.contracts.check import _SuiteFile
+from graphcheck.contracts.profile import BaselineProfile
 from graphcheck.contracts.results import Results
 from graphcheck.packs import PACK_VERSION, REGISTRY
 
@@ -10,6 +11,17 @@ SPECS_DIR = Path(__file__).resolve().parents[3] / "docs" / "specs"
 
 def results_schema() -> dict:
     return Results.model_json_schema(by_alias=True)
+
+
+def profile_schema() -> dict:
+    return BaselineProfile.model_json_schema()
+
+
+def write_profile_schema() -> Path:
+    SPECS_DIR.mkdir(parents=True, exist_ok=True)
+    path = SPECS_DIR / "profile.schema.json"
+    path.write_text(json.dumps(profile_schema(), indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def write_results_schema() -> Path:
