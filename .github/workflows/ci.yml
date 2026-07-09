@@ -35,3 +35,14 @@ jobs:
           WANT: ${{ matrix.python-version }}
         run: uv run python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
       - run: uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GRAPHCHECK_NEO4J_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - run: uv run pytest tests/integration -v

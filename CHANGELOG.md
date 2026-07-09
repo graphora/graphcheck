@@ -8,6 +8,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
+- SPEC-03 for the neo4j connector.
+- Neo4j connector foundation: project discovery, `graphcheck init`, strict connection profile loading, env-var password override, structured adapter errors, read-only Neo4j driver wrapper, capability probe, and `graphcheck debug` with stable JSON output.
+- Connector tests covering profile validation, debug JSON shape, count-store plan detection, and opt-in Neo4j 4.4 / 5.x testcontainers integration.
 
 ### Changed
 
@@ -16,3 +19,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ### Fixed
 
 - Contract validators now reject shapes the frozen specs disallow: severity/verdict mismatches (which could downgrade the CI exit code), the `passed`/`with_` field-name aliases, and check-result / run records that omit a frozen present-but-nullable key.
+- Count-store detection now inspects the Neo4j `EXPLAIN` summary plan instead of stringifying result rows.
+
+### Changed
+
+- Project runtime and CI target moved to Python 3.12+, with the test matrix narrowed to Python 3.12 and 3.13.
