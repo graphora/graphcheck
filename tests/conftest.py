@@ -13,12 +13,24 @@ gate any module that uses them with::
 
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
 
 NEO4J_IMAGES = ["neo4j:4.4", "neo4j:5"]
 _NEO4J_PASSWORD = "graphora-test"
+
+# TODO: REMOVE BEFORE PR
+@pytest.fixture
+def tmp_path() -> Path:
+    root = Path.cwd() / ".test-tmp"
+    root.mkdir(exist_ok=True)
+    path = root / uuid4().hex
+    path.mkdir()
+    return path
 
 
 @pytest.fixture(params=NEO4J_IMAGES)
