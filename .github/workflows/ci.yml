@@ -38,6 +38,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GRAPHCHECK_NEO4J_INTEGRATION: "1"
     steps:
