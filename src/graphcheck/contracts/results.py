@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 SCHEMA_VERSION = "1.0"
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     PASS = "pass"
     FAIL = "fail"
     WARN = "warn"
@@ -17,31 +17,31 @@ class Verdict(str, Enum):
     SKIPPED = "skipped"
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     ERROR = "error"
     WARN = "warn"
 
 
-class Pattern(str, Enum):
+class Pattern(StrEnum):
     CONFORMANCE = "conformance"
     DRIFT = "drift"
     COMPETENCY_SHAPE = "competency-shape"
     COMPETENCY_REGRESSION = "competency-regression"
 
 
-class SkipReason(str, Enum):
+class SkipReason(StrEnum):
     GENERATED = "generated"
     UNSUPPORTED = "unsupported"
     NOT_RUN = "not_run"
 
 
-class RunStatus(str, Enum):
+class RunStatus(StrEnum):
     COMPLETE = "complete"
     PARTIAL = "partial"
     FAILED = "failed"
 
 
-class RedactionPolicy(str, Enum):
+class RedactionPolicy(StrEnum):
     NONE = "none"
     MASK = "mask"
     HASH = "hash"
