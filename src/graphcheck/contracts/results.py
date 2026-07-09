@@ -63,7 +63,7 @@ class EvidenceElement(_Strict):
 
 class Evidence(_Strict):
     message: str
-    elements: list[EvidenceElement]
+    elements: list[EvidenceElement] = Field(min_length=1)
     truncated: bool
     cap: int
     total_count: int

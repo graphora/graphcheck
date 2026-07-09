@@ -38,7 +38,19 @@ def test_verdict_values():
 
 def test_evidence_forbids_unknown_keys():
     with pytest.raises(ValidationError):
-        Evidence(message="x", elements=[], truncated=False, cap=50, total_count=0, bogus=1)
+        Evidence(
+            message="x",
+            elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
+            truncated=False,
+            cap=50,
+            total_count=1,
+            bogus=1,
+        )
+
+
+def test_evidence_requires_at_least_one_pointer():
+    with pytest.raises(ValidationError):
+        Evidence(message="x", elements=[], truncated=False, cap=50, total_count=0)
 
 
 def test_check_error_shape():
@@ -73,7 +85,11 @@ def _full_check(verdict, severity):
         data.update(compiled_query="RETURN 1", params={}, measured={})
     if verdict in (Verdict.FAIL, Verdict.WARN):
         data["evidence"] = Evidence(
-            message="m", elements=[], truncated=False, cap=50, total_count=0
+            message="m",
+            elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
+            truncated=False,
+            cap=50,
+            total_count=1,
         )
     if verdict is Verdict.ERRORED:
         data["error"] = CheckError(code="c", message="m", fix="f")
@@ -115,7 +131,13 @@ def test_fail_requires_evidence():
 
 
 def test_pass_forbids_evidence():
-    ev = Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
+    ev = Evidence(
+        message="m",
+        elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
+        truncated=False,
+        cap=50,
+        total_count=1,
+    )
     with pytest.raises(ValidationError):
         CheckResult(**_base(verdict=Verdict.PASS, evidence=ev))
 
