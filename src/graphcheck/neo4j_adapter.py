@@ -4,6 +4,9 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+import neo4j
+from neo4j import GraphDatabase
+
 from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError
@@ -45,16 +48,6 @@ class DebugTrace:
 
 class Neo4jClient:
     def __init__(self, profile: ConnectionProfile) -> None:
-        try:
-            import neo4j
-            from neo4j import GraphDatabase
-        except ImportError as exc:
-            raise GraphCheckError(
-                "neo4j.driver_missing",
-                "The Neo4j Python driver is not installed.",
-                "Run `uv sync --group dev`, then run `graphcheck debug` again.",
-            ) from exc
-        self._neo4j = neo4j
         self._profile = profile
         self._driver = GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password))
 
@@ -70,7 +63,7 @@ class Neo4jClient:
     def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
         try:
             with self._driver.session(
-                database=self._profile.database, default_access_mode=self._neo4j.READ_ACCESS
+                database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
                 result = session.run(query, params or {})
                 return [record.data() for record in result]
@@ -80,7 +73,7 @@ class Neo4jClient:
     def explain_read(self, query: str, params: dict[str, object] | None = None) -> object:
         try:
             with self._driver.session(
-                database=self._profile.database, default_access_mode=self._neo4j.READ_ACCESS
+                database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
                 result = session.run(f"EXPLAIN {query}", params or {})
                 return result.consume().plan
