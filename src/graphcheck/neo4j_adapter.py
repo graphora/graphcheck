@@ -26,11 +26,30 @@ class Visibility:
 
 
 @dataclass(frozen=True)
+class BlockedCheck:
+    suite: str
+    check_id: str
+    check: str
+    missing_capability: str
+    fix: str
+
+    def as_json(self) -> dict[str, str]:
+        return {
+            "suite": self.suite,
+            "check_id": self.check_id,
+            "check": self.check,
+            "missing_capability": self.missing_capability,
+            "fix": self.fix,
+        }
+
+
+@dataclass(frozen=True)
 class DebugTrace:
     profile: str
     target: RunTarget
     visibility: Visibility
     counts: Counts
+    blocked_checks: tuple[BlockedCheck, ...] = ()
 
     def as_json(self) -> dict[str, object]:
         return {
@@ -43,6 +62,7 @@ class DebugTrace:
                 "can_show_procedures": self.visibility.can_show_procedures,
             },
             "counts": {"nodes": self.counts.nodes, "relationships": self.counts.relationships},
+            "blocked_checks": [blocked.as_json() for blocked in self.blocked_checks],
         }
 
 

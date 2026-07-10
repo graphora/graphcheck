@@ -81,6 +81,7 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `profile.invalid` | `profiles.yml` or `graphcheck.yml` is malformed or has unknown keys. |
 | `profile.not_found` | The selected profile name does not exist. |
 | `profile.password_missing` | The selected profile has no resolved password. |
+| `checks.invalid` | A check suite could not be loaded while building the debug trace. |
 | `neo4j.unreachable` | The Bolt endpoint cannot be reached. |
 | `neo4j.auth_failed` | Credentials were rejected. |
 | `neo4j.database_not_found` | The configured database does not exist or is unavailable. |
@@ -119,10 +120,17 @@ MATCH (n) RETURN count(n) AS count
 MATCH ()-[r]->() RETURN count(r) AS count
 ```
 
+The human output also reports what the credentials can and cannot see from the successful probe:
+connectivity, read access, and procedure visibility.
+
+When a loaded check suite declares a capability requirement that the target does not satisfy, debug
+reports the blocked check id and a fix. In v0 this is a preflight report only; C1 owns turning the
+same condition into skipped or errored check results during an actual run.
+
 ## Stable debug JSON
 
 `graphcheck debug --json` emits the following trace. Debug verifies connectivity, server metadata,
-APOC usability, count-store usability, and graph counts.
+APOC usability, count-store usability, graph counts, and check capability blockers.
 
 Success:
 
@@ -148,7 +156,16 @@ Success:
   "counts": {
     "nodes": 0,
     "relationships": 0
-  }
+  },
+  "blocked_checks": [
+    {
+      "suite": "example",
+      "check_id": "apoc-backed-check",
+      "check": "future_apoc_check",
+      "missing_capability": "apoc",
+      "fix": "Install APOC for this Neo4j DBMS, restart Neo4j, then run `graphcheck debug` again."
+    }
+  ]
 }
 ```
 
