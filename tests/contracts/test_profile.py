@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from graphcheck.contracts.profile import (
     BaselineProfile,
+    DegreeDistribution,
     GraphSchema,
     ProfileStatistics,
     ProfileStatus,
@@ -79,6 +80,33 @@ def test_collections_must_be_canonically_sorted():
 
     with pytest.raises(ValidationError):
         BaselineProfile.model_validate(raw)
+
+
+def test_constraint_and_index_nested_arrays_must_be_canonically_sorted():
+    raw = _baseline()
+    raw["schema"]["constraints"][0]["labels_or_types"] = ["Person", "Customer"]
+    raw["fingerprint"] = profile_fingerprint(
+        GraphSchema.model_validate(raw["schema"]),
+        ProfileStatistics.model_validate(raw["statistics"]),
+    )
+
+    with pytest.raises(ValidationError, match="labels_or_types"):
+        BaselineProfile.model_validate(raw)
+
+    raw = _baseline()
+    raw["schema"]["indexes"][0]["properties"] = ["name", "id"]
+    raw["fingerprint"] = profile_fingerprint(
+        GraphSchema.model_validate(raw["schema"]),
+        ProfileStatistics.model_validate(raw["statistics"]),
+    )
+
+    with pytest.raises(ValidationError, match="properties"):
+        BaselineProfile.model_validate(raw)
+
+
+def test_degree_distribution_percentiles_must_be_ordered():
+    with pytest.raises(ValidationError, match="median <= p95 <= p99 <= maximum"):
+        DegreeDistribution.model_validate({"median": 10, "p95": 2, "p99": 1, "maximum": 0})
 
 
 def test_fingerprint_must_match_v0_hash_input():

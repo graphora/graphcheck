@@ -71,6 +71,12 @@ class DegreeDistribution(_Strict):
     p99: float = Field(ge=0)
     maximum: int = Field(ge=0)
 
+    @model_validator(mode="after")
+    def _percentiles_are_ordered(self) -> DegreeDistribution:
+        if not self.median <= self.p95 <= self.p99 <= self.maximum:
+            raise ValueError("degree distribution must satisfy median <= p95 <= p99 <= maximum")
+        return self
+
 
 class PropertyCoverage(_Strict):
     owner: Literal["node", "relationship"]
@@ -126,7 +132,25 @@ class BaselineProfile(_Strict):
             "schema.constraints",
             [constraint.name for constraint in self.graph_schema.constraints],
         )
+        for constraint in self.graph_schema.constraints:
+            _require_sorted(
+                f"schema.constraints[{constraint.name!r}].labels_or_types",
+                constraint.labels_or_types,
+            )
+            _require_sorted(
+                f"schema.constraints[{constraint.name!r}].properties",
+                constraint.properties,
+            )
         _require_sorted("schema.indexes", [index.name for index in self.graph_schema.indexes])
+        for index in self.graph_schema.indexes:
+            _require_sorted(
+                f"schema.indexes[{index.name!r}].labels_or_types",
+                index.labels_or_types,
+            )
+            _require_sorted(
+                f"schema.indexes[{index.name!r}].properties",
+                index.properties,
+            )
         _require_sorted(
             "statistics.property_coverage",
             [
