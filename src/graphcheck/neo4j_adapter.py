@@ -140,6 +140,15 @@ class Neo4jClient:
         return _plan_has_operator(plan, "NodeCountFromCountStore")
 
 
+def init_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
+    client = Neo4jClient(profile)
+    try:
+        target, visibility, counts = client.probe()
+        return DebugTrace(profile=profile_name, target=target, visibility=visibility, counts=counts)
+    finally:
+        client.close()
+
+
 def debug_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:

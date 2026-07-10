@@ -6,7 +6,7 @@ import typer
 from graphcheck import __version__
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import debug_trace, error_json
+from graphcheck.neo4j_adapter import debug_trace, error_json, init_trace
 from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,
@@ -54,13 +54,14 @@ def init() -> None:
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
     try:
-        trace = debug_trace(profile_name, profile)
+        trace = init_trace(profile_name, profile)
     except GraphCheckError as exc:
         typer.echo(f"Neo4j was not detected: {exc.error.code}")
         typer.echo(exc.error.message)
         typer.echo(f"Fix: {exc.error.fix}")
     else:
         typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
+        typer.echo(f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}")
     typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
 
 

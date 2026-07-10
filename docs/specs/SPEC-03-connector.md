@@ -18,8 +18,9 @@ Commands discover the project root by walking upward from the current working di
 It also ensures `profiles.yml` and `.graphcheck/` are present in `.gitignore`.
 
 The init command attempts to connect to `bolt://localhost:7687` using the generated local profile.
-If a local Neo4j instance is reachable, it reports the server version. If not, init still writes the
-project files and tells the user to edit `profiles.yml` and run `graphcheck debug`.
+If a local Neo4j instance is reachable, it reports the server version and performs the APOC
+capability check. If not, init still writes the project files and tells the user to edit
+`profiles.yml` and run `graphcheck debug`.
 
 ## `graphcheck.yml`
 
@@ -103,13 +104,15 @@ The probe returns a `RunTarget` compatible with SPEC-01:
 }
 ```
 
-APOC is binary: `true` only when an APOC procedure can be called successfully.
+APOC is binary: `true` only when an APOC procedure can be called successfully. The CLI performs
+this APOC procedure check during both `graphcheck init` and `graphcheck debug` so setup feedback
+and the stable debug trace report the same live capability.
 
 `count_store` is `true` only when GraphCheck can verify that a simple count query is planned with
 a count-store operator. The v0 probe uses `EXPLAIN MATCH (n) RETURN count(n) AS count` and looks
 for `NodeCountFromCountStore` in the plan.
 
-The debug path also reports total node and relationship counts:
+The debug path reports total node and relationship counts:
 
 ```cypher
 MATCH (n) RETURN count(n) AS count
@@ -118,7 +121,8 @@ MATCH ()-[r]->() RETURN count(r) AS count
 
 ## Stable debug JSON
 
-`graphcheck debug --json` emits the following trace.
+`graphcheck debug --json` emits the following trace. Debug verifies connectivity, server metadata,
+APOC usability, count-store usability, and graph counts.
 
 Success:
 
