@@ -74,6 +74,7 @@ def test_debug_trace_json_shape_matches_spec():
             "can_show_procedures": True,
         },
         "counts": {"nodes": 7, "relationships": 11},
+        "blocked_checks": [],
     }
 
 
