@@ -13,6 +13,7 @@ from graphcheck.neo4j_adapter import (
     _plan_has_operator,
     debug_trace,
     error_json,
+    init_trace,
     map_neo4j_error,
 )
 
@@ -263,7 +264,7 @@ def test_debug_trace_closes_client(monkeypatch):
                     server_version="5",
                     edition="community",
                     fingerprint="fp",
-                    capabilities=Capabilities(apoc=False, count_store=False),
+                    capabilities=Capabilities(apoc=True, count_store=False),
                 ),
                 Visibility(True, True, True),
                 Counts(0, 0),
@@ -283,6 +284,44 @@ def test_debug_trace_closes_client(monkeypatch):
     )
 
     assert trace.profile == "local"
+    assert trace.target.capabilities.apoc is True
+    assert closed is True
+
+
+def test_init_trace_uses_apoc_probe(monkeypatch):
+    closed = False
+
+    class FakeClient:
+        def __init__(self, profile):
+            self.profile = profile
+
+        def probe(self):
+            return (
+                RunTarget(
+                    database="neo4j",
+                    server_version="5",
+                    edition="community",
+                    fingerprint="fp",
+                    capabilities=Capabilities(apoc=True, count_store=False),
+                ),
+                Visibility(True, True, True),
+                Counts(0, 0),
+            )
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("graphcheck.neo4j_adapter.Neo4jClient", FakeClient)
+
+    trace = init_trace(
+        "local",
+        ConnectionProfile(
+            uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+        ),
+    )
+
+    assert trace.target.capabilities.apoc is True
     assert closed is True
 
 
