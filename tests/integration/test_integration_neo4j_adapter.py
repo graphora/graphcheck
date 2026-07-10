@@ -11,37 +11,7 @@ pytestmark = pytest.mark.skipif(
     reason="set GRAPHCHECK_NEO4J_INTEGRATION=1 to run Neo4j container tests",
 )
 
-NEO4J_IMAGES = ["neo4j:4.4", "neo4j:5"]
-PASSWORD = "graphora-test"
-
-
-@pytest.fixture(params=NEO4J_IMAGES)
-def neo4j_profile(request):
-    from testcontainers.neo4j import Neo4jContainer
-
-    with Neo4jContainer(request.param, password=PASSWORD) as container:
-        yield ConnectionProfile(
-            uri=container.get_connection_url(),
-            user="neo4j",
-            password=PASSWORD,
-            database="neo4j",
-        )
-
-
-@pytest.fixture(params=NEO4J_IMAGES)
-def neo4j_apoc_profile(request):
-    from testcontainers.neo4j import Neo4jContainer
-
-    container = Neo4jContainer(request.param, password=PASSWORD)
-    container.with_env("NEO4J_PLUGINS", '["apoc"]')
-    container.with_env("NEO4JLABS_PLUGINS", '["apoc"]')
-    with container:
-        yield ConnectionProfile(
-            uri=container.get_connection_url(),
-            user="neo4j",
-            password=PASSWORD,
-            database="neo4j",
-        )
+# neo4j_profile / neo4j_apoc_profile fixtures live in tests/conftest.py (shared with #3).
 
 
 def test_connect_and_probe(neo4j_profile):

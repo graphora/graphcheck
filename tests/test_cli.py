@@ -25,6 +25,7 @@ def test_help_runs():
 
 def test_init_writes_project_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
 
     result = runner.invoke(app, ["init"])
 

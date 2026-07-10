@@ -300,3 +300,38 @@ def test_debug_trace_closes_client(monkeypatch):
 )
 def test_map_neo4j_error_codes(exc, code):
     assert map_neo4j_error(exc).error.code == code
+
+
+def test_run_read_uses_read_access_mode(monkeypatch):
+    # Unit-level guard so a regression that drops READ_ACCESS fails fast CI, not only the
+    # gated integration job. Read-only enforcement is the #1 accuracy-contract invariant.
+    import neo4j
+
+    captured: dict = {}
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            return iter([])
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    assert client.run_read("RETURN 1") == []
+    assert captured["default_access_mode"] == neo4j.READ_ACCESS
+    assert captured["database"] == "neo4j"
