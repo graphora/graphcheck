@@ -127,6 +127,18 @@ When a loaded check suite declares a capability requirement that the target does
 reports the blocked check id and a fix. In v0 this is a preflight report only; C1 owns turning the
 same condition into skipped or errored check results during an actual run.
 
+Capability requirements come from `graphcheck.packs.PACK_REQUIREMENTS`, not from the CLI. The
+supported requirement vocabulary is:
+
+- `read`
+- `show_procedures`
+- `apoc`
+- `count_store`
+
+Debug scans both `*.yml` and `*.yaml` files in the configured checks directory. Checks whose
+effective `generated` flag is `true` are validated by the loader but are not reported as active
+blockers.
+
 ## Stable debug JSON
 
 `graphcheck debug --json` emits the following trace. Debug verifies connectivity, server metadata,
