@@ -95,7 +95,7 @@ def _trace():
     )
 
 
-def _trace_without_apoc():
+def _trace_without_read():
     return DebugTrace(
         profile="local",
         target=RunTarget(
@@ -103,9 +103,9 @@ def _trace_without_apoc():
             server_version="5.18.0",
             edition="enterprise",
             fingerprint="abc123",
-            capabilities=Capabilities(apoc=False, count_store=True),
+            capabilities=Capabilities(apoc=True, count_store=True),
         ),
-        visibility=Visibility(can_connect=True, can_read=True, can_show_procedures=True),
+        visibility=Visibility(can_connect=True, can_read=False, can_show_procedures=True),
         counts=Counts(nodes=3, relationships=4),
     )
 
@@ -156,41 +156,35 @@ def test_debug_human_success(tmp_path, monkeypatch):
     assert "Counts: 3 nodes, 4 relationships" in result.stdout
 
 
-def test_debug_reports_checks_blocked_by_missing_apoc(tmp_path, monkeypatch):
-    import graphcheck.debug_diagnostics as diagnostics
-
+def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr(
-        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_apoc()
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
     )
-    monkeypatch.setitem(diagnostics.CHECK_CAPABILITY_REQUIREMENTS, "completeness", ("apoc",))
 
     result = runner.invoke(app, ["debug"])
 
     assert result.exit_code == 0
-    assert "APOC: no" in result.stdout
+    assert "Credentials cannot see: read" in result.stdout
     assert "Blocked checks:" in result.stdout
-    assert "example/customer-name-present requires apoc" in result.stdout
-    assert "Install APOC" in result.stdout
+    assert "example/customer-name-present requires read" in result.stdout
+    assert "Grant read access" in result.stdout
 
 
-def test_debug_json_reports_checks_blocked_by_missing_apoc(tmp_path, monkeypatch):
-    import graphcheck.debug_diagnostics as diagnostics
-
+def test_debug_json_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr(
-        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_apoc()
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
     )
-    monkeypatch.setitem(diagnostics.CHECK_CAPABILITY_REQUIREMENTS, "completeness", ("apoc",))
 
     result = runner.invoke(app, ["debug", "--json"])
 
     assert result.exit_code == 0
     assert '"blocked_checks": [' in result.stdout
     assert '"check_id": "customer-name-present"' in result.stdout
-    assert '"missing_capability": "apoc"' in result.stdout
-    assert "Install APOC" in result.stdout
+    assert '"missing_capability": "read"' in result.stdout
+    assert "Grant read access" in result.stdout
