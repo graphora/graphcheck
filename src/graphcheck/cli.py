@@ -6,7 +6,7 @@ import typer
 
 from graphcheck import __version__
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.debug_diagnostics import blocked_checks_for_project
+from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import debug_trace, error_json, init_trace
 from graphcheck.project import (
@@ -81,7 +81,12 @@ def debug(
         trace = debug_trace(profile_name, selected)
         trace = replace(
             trace,
-            blocked_checks=tuple(blocked_checks_for_project(root, trace.target.capabilities)),
+            blocked_checks=tuple(
+                blocked_checks_for_project(
+                    root,
+                    CapabilityContext.from_probe(trace.target.capabilities, trace.visibility),
+                )
+            ),
         )
     except GraphCheckError as exc:
         payload = error_json(profile_name, exc.error)

@@ -17,6 +17,10 @@ class UnknownCheckError(ValueError):
     """A conformance check references a `check` name not in the pack registry."""
 
 
+class SuiteValidationError(ValueError):
+    """A suite file is syntactically valid YAML but invalid as a GraphCheck suite."""
+
+
 class _NoDuplicatesLoader(yaml.SafeLoader):
     pass
 
@@ -45,7 +49,7 @@ def load_suite_yaml(text: str) -> dict:
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError("a suite file must be a mapping at the top level")
+        raise SuiteValidationError("a suite file must be a mapping at the top level")
     return data
 
 
@@ -137,7 +141,7 @@ def load_suite(text: str, *, source: str | None = None) -> Suite:
     parsed = _SuiteFile.model_validate(raw)
     suite_id = parsed.suite or (Path(source).stem if source else None)
     if not suite_id:
-        raise ValueError("suite name required: no `suite:` key and no source filename")
+        raise SuiteValidationError("suite name required: no `suite:` key and no source filename")
     defaults = parsed.defaults
     checks: list[LoadedCheck] = []
 
@@ -170,7 +174,7 @@ def load_suite(text: str, *, source: str | None = None) -> Suite:
     seen: set[str] = set()
     for lc in checks:
         if lc.id in seen:
-            raise ValueError(f"duplicate check id {lc.id!r} in suite {suite_id!r}")
+            raise SuiteValidationError(f"duplicate check id {lc.id!r} in suite {suite_id!r}")
         seen.add(lc.id)
 
     return Suite(suite=suite_id, checks=checks)
