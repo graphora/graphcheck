@@ -1,47 +1,62 @@
+import os
+from pathlib import Path
+
+import pytest
 from neo4j import GraphDatabase
 
-# Neo4j connection details
-URI = "bolt://localhost:7687"
-USERNAME = "neo4j"
-PASSWORD = "password"
+from load_graph import load_graph
 
-driver = GraphDatabase.driver(
-    URI,
-    auth=(USERNAME, PASSWORD)
+pytestmark = pytest.mark.skipif(
+    os.environ.get("GRAPHCHECK_NEO4J_INTEGRATION") != "1",
+    reason="set GRAPHCHECK_NEO4J_INTEGRATION=1 to run Neo4j container tests",
 )
 
 
-def test_fixture_counts():
-    """
-    Verify the fixture graph contains the expected number of nodes.
-    """
+def test_fixture_counts(neo4j_profile):
 
-    with driver.session() as session:
+    load_graph(
+        neo4j_profile,
+        Path("tests/fixtures/fraud-ring.cypher"),
+    )
 
-        customer_count = session.run(
-            "MATCH (c:Customer) RETURN count(c) AS total"
-        ).single()["total"]
+    driver = GraphDatabase.driver(
+        neo4j_profile.uri,
+        auth=(neo4j_profile.user, neo4j_profile.password),
+    )
 
-        account_count = session.run(
-            "MATCH (a:Account) RETURN count(a) AS total"
-        ).single()["total"]
+    with driver.session(database=neo4j_profile.database) as session:
+        customer_count = session.run("MATCH (c:Customer) RETURN count(c) AS total").single()[
+            "total"
+        ]
 
-        transaction_count = session.run(
-            "MATCH (t:Transaction) RETURN count(t) AS total"
-        ).single()["total"]
+        account_count = session.run("MATCH (a:Account) RETURN count(a) AS total").single()["total"]
+
+        transaction_count = session.run("MATCH (t:Transaction) RETURN count(t) AS total").single()[
+            "total"
+        ]
 
     assert customer_count == 1507
     assert account_count == 2504
     assert transaction_count == 1000
+    driver.close()
 
 
-def test_planted_defects():
+def test_planted_defects(neo4j_profile):
     """
     Verify the planted defects are still present in the fixture graph.
     """
 
-    with driver.session() as session:
+    load_graph(
+        neo4j_profile,
+        Path("tests/fixtures/fraud-ring.cypher"),
+    )
 
+    driver = GraphDatabase.driver(
+        neo4j_profile.uri,
+        auth=(neo4j_profile.user, neo4j_profile.password),
+    )
+
+    with driver.session(database=neo4j_profile.database) as session:
         # Count orphan Account nodes
         orphan_count = session.run("""
             MATCH (a:Account)
@@ -59,10 +74,4 @@ def test_planted_defects():
 
     assert orphan_count == 3
     assert cardinality_count == 1
-
-
-def teardown_module(module):
-    """
-    Close the Neo4j driver after all tests complete.
-    """
     driver.close()
