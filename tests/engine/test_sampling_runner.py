@@ -1,0 +1,140 @@
+from dataclasses import dataclass
+
+import pytest
+
+from graphcheck.contracts.check import ConformanceCheck, LoadedCheck, Suite
+from graphcheck.contracts.results import Capabilities, Pattern, RunTarget, Severity, Verdict
+from graphcheck.engine.runner import Engine, EngineConfig
+from graphcheck.engine.sampling import SamplingPolicy
+
+TARGET = RunTarget(
+    database="neo4j",
+    server_version="5",
+    edition="community",
+    fingerprint="sha256:sample-graph",
+    capabilities=Capabilities(apoc=False, count_store=True),
+)
+
+
+@dataclass(frozen=True)
+class RichResult:
+    rows: list[dict[str, object]]
+    columns: tuple[str, ...]
+
+
+class Client:
+    def __init__(self, population: int, sample_size: int, violations: int):
+        self.population = population
+        self.sample_size = sample_size
+        self.violations = violations
+        self.calls = []
+
+    def run_read_result(self, query, params, *, timeout_s=None):
+        self.calls.append((query, dict(params), timeout_s))
+        if len(self.calls) == 1:
+            return RichResult([{"population": self.population}], ("population",))
+        return RichResult(
+            [
+                {
+                    "schema_ok": True,
+                    "missing_labels": [],
+                    "missing_relationship_types": [],
+                    "population": self.population,
+                    "sample_size": self.sample_size,
+                    "violation_count": self.violations,
+                    "mean_degree": 3.0,
+                    "degree_stddev": 1.0,
+                    "evidence": (
+                        [{"kind": "node", "id": "hub-1", "labels": ["Customer"]}]
+                        if self.violations
+                        else []
+                    ),
+                }
+            ],
+            ("population", "sample_size", "violation_count", "evidence"),
+        )
+
+
+def _suite(*, sample_size=None) -> Suite:
+    config = {
+        "label": "Customer",
+        "rel_type": "CONTROLS",
+        "direction": "any",
+        "z_threshold": 3.0,
+        "sample_size": sample_size,
+    }
+    spec = ConformanceCheck.model_validate({"id": "hubs", "check": "hub_outlier", "with": config})
+    check = LoadedCheck(
+        id="hubs",
+        pattern=Pattern.CONFORMANCE,
+        severity=Severity.ERROR,
+        tags=[],
+        provenance=None,
+        generated=False,
+        spec=spec,
+    )
+    return Suite(suite="sampling", checks=[check])
+
+
+def _engine(client, *, exhaustive_limit=10, sample_size=3):
+    config = EngineConfig(
+        sampling=SamplingPolicy(
+            exhaustive_limit=exhaustive_limit,
+            sample_size=sample_size,
+            seed="pinned-seed",
+        )
+    )
+    return Engine(client, config=config, monotonic=lambda: 1.0)
+
+
+def test_large_population_uses_policy_sample_and_emits_estimate_metadata():
+    client = Client(population=100, sample_size=3, violations=1)
+
+    results = _engine(client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.FAIL
+    assert check.estimate is not False
+    assert check.estimate.sample_size == 3
+    assert check.estimate.population == 100
+    assert check.estimate.confidence == pytest.approx(0.95)
+    assert check.params["sample_size"] == 3
+    assert check.expected["sample_size"] == 3
+    assert isinstance(check.params["sample_seed"], int)
+    assert len(client.calls) == 2
+    assert client.calls[0][1] == {"label": "Customer"}
+
+
+def test_population_inside_exhaustive_limit_is_exact_and_not_labeled_estimate():
+    client = Client(population=5, sample_size=5, violations=0)
+
+    results = _engine(client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.PASS
+    assert check.estimate is False
+    assert check.params["sample_size"] == 5
+    assert check.expected["sample_size"] == 5
+
+
+def test_check_level_sample_size_overrides_global_exhaustive_decision():
+    client = Client(population=5, sample_size=2, violations=1)
+
+    results = _engine(client).run_suite(
+        _suite(sample_size=2), source_sha="suite-sha", target=TARGET
+    )
+
+    check = results.checks[0]
+    assert check.estimate is not False
+    assert check.estimate.sample_size == 2
+    assert check.params["sample_size"] == 2
+
+
+def test_same_graph_suite_and_seed_produce_the_same_query_seed():
+    first_client = Client(population=100, sample_size=3, violations=0)
+    second_client = Client(population=100, sample_size=3, violations=0)
+
+    first = _engine(first_client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
+    second = _engine(second_client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
+
+    assert first.checks[0].params["sample_seed"] == second.checks[0].params["sample_seed"]
