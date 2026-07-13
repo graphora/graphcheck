@@ -2,9 +2,8 @@ import os
 from pathlib import Path
 
 import pytest
-from neo4j import GraphDatabase
-
 from load_graph import load_graph
+from neo4j import GraphDatabase
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("GRAPHCHECK_NEO4J_INTEGRATION") != "1",

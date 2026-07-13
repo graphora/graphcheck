@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from graphcheck.connection_profiles import ConnectionProfile
 from neo4j import GraphDatabase
+
+from graphcheck.connection_profiles import ConnectionProfile
 
 
 def load_graph(profile: ConnectionProfile, cypher_path: Path):
