@@ -262,6 +262,7 @@
           "items": {
             "$ref": "#/$defs/EvidenceElement"
           },
+          "minItems": 1,
           "title": "Elements",
           "type": "array"
         },

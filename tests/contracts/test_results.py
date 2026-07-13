@@ -73,7 +73,11 @@ def _full_check(verdict, severity):
         data.update(compiled_query="RETURN 1", params={}, measured={})
     if verdict in (Verdict.FAIL, Verdict.WARN):
         data["evidence"] = Evidence(
-            message="m", elements=[], truncated=False, cap=50, total_count=0
+            message="m",
+            elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+            truncated=False,
+            cap=50,
+            total_count=1,
         )
     if verdict is Verdict.ERRORED:
         data["error"] = CheckError(code="c", message="m", fix="f")
@@ -114,8 +118,19 @@ def test_fail_requires_evidence():
         CheckResult(**_base(verdict=Verdict.FAIL, evidence=None))
 
 
+def test_evidence_requires_at_least_one_pointer():
+    with pytest.raises(ValidationError):
+        Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
+
+
 def test_pass_forbids_evidence():
-    ev = Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
+    ev = Evidence(
+        message="m",
+        elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+        truncated=False,
+        cap=50,
+        total_count=1,
+    )
     with pytest.raises(ValidationError):
         CheckResult(**_base(verdict=Verdict.PASS, evidence=ev))
 

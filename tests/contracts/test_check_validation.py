@@ -161,6 +161,158 @@ def test_duplicate_check_id_in_suite_rejected():
         load_suite(text)
 
 
+def _competency_suite(expect: str, *, question: str = "q", query: str = "RETURN 1 AS n") -> str:
+    return (
+        "suite: s\ncompetency:\n"
+        f"  - id: x\n    question: {question!r}\n    query: {query!r}\n"
+        f"    expect: {expect}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "{}",
+        "{min: -1}",
+        "{max: -1}",
+        "{exactly: -1}",
+        "{min: 2, max: 1}",
+        "{min: 2, exactly: 1}",
+        "{max: 1, exactly: 2}",
+    ],
+)
+def test_row_bounds_reject_empty_negative_or_inconsistent_values(rows):
+    with pytest.raises(ValidationError):
+        load_suite(_competency_suite(f"{{rows: {rows}}}"))
+
+
+def test_row_bounds_allow_consistent_exactly_overlay():
+    suite = load_suite(_competency_suite("{rows: {min: 1, max: 3, exactly: 2}}"))
+
+    bounds = suite.checks[0].spec.expect.rows
+    assert bounds is not None
+    assert (bounds.min, bounds.max, bounds.exactly) == (1, 3, 2)
+
+
+@pytest.mark.parametrize("expect", ["{}", "{contains: []}"])
+def test_expect_rejects_assertion_free_or_vacuous_payloads(expect):
+    with pytest.raises(ValidationError):
+        load_suite(_competency_suite(expect))
+
+
+@pytest.mark.parametrize(
+    "expect",
+    [
+        "{empty: true, rows: {min: 1}}",
+        "{empty: false, rows: {max: 0}}",
+        "{empty: true, contains: [1]}",
+        "{empty: false, equals: []}",
+        "{rows: {min: 2}, equals: [1]}",
+        "{rows: {max: 1}, equals: [1, 2]}",
+        "{contains: [2], equals: [1]}",
+        "{contains: [1], rows: {max: 0}}",
+    ],
+)
+def test_expect_rejects_obvious_cross_assertion_contradictions(expect):
+    with pytest.raises(ValidationError):
+        load_suite(_competency_suite(expect))
+
+
+def test_regression_overlay_allows_shape_contains_and_equals_together():
+    suite = load_suite(
+        _competency_suite(
+            "{rows: {min: 1, max: 2}, columns: [n], unique: true, contains: [1], equals: [1]}"
+        )
+    )
+
+    loaded = suite.checks[0]
+    assert loaded.pattern is Pattern.COMPETENCY_REGRESSION
+    assert loaded.spec.expect.contains == [1]
+    assert loaded.spec.expect.equals == [1]
+
+
+@pytest.mark.parametrize(
+    ("question", "query"),
+    [("''", "'RETURN 1'"), ("'   '", "'RETURN 1'"), ("'q'", "''"), ("'q'", "'  '")],
+)
+def test_competency_rejects_blank_question_or_query(question, query):
+    text = (
+        "suite: s\ncompetency:\n"
+        f"  - id: x\n    question: {question}\n    query: {query}\n"
+        "    expect: {empty: false}\n"
+    )
+
+    with pytest.raises(ValidationError):
+        load_suite(text)
+
+
+def test_competency_params_require_string_keys():
+    text = (
+        "suite: s\ncompetency:\n"
+        "  - id: x\n    question: q\n    query: RETURN $p AS n\n"
+        "    params: {1: value}\n    expect: {empty: false}\n"
+    )
+
+    with pytest.raises(ValidationError):
+        load_suite(text)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "metric: ''\n    target: {label: Customer}\n    tolerance: {max_drop_pct: 10}",
+        "metric: '   '\n    target: {label: Customer}\n    tolerance: {max_drop_pct: 10}",
+        "metric: node_count\n    baseline: ''\n    target: {label: Customer}\n"
+        "    tolerance: {max_drop_pct: 10}",
+        "metric: node_count\n    baseline: '  '\n    target: {label: Customer}\n"
+        "    tolerance: {max_drop_pct: 10}",
+        "metric: node_count\n    target: {label: Customer}\n    tolerance: {}",
+    ],
+)
+def test_drift_rejects_blank_names_or_empty_tolerance(fragment):
+    text = f"suite: s\ndrift:\n  - id: x\n    {fragment}\n"
+
+    with pytest.raises(ValidationError):
+        load_suite(text)
+
+
+def test_drift_keeps_target_and_tolerance_vocabularies_open():
+    text = (
+        "suite: s\ndrift:\n  - id: x\n    metric: custom_metric\n"
+        "    baseline: custom-baseline\n    target: {custom_target: value}\n"
+        "    tolerance: {custom_tolerance: 3}\n"
+    )
+
+    suite = load_suite(text)
+
+    drift = suite.checks[0].spec
+    assert drift.target == {"custom_target": "value"}
+    assert drift.tolerance == {"custom_tolerance": 3}
+
+
+def test_drift_allows_empty_target_for_graph_wide_metrics():
+    suite = load_suite(
+        "suite: s\ndrift:\n  - id: x\n    metric: node_count\n"
+        "    target: {}\n    tolerance: {max_drop_pct: 10}\n"
+    )
+
+    assert suite.checks[0].spec.target == {}
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "target: {1: Customer}\n    tolerance: {max_drop_pct: 10}",
+        "target: {label: Customer}\n    tolerance: {1: 10}",
+    ],
+)
+def test_drift_mapping_keys_must_be_strings(fragment):
+    text = f"suite: s\ndrift:\n  - id: x\n    metric: node_count\n    {fragment}\n"
+
+    with pytest.raises(ValidationError):
+        load_suite(text)
+
+
 # --- schema generation ---
 
 
