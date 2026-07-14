@@ -136,6 +136,49 @@ def test_counts_are_converted_to_ints():
     assert client._counts() == Counts(nodes=3, relationships=4)
 
 
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        (
+            [
+                {"access": "GRANTED", "action": "match", "graph": "*"},
+            ],
+            True,
+        ),
+        (
+            [
+                {"access": "GRANTED", "action": "traverse", "graph": "neo4j"},
+                {"access": "GRANTED", "action": "read", "graph": "neo4j"},
+            ],
+            True,
+        ),
+        ([{"access": "GRANTED", "action": "access", "graph": "neo4j"}], False),
+        (
+            [
+                {"access": "GRANTED", "action": "match", "graph": "*"},
+                {"access": "DENIED", "action": "read", "graph": "neo4j"},
+            ],
+            False,
+        ),
+    ],
+)
+def test_enterprise_read_probe_uses_current_user_graph_privileges(rows, expected):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: rows
+
+    assert client._can_read("enterprise") is expected
+
+
+def test_community_read_probe_uses_implied_admin_privileges():
+    client = object.__new__(Neo4jClient)
+    client.run_read = lambda query: pytest.fail("Community probe should not inspect RBAC")
+
+    assert client._can_read("community") is True
+
+
 def test_apoc_probe_falls_back_to_show_procedures_when_version_is_missing():
     client = object.__new__(Neo4jClient)
 
@@ -177,6 +220,7 @@ def test_probe_handles_permission_denied_apoc_probe():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
+    client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._count_store_usable = lambda: True
 
@@ -200,6 +244,7 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
+    client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._count_store_usable = lambda: True
 
@@ -217,6 +262,52 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     assert target.capabilities.apoc is False
     assert visibility.can_show_procedures is True
     assert counts == Counts(nodes=1, relationships=2)
+
+
+def test_probe_skips_counts_when_read_privilege_is_missing():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: False
+    client._counts = lambda: pytest.fail("counts must not run without read visibility")
+    client._count_store_usable = lambda: pytest.fail(
+        "count-store probe must not run without read visibility"
+    )
+
+    target, visibility, counts = client.probe()
+
+    assert visibility.can_read is False
+    assert target.capabilities.count_store is False
+    assert counts == Counts(nodes=None, relationships=None)
+
+
+def test_probe_handles_permission_denied_while_loading_counts():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: True
+    client._count_store_usable = lambda: pytest.fail(
+        "count-store probe must not run after count permission denial"
+    )
+
+    def counts_denied():
+        raise GraphCheckError("neo4j.permission_denied", "denied", "fix")
+
+    client._counts = counts_denied
+
+    target, visibility, counts = client.probe()
+
+    assert visibility.can_read is False
+    assert target.capabilities.count_store is False
+    assert counts == Counts(nodes=None, relationships=None)
 
 
 def test_probe_reraises_unexpected_apoc_probe_error():
@@ -340,6 +431,13 @@ def test_init_trace_uses_apoc_probe(monkeypatch):
 )
 def test_map_neo4j_error_codes(exc, code):
     assert map_neo4j_error(exc).error.code == code
+
+
+def test_map_neo4j_error_uses_driver_security_code_for_permission_denial():
+    exc = Exception("operation rejected")
+    exc.code = "Neo.ClientError.Security.Forbidden"
+
+    assert map_neo4j_error(exc).error.code == "neo4j.permission_denied"
 
 
 def test_run_read_uses_read_access_mode(monkeypatch):

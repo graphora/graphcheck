@@ -106,7 +106,7 @@ def _trace_without_read():
             capabilities=Capabilities(apoc=True, count_store=True),
         ),
         visibility=Visibility(can_connect=True, can_read=False, can_show_procedures=True),
-        counts=Counts(nodes=3, relationships=4),
+        counts=Counts(nodes=None, relationships=None),
     )
 
 
@@ -171,6 +171,7 @@ def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypat
     assert "Blocked checks:" in result.stdout
     assert "example/customer-name-present requires read" in result.stdout
     assert "Grant read access" in result.stdout
+    assert "Counts: unavailable (read access denied)" in result.stdout
 
 
 def test_debug_json_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
