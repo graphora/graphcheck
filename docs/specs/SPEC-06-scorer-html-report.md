@@ -11,6 +11,7 @@ Implemented in this slice:
 
 - SPEC-01 `results.json` writer.
 - Offline HTML report renderer.
+- `graphcheck report --open` for opening the most recent HTML report.
 - Regression tests over the existing SPEC-01 fixture results.
 
 Deferred:
@@ -137,6 +138,21 @@ Checks are rendered in this order:
 
 Within the same verdict, checks sort by severity, suite id, then check id.
 
+## CLI Command Boundary
+
+`graphcheck report` operates on report artifacts that already exist. It does not
+connect to Neo4j or create new run data.
+
+`graphcheck report --open`:
+
+1. discovers the project root and configured artifacts directory,
+2. finds `report.html` files below `<artifacts>/runs/`,
+3. selects the most recently modified report, and
+4. opens its local file URI in the default browser.
+
+If no report exists or the browser cannot be launched, the command exits non-zero
+with an actionable error.
+
 ## Scorer
 
 TODO.
@@ -160,7 +176,8 @@ must reuse SPEC-01 rules rather than introducing a second scoring contract.
 
 ## Tests
 
-Current tests live in `tests/test_reporting.py`.
+Reporting tests live in `tests/test_reporting.py`; report-command tests live in
+`tests/test_cli.py`.
 
 They use the existing SPEC-01 fixtures:
 
@@ -178,7 +195,10 @@ The tests assert:
 - failures render before warnings and passes,
 - compiled Cypher is visible,
 - evidence IDs are visible,
-- failed-run errors are visible.
+- failed-run errors are visible,
+- `report --open` selects the newest HTML report,
+- the configured artifacts directory is honored,
+- missing reports and browser-launch failures exit non-zero.
 
 ## Deferred Work
 
