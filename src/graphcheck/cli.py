@@ -134,4 +134,9 @@ def debug(
             )
     else:
         typer.echo("Blocked checks: none")
-    typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
+    if trace.counts.nodes is None or trace.counts.relationships is None:
+        typer.echo("Counts: unavailable (read access denied)")
+    else:
+        typer.echo(
+            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
+        )
