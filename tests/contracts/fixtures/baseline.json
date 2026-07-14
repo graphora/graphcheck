@@ -1,5 +1,5 @@
 {
-  "fingerprint": "sha256:8853628381cc6ecdd0e0f269f733814875c19efb27ac29c197469b1e0f2e37c8",
+  "fingerprint": "sha256:c9e2dbdcdccc03a902909d8cc661653858bad24d2d40c97b1849e5b2e3ee26e1",
   "metadata": {
     "generated_at": "2026-07-07T17:30:00Z",
     "graphcheck_version": "0.1.0"
@@ -33,10 +33,15 @@
     "labels": [
       {
         "count": 10,
+        "degree_distribution": {
+          "maximum": 4,
+          "median": 1.0,
+          "p95": 3.0,
+          "p99": 4.0
+        },
         "name": "Account",
         "properties": [
           {
-            "coverage": 100.0,
             "name": "id",
             "type": "STRING"
           }
@@ -44,15 +49,19 @@
       },
       {
         "count": 3,
+        "degree_distribution": {
+          "maximum": 4,
+          "median": 1.0,
+          "p95": 3.0,
+          "p99": 4.0
+        },
         "name": "Customer",
         "properties": [
           {
-            "coverage": 100.0,
             "name": "id",
             "type": "STRING"
           },
           {
-            "coverage": 66.67,
             "name": "name",
             "type": "STRING"
           }
@@ -68,12 +77,6 @@
   },
   "schema_version": "1.0",
   "statistics": {
-    "degree_distribution": {
-      "maximum": 4,
-      "median": 1.0,
-      "p95": 3.0,
-      "p99": 4.0
-    },
     "node_count": 13,
     "property_coverage": [
       {

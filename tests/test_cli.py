@@ -1,7 +1,10 @@
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from graphcheck import __version__
 from graphcheck.cli import app
+from graphcheck.contracts.profile import BaselineProfile
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
 
@@ -118,3 +121,57 @@ def test_debug_human_success(tmp_path, monkeypatch):
     assert "Edition: enterprise" in result.stdout
     assert "Database name: neo4j" in result.stdout
     assert "Counts: 3 nodes, 4 relationships" in result.stdout
+
+
+def test_profile_writes_baseline_and_prints_path(tmp_path, monkeypatch):
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    baseline = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+
+    class FakeClient:
+        def close(self):
+            pass
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: object())
+    monkeypatch.setattr(
+        "graphcheck.cli.select_profile",
+        lambda profiles, name: ("local", object()),
+    )
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: FakeClient())
+    monkeypatch.setattr("graphcheck.cli.build_profile", lambda client: baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    paths = list((tmp_path / ".graphcheck" / "baselines").glob("*.json"))
+    assert result.exit_code == 0
+    assert len(paths) == 1
+    assert result.stdout.strip() == str(Path(".graphcheck") / "baselines" / paths[0].name)
+
+
+def test_baseline_set_selects_latest_and_prints_confirmation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / ".graphcheck" / "baselines"
+    directory.mkdir(parents=True)
+    (directory / "20260714T120000.json").write_text("{}", encoding="utf-8")
+    (directory / "20260714T143522.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(app, ["baseline", "set"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "Baseline set to 20260714T143522.json"
+
+
+def test_baseline_set_specific_snapshot_and_missing_snapshot_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / ".graphcheck" / "baselines"
+    directory.mkdir(parents=True)
+    (directory / "20260714T120000.json").write_text("{}", encoding="utf-8")
+
+    selected = runner.invoke(app, ["baseline", "set", "20260714T120000.json"])
+    missing = runner.invoke(app, ["baseline", "set", "20260714T143522.json"])
+
+    assert selected.exit_code == 0
+    assert selected.stdout.strip() == "Baseline set to 20260714T120000.json"
+    assert missing.exit_code == 1
+    assert "baseline.not_found" in missing.output

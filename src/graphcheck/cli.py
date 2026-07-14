@@ -4,9 +4,11 @@ from pathlib import Path
 import typer
 
 from graphcheck import __version__
+from graphcheck.baselines import set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import debug_trace, error_json
+from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json
+from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,
@@ -21,6 +23,8 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+baseline_app = typer.Typer(help="Manage baseline snapshots.")
+app.add_typer(baseline_app, name="baseline")
 
 
 def _version(value: bool) -> None:
@@ -97,3 +101,51 @@ def debug(
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
     typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
+
+
+@app.command()
+def profile(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Connection profile to use.",
+    ),
+) -> None:
+    """Generate a baseline profile for the connected Neo4j graph."""
+
+    try:
+        root = find_project_root()
+        profiles = load_profiles(root)
+        _, selected = select_profile(profiles, profile)
+
+        client = Neo4jClient(selected)
+        try:
+            baseline = build_profile(client)
+        finally:
+            client.close()
+
+        path = write_baseline(baseline)
+
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(path)
+
+
+@baseline_app.command("set")
+def baseline_set(
+    filename: str | None = typer.Argument(
+        None,
+        help="Timestamped baseline filename to activate; defaults to the newest snapshot.",
+    ),
+) -> None:
+    """Select an existing snapshot as the active baseline."""
+    try:
+        selected = set_current_baseline(filename)
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Baseline set to {selected.name}")

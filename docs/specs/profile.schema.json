@@ -171,6 +171,16 @@
           "title": "Count",
           "type": "integer"
         },
+        "degree_distribution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DegreeDistribution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "title": "Name",
           "type": "string"
@@ -186,7 +196,8 @@
       "required": [
         "name",
         "count",
-        "properties"
+        "properties",
+        "degree_distribution"
       ],
       "title": "LabelProfile",
       "type": "object"
@@ -213,12 +224,6 @@
     "ProfileProperty": {
       "additionalProperties": false,
       "properties": {
-        "coverage": {
-          "maximum": 100,
-          "minimum": 0,
-          "title": "Coverage",
-          "type": "number"
-        },
         "name": {
           "title": "Name",
           "type": "string"
@@ -230,8 +235,7 @@
       },
       "required": [
         "name",
-        "type",
-        "coverage"
+        "type"
       ],
       "title": "ProfileProperty",
       "type": "object"
@@ -239,16 +243,6 @@
     "ProfileStatistics": {
       "additionalProperties": false,
       "properties": {
-        "degree_distribution": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DegreeDistribution"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "node_count": {
           "minimum": 0,
           "title": "Node Count",
@@ -270,8 +264,7 @@
       "required": [
         "node_count",
         "relationship_count",
-        "property_coverage",
-        "degree_distribution"
+        "property_coverage"
       ],
       "title": "ProfileStatistics",
       "type": "object"

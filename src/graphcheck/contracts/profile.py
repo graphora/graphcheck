@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Hashable
 from enum import StrEnum
 from typing import Literal
 
@@ -19,7 +20,10 @@ class ProfileStatus(StrEnum):
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+    )
 
 
 class ProfileMetadata(_Strict):
@@ -30,13 +34,13 @@ class ProfileMetadata(_Strict):
 class ProfileProperty(_Strict):
     name: str
     type: str
-    coverage: float = Field(ge=0, le=100)
 
 
 class LabelProfile(_Strict):
     name: str
     count: int = Field(ge=0)
     properties: list[ProfileProperty]
+    degree_distribution: DegreeDistribution | None
 
 
 class RelationshipTypeProfile(_Strict):
@@ -89,7 +93,6 @@ class ProfileStatistics(_Strict):
     node_count: int = Field(ge=0)
     relationship_count: int = Field(ge=0)
     property_coverage: list[PropertyCoverage]
-    degree_distribution: DegreeDistribution | None
 
 
 class BaselineProfile(_Strict):
@@ -107,10 +110,34 @@ class BaselineProfile(_Strict):
         if self.status is ProfileStatus.COMPLETE:
             if self.partial_reason is not None:
                 raise ValueError("complete baseline must have partial_reason=null")
-            if self.statistics.degree_distribution is None:
-                raise ValueError("complete baseline must carry degree_distribution")
+
+            for label_profile in self.graph_schema.labels:
+                if label_profile.degree_distribution is None:
+                    raise ValueError(
+                        f"label {label_profile.name!r} must carry "
+                        "degree_distribution in a complete profile"
+                    )
+
+            for relationship_type in self.graph_schema.relationship_types:
+                if relationship_type.count > self.statistics.relationship_count:
+                    raise ValueError(
+                        f"schema.relationship_types[{relationship_type.name!r}].count "
+                        f"({relationship_type.count}) exceeds "
+                        f"statistics.relationship_count "
+                        f"({self.statistics.relationship_count})"
+                    )
+
         elif not self.partial_reason:
             raise ValueError("partial baseline must carry a non-empty partial_reason")
+
+        for label_profile in self.graph_schema.labels:
+            if label_profile.count > self.statistics.node_count:
+                raise ValueError(
+                    f"schema.labels[{label_profile.name!r}].count "
+                    f"({label_profile.count}) exceeds "
+                    f"statistics.node_count "
+                    f"({self.statistics.node_count})"
+                )
 
         expected_fingerprint = profile_fingerprint(self.graph_schema, self.statistics)
         if self.fingerprint != expected_fingerprint:
@@ -118,22 +145,52 @@ class BaselineProfile(_Strict):
                 f"fingerprint must be {expected_fingerprint!r} for the v0 profile fingerprint input"
             )
 
-        _require_sorted("schema.labels", [label.name for label in self.graph_schema.labels])
-        for label in self.graph_schema.labels:
+        label_names = [label_profile.name for label_profile in self.graph_schema.labels]
+
+        _require_sorted("schema.labels", label_names)
+        _require_unique("schema.labels", label_names)
+
+        for label_profile in self.graph_schema.labels:
+            property_names = [prop.name for prop in label_profile.properties]
+
             _require_sorted(
-                f"schema.labels[{label.name!r}].properties",
-                [prop.name for prop in label.properties],
+                f"schema.labels[{label_profile.name!r}].properties",
+                property_names,
             )
+            _require_unique(
+                f"schema.labels[{label_profile.name!r}].properties",
+                property_names,
+            )
+
+        relationship_names = [rel.name for rel in self.graph_schema.relationship_types]
+
         _require_sorted(
             "schema.relationship_types",
-            [rel.name for rel in self.graph_schema.relationship_types],
+            relationship_names,
         )
+        _require_unique(
+            "schema.relationship_types",
+            relationship_names,
+        )
+
+        constraint_names = [constraint.name for constraint in self.graph_schema.constraints]
+
         _require_sorted(
             "schema.constraints",
-            [constraint.name for constraint in self.graph_schema.constraints],
+            constraint_names,
         )
+        _require_unique(
+            "schema.constraints",
+            constraint_names,
+        )
+
         for constraint in self.graph_schema.constraints:
             _require_sorted(
+                f"schema.constraints[{constraint.name!r}].labels_or_types",
+                constraint.labels_or_types,
+            )
+
+            _require_unique(
                 f"schema.constraints[{constraint.name!r}].labels_or_types",
                 constraint.labels_or_types,
             )
@@ -141,9 +198,30 @@ class BaselineProfile(_Strict):
                 f"schema.constraints[{constraint.name!r}].properties",
                 constraint.properties,
             )
-        _require_sorted("schema.indexes", [index.name for index in self.graph_schema.indexes])
+
+            _require_unique(
+                f"schema.constraints[{constraint.name!r}].properties",
+                constraint.properties,
+            )
+
+        index_names = [index.name for index in self.graph_schema.indexes]
+
+        _require_sorted(
+            "schema.indexes",
+            index_names,
+        )
+        _require_unique(
+            "schema.indexes",
+            index_names,
+        )
+
         for index in self.graph_schema.indexes:
             _require_sorted(
+                f"schema.indexes[{index.name!r}].labels_or_types",
+                index.labels_or_types,
+            )
+
+            _require_unique(
                 f"schema.indexes[{index.name!r}].labels_or_types",
                 index.labels_or_types,
             )
@@ -151,19 +229,43 @@ class BaselineProfile(_Strict):
                 f"schema.indexes[{index.name!r}].properties",
                 index.properties,
             )
+            _require_unique(
+                f"schema.indexes[{index.name!r}].properties",
+                index.properties,
+            )
+
+        coverage_identities = [
+            (
+                coverage.owner,
+                coverage.owner_name,
+                coverage.property,
+            )
+            for coverage in self.statistics.property_coverage
+        ]
+
         _require_sorted(
             "statistics.property_coverage",
-            [
-                (coverage.owner, coverage.owner_name, coverage.property)
-                for coverage in self.statistics.property_coverage
-            ],
+            coverage_identities,
         )
+
+        _require_unique(
+            "statistics.property_coverage",
+            coverage_identities,
+        )
+
         return self
 
 
 def _require_sorted(field: str, values: list[object]) -> None:
+    """Ensure collections are canonically ordered."""
     if values != sorted(values):
         raise ValueError(f"{field} must be canonically sorted")
+
+
+def _require_unique(field: str, values: list[Hashable]) -> None:
+    """Ensure collections do not contain duplicate identities."""
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field} must contain unique values")
 
 
 def fingerprint_input(

@@ -180,7 +180,8 @@ Each label is represented as
 {
     name,
     count,
-    properties[]
+    properties[],
+    degree_distribution
 }
 ```
 
@@ -189,6 +190,10 @@ where
 - **name** — node label
 - **count** — number of nodes with this label
 - **properties** — property inventory for the label
+- **degree_distribution** — degree distribution for nodes with this label
+
+For complete profiles, each label MUST contain a non-null `degree_distribution`.
+For partial profiles, a label's `degree_distribution` MAY be `null`.
 
 ---
 
@@ -199,8 +204,7 @@ Each property contains
 ```text
 {
     name,
-    type,
-    coverage
+    type
 }
 ```
 
@@ -208,7 +212,6 @@ where
 
 - **name** — property key
 - **type** — observed property type
-- **coverage** — percentage of nodes containing the property
 
 ---
 
@@ -254,8 +257,6 @@ node_count
 relationship_count
 
 property_coverage
-
-degree_distribution
 ```
 
 ---
@@ -282,8 +283,8 @@ p99
 maximum
 ```
 
-`degree_distribution` MAY be `null` in a partial baseline when the degree probe exceeds the
-wall-clock budget or fails after core counts have been collected.
+Degree distribution is recorded per label. It MAY be `null` in a partial baseline when the
+degree probe exceeds the wall-clock budget or fails after core counts have been collected.
 
 Statistics are descriptive only.
 
