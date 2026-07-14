@@ -1,4 +1,5 @@
 import json
+import webbrowser
 from pathlib import Path
 
 import typer
@@ -11,6 +12,7 @@ from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,
     find_project_root,
+    load_project_config,
     write_default_project,
     write_example_suite,
 )
@@ -97,3 +99,39 @@ def debug(
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
     typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
+
+
+@app.command()
+def report(
+    open_report: bool = typer.Option(
+        False,
+        "--open",
+        help="Open the most recent report.html in the default browser.",
+    ),
+) -> None:
+    """Work with generated GraphCheck reports."""
+    if not open_report:
+        typer.echo("Use `graphcheck report --open` to open the most recent HTML report.")
+        return
+
+    try:
+        root = find_project_root()
+        config = load_project_config(root)
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+    runs_dir = root / config.artifacts / "runs"
+    reports = list(runs_dir.rglob("report.html")) if runs_dir.is_dir() else []
+    if not reports:
+        typer.echo(f"No report.html found under {runs_dir}.", err=True)
+        typer.echo("Fix: Run `graphcheck run` to generate a report first.", err=True)
+        raise typer.Exit(1)
+
+    latest = max(reports, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+    if not webbrowser.open(latest.resolve().as_uri()):
+        typer.echo(f"Could not open {latest} in the default browser.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Opened {latest}")

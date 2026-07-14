@@ -1,9 +1,12 @@
+import os
+
 from typer.testing import CliRunner
 
 from graphcheck import __version__
 from graphcheck.cli import app
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
+from graphcheck.project import write_default_project
 
 runner = CliRunner()
 
@@ -118,3 +121,77 @@ def test_debug_human_success(tmp_path, monkeypatch):
     assert "Edition: enterprise" in result.stdout
     assert "Database name: neo4j" in result.stdout
     assert "Counts: 3 nodes, 4 relationships" in result.stdout
+
+
+def test_report_open_opens_most_recent_html_report(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_default_project(tmp_path)
+    older = tmp_path / ".graphcheck" / "runs" / "older" / "report.html"
+    latest = tmp_path / ".graphcheck" / "runs" / "latest" / "report.html"
+    older.parent.mkdir(parents=True)
+    latest.parent.mkdir(parents=True)
+    older.write_text("older", encoding="utf-8")
+    latest.write_text("latest", encoding="utf-8")
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(latest, ns=(2_000_000_000, 2_000_000_000))
+    opened = []
+    monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
+
+    result = runner.invoke(app, ["report", "--open"])
+
+    assert result.exit_code == 0
+    assert opened == [latest.resolve().as_uri()]
+    assert f"Opened {latest}" in result.stdout
+
+
+def test_report_open_honors_configured_artifacts_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "graphcheck.yml").write_text(
+        "project: graphcheck\nchecks: checks\nartifacts: output\n", encoding="utf-8"
+    )
+    report = tmp_path / "output" / "runs" / "run-1" / "report.html"
+    report.parent.mkdir(parents=True)
+    report.write_text("report", encoding="utf-8")
+    opened = []
+    monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
+
+    result = runner.invoke(app, ["report", "--open"])
+
+    assert result.exit_code == 0
+    assert opened == [report.resolve().as_uri()]
+
+
+def test_report_open_is_loud_when_no_report_exists(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_default_project(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.webbrowser.open",
+        lambda url: (_ for _ in ()).throw(AssertionError("browser should not open")),
+    )
+
+    result = runner.invoke(app, ["report", "--open"])
+
+    assert result.exit_code == 1
+    assert "No report.html found" in result.stderr
+    assert "Run `graphcheck run`" in result.stderr
+
+
+def test_report_open_reports_browser_launch_failure(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_default_project(tmp_path)
+    report = tmp_path / ".graphcheck" / "runs" / "latest" / "report.html"
+    report.parent.mkdir(parents=True)
+    report.write_text("report", encoding="utf-8")
+    monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: False)
+
+    result = runner.invoke(app, ["report", "--open"])
+
+    assert result.exit_code == 1
+    assert "Could not open" in result.stderr
+
+
+def test_report_without_open_explains_usage():
+    result = runner.invoke(app, ["report"])
+
+    assert result.exit_code == 0
+    assert "graphcheck report --open" in result.stdout
