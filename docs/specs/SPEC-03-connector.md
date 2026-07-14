@@ -113,12 +113,17 @@ and the stable debug trace report the same live capability.
 a count-store operator. The v0 probe uses `EXPLAIN MATCH (n) RETURN count(n) AS count` and looks
 for `NodeCountFromCountStore` in the plan.
 
-The debug path reports total node and relationship counts:
+When read visibility is available, the debug path reports total node and relationship counts:
 
 ```cypher
 MATCH (n) RETURN count(n) AS count
 MATCH ()-[r]->() RETURN count(r) AS count
 ```
+
+On Enterprise Edition, the probe checks the current user's effective graph privileges independently
+of these count queries. This distinguishes an empty graph from Neo4j's security-filtered empty view
+for a user without graph read privileges. If read visibility is absent, or permission is denied while
+loading the counts, debug continues with `can_read: false` and both count values set to `null`.
 
 The human output also reports what the credentials can and cannot see from the successful probe:
 connectivity, read access, and procedure visibility.
