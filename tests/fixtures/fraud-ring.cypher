@@ -1,36 +1,9 @@
-// ============================================================================
-// fraud-ring.cypher
-// Fixture graph for GraphCheck v0 — see SCHEMA.md for the full contract.
-//
-// IDEMPOTENT VIA MERGE: every node and relationship below is created with
-// MERGE, keyed on its `id` (or, for relationships, on the pair of node ids
-// plus type). Running this file 1 time or 50 times in a row leaves the
-// graph in the identical end state — nothing is ever wiped. This matters
-// because other tests (e.g. C2's connector tests) may share the same
-// database instance; a wipe would destroy their state too.
-//
-// Target: ~5,000 nodes, loads in under 10 seconds on a local Neo4j instance.
-//
-// DENSE SUB-CLUSTERS: rather than spreading CONTROLS/transaction edges
-// evenly across all accounts, we carve out a handful of small, tight
-// account rings (a "fraud ring" in the literal sense) where every account
-// in the cluster controls and transacts with every other account in the
-// same cluster. This is what makes the graph's problems visually obvious
-// in the demo (§10 of the briefing) rather than diffuse.
-//
-// PLANTED DEFECTS — see section 3 for exact IDs. Only two defect types are
-// in scope this week:
-//   - 3 orphan Account nodes (no relationships at all)
-//   - 1 cardinality violation (an Account owned by 2 Customers instead of 1)
-// PII and drift defects are Janani's follow-up scope (see SCHEMA.md).
-// ============================================================================
-
 // ---- 0. Constraints (required for MERGE-by-id to be fast and safe) -------
 CREATE CONSTRAINT customer_id IF NOT EXISTS FOR (c:Customer) REQUIRE c.id IS UNIQUE;
 CREATE CONSTRAINT account_id IF NOT EXISTS FOR (a:Account) REQUIRE a.id IS UNIQUE;
 CREATE CONSTRAINT transaction_id IF NOT EXISTS FOR (t:Transaction) REQUIRE t.id IS UNIQUE;
 
-// ---- 1. Customers (1,500) ------------------------------------------------
+// ---- 1. Customers (1,320) ------------------------------------------------
 UNWIND range(1, 1320) AS i
 MERGE (c:Customer {id: 'CUST-' + toString(i)})
 ON CREATE SET
@@ -68,11 +41,11 @@ ON CREATE SET
   t.ts = datetime({epochSeconds: 1750000000 + i * 3600});
 
 // ---- 4. OWNS: EVERY Account (1-2500) gets exactly one owning Customer ----
-// Cycles through the 1,500 customers so every account, not just the first
-// 1,500, is guaranteed an owner. This is what makes "exactly one OWNS per
+// Cycles through the 1,320 customers so every account, not just the first
+// 1,320, is guaranteed an owner. This is what makes "exactly one OWNS per
 // Account" a real, verified invariant across the whole account range,
 // rather than true for some accounts by luck. (An earlier version of this
-// script only reliably owned accounts 1-1500 and left most of 1501-2500
+// script only reliably owned accounts 1-1320 and left most of 1321-2500
 // unowned — a real bug, not a design choice. Fixed here.)
 UNWIND range(1, 2500) AS i
 MATCH (a:Account {id: 'ACC-' + toString(i)})
@@ -154,10 +127,3 @@ MERGE (c1:Customer {id: 'CUST-CARD-0001'}) ON CREATE SET c1.name = 'Cardinality 
 MERGE (c2:Customer {id: 'CUST-CARD-0002'}) ON CREATE SET c2.name = 'Cardinality Violator B', c2.tax_id = '000000002'
 MERGE (c1)-[:OWNS]->(a)
 MERGE (c2)-[:OWNS]->(a);
-
-// ============================================================================
-// End of seed. Expect ~5,011 nodes total: 5,000 base (1,500 Customers +
-// 2,500 Accounts + 1,000 Transactions) + 3 orphan accounts + 1 cardinality
-// account + 2 cardinality customers + 5 ring-leader customers (one per
-// dense sub-cluster, added in step 5b) = 5,011.
-// ============================================================================

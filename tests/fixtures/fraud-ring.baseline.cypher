@@ -1,29 +1,3 @@
-// ============================================================================
-// fraud-ring.cypher
-// Fixture graph for GraphCheck v0 — see SCHEMA.md for the full contract.
-//
-// IDEMPOTENT VIA MERGE: every node and relationship below is created with
-// MERGE, keyed on its `id` (or, for relationships, on the pair of node ids
-// plus type). Running this file 1 time or 50 times in a row leaves the
-// graph in the identical end state — nothing is ever wiped. This matters
-// because other tests (e.g. C2's connector tests) may share the same
-// database instance; a wipe would destroy their state too.
-//
-// Target: ~5,000 nodes, loads in under 10 seconds on a local Neo4j instance.
-//
-// DENSE SUB-CLUSTERS: rather than spreading CONTROLS/transaction edges
-// evenly across all accounts, we carve out a handful of small, tight
-// account rings (a "fraud ring" in the literal sense) where every account
-// in the cluster controls and transacts with every other account in the
-// same cluster. This is what makes the graph's problems visually obvious
-// in the demo (§10 of the briefing) rather than diffuse.
-//
-// PLANTED DEFECTS — see section 3 for exact IDs. Only two defect types are
-// in scope this week:
-//   - 3 orphan Account nodes (no relationships at all)
-//   - 1 cardinality violation (an Account owned by 2 Customers instead of 1)
-// PII and drift defects are Janani's follow-up scope (see SCHEMA.md).
-// ============================================================================
 
 // ---- 0. Constraints (required for MERGE-by-id to be fast and safe) -------
 CREATE CONSTRAINT customer_id IF NOT EXISTS FOR (c:Customer) REQUIRE c.id IS UNIQUE;
