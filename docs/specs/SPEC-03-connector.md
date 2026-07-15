@@ -121,9 +121,12 @@ MATCH ()-[r]->() RETURN count(r) AS count
 ```
 
 On Enterprise Edition, the probe checks the current user's effective graph privileges independently
-of these count queries. This distinguishes an empty graph from Neo4j's security-filtered empty view
-for a user without graph read privileges. If read visibility is absent, or permission is denied while
-loading the counts, debug continues with `can_read: false` and both count values set to `null`.
+of these count queries. Full read visibility requires unrestricted access to all properties on both
+`NODE(*)` and `RELATIONSHIP(*)`; label-, relationship-type-, property-, or pattern-scoped grants do
+not satisfy it, and any applicable scoped denial makes it false. This distinguishes an empty graph
+from Neo4j's security-filtered empty view for a user without full graph read privileges. If read
+visibility is absent, or permission is denied while loading the counts, debug continues with
+`can_read: false` and both count values set to `null`.
 
 The human output also reports what the credentials can and cannot see from the successful probe:
 connectivity, read access, and procedure visibility.

@@ -141,25 +141,57 @@ def test_counts_are_converted_to_ints():
     [
         (
             [
-                {"access": "GRANTED", "action": "match", "graph": "*"},
+                {
+                    "access": "GRANTED",
+                    "action": "match",
+                    "graph": "*",
+                    "resource": "all_properties",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "match",
+                    "graph": "*",
+                    "resource": "all_properties",
+                    "segment": "RELATIONSHIP(*)",
+                },
             ],
             True,
         ),
         (
             [
-                {"access": "GRANTED", "action": "traverse", "graph": "neo4j"},
-                {"access": "GRANTED", "action": "read", "graph": "neo4j"},
+                {
+                    "access": "GRANTED",
+                    "action": "traverse",
+                    "graph": "neo4j",
+                    "resource": "graph",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "read",
+                    "graph": "neo4j",
+                    "resource": "all_properties",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "traverse",
+                    "graph": "neo4j",
+                    "resource": "graph",
+                    "segment": "RELATIONSHIP(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "read",
+                    "graph": "neo4j",
+                    "resource": "all_properties",
+                    "segment": "RELATIONSHIP(*)",
+                },
             ],
             True,
         ),
         ([{"access": "GRANTED", "action": "access", "graph": "neo4j"}], False),
-        (
-            [
-                {"access": "GRANTED", "action": "match", "graph": "*"},
-                {"access": "DENIED", "action": "read", "graph": "neo4j"},
-            ],
-            False,
-        ),
     ],
 )
 def test_enterprise_read_probe_uses_current_user_graph_privileges(rows, expected):
@@ -170,6 +202,63 @@ def test_enterprise_read_probe_uses_current_user_graph_privileges(rows, expected
     client.run_read = lambda query: rows
 
     assert client._can_read("enterprise") is expected
+
+
+def test_enterprise_read_probe_rejects_label_and_property_scoped_grant():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "neo4j",
+            "resource": "property(name)",
+            "segment": "NODE(Customer)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "neo4j",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    assert client._can_read("enterprise") is False
+
+
+def test_enterprise_read_probe_rejects_scoped_denial():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "neo4j",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    assert client._can_read("enterprise") is False
 
 
 def test_community_read_probe_uses_implied_admin_privileges():

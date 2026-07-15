@@ -177,26 +177,46 @@ class Neo4jClient:
             return True
 
         rows = self.run_read(
-            "SHOW USER PRIVILEGES YIELD access, action, graph RETURN access, action, graph"
+            "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment "
+            "RETURN access, action, graph, resource, segment"
         )
-        relevant = [
-            row
-            for row in rows
-            if str(row.get("graph", "")).lower() in {"*", self._profile.database.lower()}
-        ]
-        granted = {
-            str(row.get("action", "")).lower()
-            for row in relevant
-            if str(row.get("access", "")).upper() == "GRANTED"
-        }
-        denied = {
-            str(row.get("action", "")).lower()
-            for row in relevant
-            if str(row.get("access", "")).upper() == "DENIED"
-        }
-        can_read = "match" in granted or {"traverse", "read"}.issubset(granted)
-        read_denied = bool({"match", "traverse", "read"} & denied)
-        return can_read and not read_denied
+        relevant = []
+        for row in rows:
+            if str(row.get("graph", "")).lower() not in {
+                "*",
+                self._profile.database.lower(),
+            }:
+                continue
+            relevant.append(
+                {
+                    key: str(row.get(key, "")).upper()
+                    for key in ("access", "action", "resource", "segment")
+                }
+            )
+
+        if any(
+            privilege["access"] == "DENIED" and privilege["action"] in {"MATCH", "READ", "TRAVERSE"}
+            for privilege in relevant
+        ):
+            return False
+
+        def has_full_grant(entity_segment: str) -> bool:
+            full_segments = {entity_segment, "ELEMENT(*)", "ELEMENTS(*)"}
+
+            def granted(action: str, resource: str) -> bool:
+                return any(
+                    privilege["access"] == "GRANTED"
+                    and privilege["action"] == action
+                    and privilege["resource"] == resource
+                    and privilege["segment"] in full_segments
+                    for privilege in relevant
+                )
+
+            return granted("MATCH", "ALL_PROPERTIES") or (
+                granted("TRAVERSE", "GRAPH") and granted("READ", "ALL_PROPERTIES")
+            )
+
+        return has_full_grant("NODE(*)") and has_full_grant("RELATIONSHIP(*)")
 
     def _counts(self) -> Counts:
         nodes = self.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"]
