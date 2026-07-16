@@ -1,10 +1,15 @@
+import json
 import os
 
 import pytest
+import yaml
+from typer.testing import CliRunner
 
-from graphcheck.connection_profiles import ConnectionProfile
+from graphcheck.cli import app
+from graphcheck.connection_profiles import ConnectionProfile, ProfilesFile
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
+from graphcheck.project import PROFILES_FILE, write_default_project, write_example_suite
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("GRAPHCHECK_NEO4J_INTEGRATION") != "1",
@@ -12,6 +17,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 # neo4j_profile / neo4j_apoc_profile fixtures live in tests/conftest.py (shared with #3).
+
+runner = CliRunner()
 
 
 def test_connect_and_probe(neo4j_profile):
@@ -31,6 +38,56 @@ def test_connect_and_probe(neo4j_profile):
         assert counts.relationships >= 0
     finally:
         client.close()
+
+
+def test_restricted_user_real_probe_reports_blocked_read_check(
+    neo4j_restricted_profile, tmp_path, monkeypatch
+):
+    write_default_project(tmp_path)
+    write_example_suite(tmp_path)
+    profiles = ProfilesFile(default="restricted", profiles={"restricted": neo4j_restricted_profile})
+    (tmp_path / PROFILES_FILE).write_text(
+        yaml.safe_dump(profiles.model_dump(), sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["visibility"]["can_connect"] is True
+    assert payload["visibility"]["can_read"] is False
+    assert payload["counts"] == {"nodes": None, "relationships": None}
+    assert any(
+        blocked["check_id"] == "customer-name-present" and blocked["missing_capability"] == "read"
+        for blocked in payload["blocked_checks"]
+    )
+
+
+def test_home_graph_grant_and_scoped_denial_use_resolved_home_database(
+    neo4j_enterprise_profiles,
+):
+    reader = Neo4jClient(neo4j_enterprise_profiles["graphcheck_home_reader"])
+    try:
+        assert reader.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"] >= 1
+        _, reader_visibility, reader_counts = reader.probe()
+
+        assert reader_visibility.can_read is True
+        assert reader_counts.nodes is not None and reader_counts.nodes >= 1
+    finally:
+        reader.close()
+
+    denied = Neo4jClient(neo4j_enterprise_profiles["graphcheck_home_denied"])
+    try:
+        assert denied.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"] >= 1
+        _, denied_visibility, denied_counts = denied.probe()
+
+        assert denied_visibility.can_read is False
+        assert denied_counts.nodes is None
+        assert denied_counts.relationships is None
+    finally:
+        denied.close()
 
 
 def test_read_only_session_rejects_write(neo4j_profile):
