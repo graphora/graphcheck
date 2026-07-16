@@ -261,6 +261,122 @@ def test_enterprise_read_probe_rejects_scoped_denial():
     assert client._can_read("enterprise") is False
 
 
+def test_enterprise_read_probe_resolves_full_home_graph_grant():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_reader", password="pw", database="neo4j"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "HOME",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "HOME",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is True
+
+
+def test_enterprise_read_probe_applies_scoped_home_graph_denial():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_denied", password="pw", database="neo4j"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "HOME",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is False
+
+
+def test_enterprise_read_probe_ignores_home_denial_for_non_home_database():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_denied", password="pw", database="analytics"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "HOME",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is True
+
+
 def test_community_read_probe_uses_implied_admin_privileges():
     client = object.__new__(Neo4jClient)
     client.run_read = lambda query: pytest.fail("Community probe should not inspect RBAC")

@@ -180,12 +180,19 @@ class Neo4jClient:
             "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment "
             "RETURN access, action, graph, resource, segment"
         )
+        configured_database = self._profile.database.lower()
+        home_database_names = (
+            self._home_database_names()
+            if any(str(row.get("graph", "")).upper() == "HOME" for row in rows)
+            else set()
+        )
         relevant = []
         for row in rows:
-            if str(row.get("graph", "")).lower() not in {
-                "*",
-                self._profile.database.lower(),
-            }:
+            graph = str(row.get("graph", "")).lower()
+            if graph == "home":
+                if configured_database not in home_database_names:
+                    continue
+            elif graph not in {"*", configured_database}:
                 continue
             relevant.append(
                 {
@@ -217,6 +224,18 @@ class Neo4jClient:
             )
 
         return has_full_grant("NODE(*)") and has_full_grant("RELATIONSHIP(*)")
+
+    def _home_database_names(self) -> set[str]:
+        rows = self.run_read("SHOW HOME DATABASE")
+        if not rows:
+            return set()
+
+        names = {str(rows[0].get("name", "")).lower()}
+        aliases = rows[0].get("aliases", [])
+        if isinstance(aliases, list):
+            names.update(str(alias).lower() for alias in aliases)
+        names.discard("")
+        return names
 
     def _counts(self) -> Counts:
         nodes = self.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"]

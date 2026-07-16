@@ -51,9 +51,9 @@ def neo4j_apoc_profile(request):
         )
 
 
-@pytest.fixture
-def neo4j_restricted_profile():
-    """Enterprise user with PUBLIC access/procedures but no graph read privileges."""
+@pytest.fixture(scope="module")
+def neo4j_enterprise_profiles():
+    """Enterprise users covering absent, HOME-granted, and HOME-denied graph access."""
     from neo4j import GraphDatabase
     from testcontainers.neo4j import Neo4jContainer
 
@@ -64,17 +64,46 @@ def neo4j_restricted_profile():
             container.get_connection_url(), auth=("neo4j", _NEO4J_PASSWORD)
         )
         try:
+            with driver.session(database="neo4j") as session:
+                session.run("CREATE (:Customer {ssn: 'integration-secret'})").consume()
             with driver.session(database="system") as session:
-                session.run(
+                statements = [
                     "CREATE USER graphcheck_restricted SET PASSWORD $password CHANGE NOT REQUIRED",
-                    password=_NEO4J_RESTRICTED_PASSWORD,
-                ).consume()
+                    "CREATE USER graphcheck_home_reader "
+                    "SET PASSWORD $password CHANGE NOT REQUIRED SET HOME DATABASE neo4j",
+                    "CREATE ROLE graphcheck_home_reader_role",
+                    "GRANT MATCH {*} ON HOME GRAPH ELEMENTS * TO graphcheck_home_reader_role",
+                    "GRANT ROLE graphcheck_home_reader_role TO graphcheck_home_reader",
+                    "CREATE USER graphcheck_home_denied "
+                    "SET PASSWORD $password CHANGE NOT REQUIRED SET HOME DATABASE neo4j",
+                    "CREATE ROLE graphcheck_home_denied_role",
+                    "GRANT MATCH {*} ON GRAPH * ELEMENTS * TO graphcheck_home_denied_role",
+                    "DENY READ {ssn} ON HOME GRAPH NODES Customer TO graphcheck_home_denied_role",
+                    "GRANT ROLE graphcheck_home_denied_role TO graphcheck_home_denied",
+                ]
+                for statement in statements:
+                    params = (
+                        {"password": _NEO4J_RESTRICTED_PASSWORD} if "$password" in statement else {}
+                    )
+                    session.run(statement, params).consume()
         finally:
             driver.close()
 
-        yield ConnectionProfile(
-            uri=container.get_connection_url(),
-            user="graphcheck_restricted",
-            password=_NEO4J_RESTRICTED_PASSWORD,
-            database="neo4j",
-        )
+        yield {
+            user: ConnectionProfile(
+                uri=container.get_connection_url(),
+                user=user,
+                password=_NEO4J_RESTRICTED_PASSWORD,
+                database="neo4j",
+            )
+            for user in (
+                "graphcheck_restricted",
+                "graphcheck_home_reader",
+                "graphcheck_home_denied",
+            )
+        }
+
+
+@pytest.fixture(scope="module")
+def neo4j_restricted_profile(neo4j_enterprise_profiles):
+    return neo4j_enterprise_profiles["graphcheck_restricted"]

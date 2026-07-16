@@ -65,6 +65,31 @@ def test_restricted_user_real_probe_reports_blocked_read_check(
     )
 
 
+def test_home_graph_grant_and_scoped_denial_use_resolved_home_database(
+    neo4j_enterprise_profiles,
+):
+    reader = Neo4jClient(neo4j_enterprise_profiles["graphcheck_home_reader"])
+    try:
+        assert reader.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"] >= 1
+        _, reader_visibility, reader_counts = reader.probe()
+
+        assert reader_visibility.can_read is True
+        assert reader_counts.nodes is not None and reader_counts.nodes >= 1
+    finally:
+        reader.close()
+
+    denied = Neo4jClient(neo4j_enterprise_profiles["graphcheck_home_denied"])
+    try:
+        assert denied.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"] >= 1
+        _, denied_visibility, denied_counts = denied.probe()
+
+        assert denied_visibility.can_read is False
+        assert denied_counts.nodes is None
+        assert denied_counts.relationships is None
+    finally:
+        denied.close()
+
+
 def test_read_only_session_rejects_write(neo4j_profile):
     client = Neo4jClient(neo4j_profile)
     try:

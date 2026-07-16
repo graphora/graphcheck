@@ -20,7 +20,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - Contract validators now reject shapes the frozen specs disallow: severity/verdict mismatches (which could downgrade the CI exit code), the `passed`/`with_` field-name aliases, and check-result / run records that omit a frozen present-but-nullable key.
 - Count-store detection now inspects the Neo4j `EXPLAIN` summary plan instead of stringifying result rows.
-- Debug probing now reports checks blocked by missing Neo4j read access instead of aborting while loading graph counts.
+- Debug probing now reports checks blocked by missing Neo4j read access instead of aborting while loading graph counts, including scoped privileges and `HOME GRAPH` grants or denials.
 
 ### Changed
 

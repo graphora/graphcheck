@@ -128,6 +128,10 @@ from Neo4j's security-filtered empty view for a user without full graph read pri
 visibility is absent, or permission is denied while loading the counts, debug continues with
 `can_read: false` and both count values set to `null`.
 
+Privileges reported with `graph: "HOME"` are resolved using `SHOW HOME DATABASE`. They apply only
+when the configured database name or alias resolves to the current user's home database, so home
+grants and denials participate in the same full-visibility evaluation as named and wildcard grants.
+
 The human output also reports what the credentials can and cannot see from the successful probe:
 connectivity, read access, and procedure visibility.
 
