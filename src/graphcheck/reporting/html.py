@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +19,14 @@ _VERDICT_ORDER = {
 _SEVERITY_ORDER = {"error": 0, "warn": 1}
 
 
-def render_html_report(results: Results | dict[str, Any] | str | Path) -> str:
+def render_html_report(
+    results: Results | dict[str, Any] | str | Path,
+    *,
+    verdicts: Collection[Verdict] | None = None,
+) -> str:
     model = load_results(results)
     checks = sorted(
-        model.checks,
+        (check for check in model.checks if verdicts is None or check.verdict in verdicts),
         key=lambda check: (
             _VERDICT_ORDER[check.verdict],
             _SEVERITY_ORDER[check.severity.value],
@@ -53,8 +58,13 @@ def render_html_report(results: Results | dict[str, Any] | str | Path) -> str:
     )
 
 
-def write_html_report(results: Results | dict[str, Any] | str | Path, path: Path) -> Path:
-    path.write_text(render_html_report(results), encoding="utf-8")
+def write_html_report(
+    results: Results | dict[str, Any] | str | Path,
+    path: Path,
+    *,
+    verdicts: Collection[Verdict] | None = None,
+) -> Path:
+    path.write_text(render_html_report(results, verdicts=verdicts), encoding="utf-8")
     return path
 
 

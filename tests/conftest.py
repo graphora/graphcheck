@@ -23,6 +23,7 @@ from graphcheck.connection_profiles import ConnectionProfile
 NEO4J_IMAGES = ["neo4j:4.4", "neo4j:5"]
 _NEO4J_PASSWORD = "graphora-test"
 
+
 # TODO: REMOVE BEFORE PR
 @pytest.fixture
 def tmp_path() -> Path:

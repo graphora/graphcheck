@@ -5,7 +5,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from graphcheck.contracts.results import Results
+from graphcheck.contracts.results import Results, Verdict
 from graphcheck.contracts.schemas import results_schema
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.writer import load_results, results_json, write_results
@@ -77,3 +77,14 @@ def test_html_renderer_displays_failed_run_error():
     assert "connection.auth" in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
+
+
+def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
+    html = render_html_report(
+        _fixture("complete"),
+        verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
+    )
+
+    assert "Which accounts does a customer control" in html
+    assert "Accounts are connected to a Customer" in html
+    assert "Customer.tax_id is present" not in html
