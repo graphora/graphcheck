@@ -11,7 +11,7 @@ Implemented in this slice:
 
 - SPEC-01 `results.json` writer.
 - Offline HTML report renderer.
-- `graphcheck report --open` for opening the most recent HTML report.
+- Report history listing, selection, comparison, retention, and diagnostic filtering.
 - Regression tests over the existing SPEC-01 fixture results.
 
 Deferred:
@@ -143,6 +143,12 @@ Within the same verdict, checks sort by severity, suite id, then check id.
 `graphcheck report` operates on report artifacts that already exist. It does not
 connect to Neo4j or create new run data.
 
+History operations load and validate each run's `results.json`. If `runs/latest`
+duplicates a historical run id, it appears only once in history. History is ordered
+by `run.finished_at`, newest first.
+
+### Open and Select
+
 `graphcheck report --open`:
 
 1. discovers the project root and configured artifacts directory,
@@ -152,6 +158,56 @@ connect to Neo4j or create new run data.
 
 If no report exists or the browser cannot be launched, the command exits non-zero
 with an actionable error.
+
+`graphcheck report --run <id>` resolves `<id>` against `results.json.run.id` and
+opens that run's `report.html`. A missing id or HTML artifact is an error that points
+the user to `graphcheck report --list`.
+
+### List
+
+`graphcheck report --list` prints every unique historical run with:
+
+- run id,
+- completion timestamp,
+- run status, and
+- score or `n/a`.
+
+### Compare
+
+`graphcheck report --compare <run1> <run2>` compares two existing result artifacts
+in the stated direction. It reports status and score changes, outcome regressions
+and improvements for matching `(suite_id, check_id)` identities, other verdict
+changes, and added or removed checks.
+
+A regression is a move toward a worse outcome in this order:
+
+```text
+pass < skipped < warn < errored(warn) < fail/errored(error)
+```
+
+The comparison reads artifacts only and does not connect to Neo4j.
+
+### Retention
+
+`graphcheck report --prune --keep <count>` retains the newest `<count>` historical
+run directories and removes older ones. `<count>` must be at least 1. The
+`runs/latest` convenience artifact is always preserved and is not counted against
+the retention limit. Directories that do not contain a valid immediate
+`results.json` run artifact are not removed.
+
+### Diagnostic Report
+
+`graphcheck report --failures-only` reads the newest result and writes
+`report.failures.html` beside it. The diagnostic contains only `fail`, `warn`, and
+`errored` checks while preserving the original run summary; it does not modify
+`results.json` or `report.html`.
+
+`--run <id>` selects another run for diagnostic generation. Combining
+`--failures-only` with `--open`, or selecting it with `--run`, opens the generated
+diagnostic after writing it.
+
+`--list`, `--compare`, and `--prune` are standalone actions. Invalid combinations
+exit 2 without changing artifacts.
 
 ## Scorer
 
@@ -198,7 +254,12 @@ The tests assert:
 - failed-run errors are visible,
 - `report --open` selects the newest HTML report,
 - the configured artifacts directory is honored,
-- missing reports and browser-launch failures exit non-zero.
+- missing reports and browser-launch failures exit non-zero,
+- report history is ordered and de-duplicates `runs/latest`,
+- a historical run can be selected and opened by id,
+- report comparisons classify outcome changes and show score movement,
+- pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
+- diagnostic reports contain failures, warnings, and errors but omit passing checks.
 
 ## Deferred Work
 

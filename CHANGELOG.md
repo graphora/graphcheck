@@ -11,7 +11,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - SPEC-03 for the neo4j connector.
 - Neo4j connector foundation: project discovery, `graphcheck init`, strict connection profile loading, env-var password override, structured adapter errors, read-only Neo4j driver wrapper, capability probe, and `graphcheck debug` with stable JSON output.
 - Connector tests covering profile validation, debug JSON shape, count-store plan detection, and opt-in Neo4j 4.4 / 5.x testcontainers integration.
-- `graphcheck report --open` opens the most recently generated HTML report in the default browser.
+- `graphcheck report` can open or list historical reports, select a run by id, compare
+  two result artifacts, prune old runs with a retention count, and generate a focused
+  failures/warnings/errors report.
 
 ### Changed
 
