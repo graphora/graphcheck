@@ -24,10 +24,9 @@ from graphcheck.contracts.profile import (
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 
-#test addition
-#DEFAULT_PROFILE_BUDGET_SECONDS = 2
+# test addition
+# DEFAULT_PROFILE_BUDGET_SECONDS = 2
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
-
 
 
 def profile(client: Neo4jClient) -> BaselineProfile:
@@ -448,7 +447,7 @@ def _cypher_identifier(value: str) -> str:
 
 
 def collect_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
-    
+
     coverage = [
         *collect_node_property_coverage(client),
         *collect_relationship_property_coverage(client),

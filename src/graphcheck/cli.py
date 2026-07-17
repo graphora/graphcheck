@@ -147,6 +147,7 @@ def debug(
             f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
         )
 
+
 @app.command()
 def profile(
     profile: str | None = typer.Option(
@@ -178,7 +179,6 @@ def profile(
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
-
 
 
 @baseline_app.command("set")
@@ -290,4 +290,3 @@ def _print_profile_summary(
     typer.echo()
 
     typer.echo(f"Baseline written to:\n{baseline_path}")
-    

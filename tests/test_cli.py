@@ -358,6 +358,8 @@ def _different_target_baselines(tmp_path):
     current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
     latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
     return current_path, latest_path
+
+
 def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())

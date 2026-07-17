@@ -84,6 +84,7 @@ def set_current_baseline(filename: str | None = None) -> Path:
 
     return selected
 
+
 def get_current_baseline() -> Path | None:
     current_baseline_file = _current_baseline_file()
     if not current_baseline_file.exists():
