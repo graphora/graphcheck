@@ -5,13 +5,16 @@ from typing import Any, cast
 import pytest
 
 from graphcheck.contracts.profile import (
+    BaselineProfile,
     ConstraintProfile,
     DegreeDistribution,
     IndexProfile,
     LabelProfile,
     ProfileProperty,
+    ProfileStatus,
     PropertyCoverage,
     RelationshipTypeProfile,
+    profile_fingerprint,
 )
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
@@ -21,6 +24,8 @@ from graphcheck.profiler import (
     collect_constraints,
     collect_indexes,
     collect_labels,
+    collect_property_coverage,
+    collect_relationship_property_coverage,
     collect_relationship_types,
     profile,
 )
@@ -53,6 +58,14 @@ class FakeNeo4jClient:
             return [{"count": 2}]
         if query == "MATCH ()-[r:`OWNS`]->() RETURN count(r) AS count":
             return [{"count": 5}]
+        if query.startswith("MATCH ()-[r:`HAS_ACCOUNT`]->() UNWIND keys(r)"):
+            return []
+        if query.startswith("MATCH ()-[r:`OWNS`]->() UNWIND keys(r)"):
+            return [{"property": "since"}, {"property": "role"}]
+        if query == (
+            "MATCH ()-[r:`OWNS`]->() WHERE r[$property] IS NOT NULL RETURN count(r) AS count"
+        ):
+            return [{"count": 5 if params == {"property": "since"} else 3}]
         if query == "SHOW CONSTRAINTS":
             return [
                 {
@@ -103,11 +116,15 @@ class FakeNeo4jClient:
             return [{"count": 3 if params == {"property": "id"} else 2}]
         if query == (
             "MATCH (n:`Account`) WHERE n[$property] IS NOT NULL "
+            "WITH n "
+            "ORDER BY id(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": "account-1"}]
         if query == (
             "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
+            "WITH n "
+            "ORDER BY id(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": 1 if params == {"property": "id"} else "Ada"}]
@@ -130,6 +147,8 @@ class UnknownTypeClient:
             return [{"count": 1}]
         if query == (
             "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
+            "WITH n "
+            "ORDER BY id(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             raise GraphCheckError("neo4j.query_failed", "query failed", "try again")
@@ -182,6 +201,28 @@ class DegreeClient:
         assert query == "MATCH (n:`Test`) RETURN COUNT { (n)--() } AS degree"
         assert params is None
         return [{"degree": degree} for degree in self.degrees]
+
+
+class RelationshipCoverageClient:
+    def __init__(self, properties: dict[str, dict[str, int]]) -> None:
+        self.properties = properties
+
+    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+        if query == "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType":
+            return [{"relationshipType": name} for name in reversed(self.properties)]
+        for relationship_type, property_counts in self.properties.items():
+            relationship_type_ref = f"`{relationship_type}`"
+            if query == (f"MATCH ()-[r:{relationship_type_ref}]->() RETURN count(r) AS count"):
+                return [{"count": max(property_counts.values(), default=0)}]
+            if query.startswith(f"MATCH ()-[r:{relationship_type_ref}]->() UNWIND keys(r)"):
+                return [{"property": name} for name in reversed(property_counts)]
+            if query == (
+                f"MATCH ()-[r:{relationship_type_ref}]->() "
+                "WHERE r[$property] IS NOT NULL RETURN count(r) AS count"
+            ):
+                assert params is not None
+                return [{"count": property_counts[str(params["property"])]}]
+        raise AssertionError(f"unexpected query: {query}")
 
 
 def test_collect_degree_distribution_handles_empty_label() -> None:
@@ -283,6 +324,18 @@ def test_profile_returns_valid_baseline_from_probe_and_labels() -> None:
             property="name",
             coverage=66.67,
         ),
+        PropertyCoverage(
+            owner="relationship",
+            owner_name="OWNS",
+            property="role",
+            coverage=60.0,
+        ),
+        PropertyCoverage(
+            owner="relationship",
+            owner_name="OWNS",
+            property="since",
+            coverage=100.0,
+        ),
     ]
     assert all(label.degree_distribution is not None for label in baseline.graph_schema.labels)
     assert all(
@@ -324,3 +377,186 @@ def test_profile_returns_valid_baseline_from_probe_and_labels() -> None:
         ),
     ]
     assert baseline.fingerprint.startswith("sha256:")
+
+
+def test_profile_returns_valid_partial_baseline_when_wall_clock_budget_is_exceeded(
+    monkeypatch,
+) -> None:
+    clock_values = iter((0.0, 0.0, 61.0))
+    monkeypatch.setattr(
+        "graphcheck.profiler.time.monotonic",
+        lambda: next(clock_values, 61.0),
+    )
+
+    baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.status is not ProfileStatus.COMPLETE
+    assert baseline.partial_reason
+    assert "exceeded the 60 second budget" in baseline.partial_reason
+    assert baseline.statistics.node_count == 5
+    assert baseline.statistics.relationship_count == 7
+    assert [label.name for label in baseline.graph_schema.labels] == ["Account", "Customer"]
+    assert baseline.graph_schema.relationship_types == []
+    assert baseline.graph_schema.constraints == []
+    assert baseline.graph_schema.indexes == []
+    assert baseline.statistics.property_coverage == []
+    assert baseline.fingerprint == profile_fingerprint(
+        baseline.graph_schema,
+        baseline.statistics,
+    )
+
+
+def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_probe(
+    monkeypatch,
+) -> None:
+    clock_values = iter((0.0, 61.0))
+    monkeypatch.setattr(
+        "graphcheck.profiler.time.monotonic",
+        lambda: next(clock_values, 61.0),
+    )
+
+    baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert "exceeded the 60 second budget after probe" in baseline.partial_reason
+    assert baseline.statistics.node_count == 5
+    assert baseline.statistics.relationship_count == 7
+    _assert_collected_profile_sections(baseline, 0)
+    assert baseline.fingerprint == profile_fingerprint(
+        baseline.graph_schema,
+        baseline.statistics,
+    )
+
+
+@pytest.mark.parametrize(
+    ("collector_name", "reason_fragment", "completed_sections"),
+    [
+        ("collect_labels", "Failed collecting labels", 0),
+        ("collect_relationship_types", "Failed collecting relationship types", 1),
+        ("collect_constraints", "Failed collecting constraints", 2),
+        ("collect_indexes", "Failed collecting indexes", 3),
+        ("collect_property_coverage", "Failed collecting property coverage", 4),
+    ],
+)
+def test_profile_returns_partial_baseline_when_collector_fails(
+    monkeypatch,
+    collector_name: str,
+    reason_fragment: str,
+    completed_sections: int,
+) -> None:
+    def fail_collection(client: Neo4jClient) -> None:
+        raise GraphCheckError("neo4j.query_failed", "simulated collector failure", "retry")
+
+    monkeypatch.setattr(f"graphcheck.profiler.{collector_name}", fail_collection)
+
+    baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert reason_fragment in baseline.partial_reason
+    assert "simulated collector failure" in baseline.partial_reason
+    assert baseline.statistics.node_count == 5
+    assert baseline.statistics.relationship_count == 7
+    _assert_collected_profile_sections(baseline, completed_sections)
+    assert baseline.fingerprint == profile_fingerprint(
+        baseline.graph_schema,
+        baseline.statistics,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "completed_sections"),
+    [
+        ("labels", 1),
+        ("relationship types", 2),
+        ("constraints", 3),
+        ("indexes", 4),
+        ("property coverage", 5),
+    ],
+)
+def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_stage(
+    monkeypatch,
+    stage: str,
+    completed_sections: int,
+) -> None:
+    clock_values = iter([0.0] * (completed_sections + 1) + [61.0])
+    monkeypatch.setattr(
+        "graphcheck.profiler.time.monotonic",
+        lambda: next(clock_values, 61.0),
+    )
+
+    baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert f"exceeded the 60 second budget after collecting {stage}" in baseline.partial_reason
+    assert baseline.statistics.node_count == 5
+    assert baseline.statistics.relationship_count == 7
+    _assert_collected_profile_sections(baseline, completed_sections)
+    assert baseline.fingerprint == profile_fingerprint(
+        baseline.graph_schema,
+        baseline.statistics,
+    )
+
+
+def _assert_collected_profile_sections(
+    baseline: BaselineProfile,
+    completed_sections: int,
+) -> None:
+    sections = (
+        baseline.graph_schema.labels,
+        baseline.graph_schema.relationship_types,
+        baseline.graph_schema.constraints,
+        baseline.graph_schema.indexes,
+        baseline.statistics.property_coverage,
+    )
+    assert [bool(section) for section in sections] == [
+        index < completed_sections for index in range(len(sections))
+    ]
+
+
+def test_relationship_property_coverage_handles_multiple_types_and_properties() -> None:
+    client = RelationshipCoverageClient(
+        {
+            "OWNS": {"since": 5, "role": 3},
+            "HAS_ACCOUNT": {"source": 2},
+        }
+    )
+
+    coverage = collect_relationship_property_coverage(cast(Neo4jClient, client))
+
+    assert coverage == [
+        PropertyCoverage(
+            owner="relationship",
+            owner_name="HAS_ACCOUNT",
+            property="source",
+            coverage=100.0,
+        ),
+        PropertyCoverage(
+            owner="relationship",
+            owner_name="OWNS",
+            property="role",
+            coverage=60.0,
+        ),
+        PropertyCoverage(
+            owner="relationship",
+            owner_name="OWNS",
+            property="since",
+            coverage=100.0,
+        ),
+    ]
+
+
+def test_no_relationship_properties_returns_no_coverage_entries() -> None:
+    client = RelationshipCoverageClient({"OWNS": {}})
+
+    assert collect_relationship_property_coverage(cast(Neo4jClient, client)) == []
+
+
+def test_merged_property_coverage_is_canonically_sorted() -> None:
+    coverage = collect_property_coverage(cast(Neo4jClient, FakeNeo4jClient()))
+
+    identities = [(item.owner, item.owner_name, item.property) for item in coverage]
+    assert identities == sorted(identities)

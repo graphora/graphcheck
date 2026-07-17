@@ -4,8 +4,10 @@ from pathlib import Path
 import typer
 
 from graphcheck import __version__
-from graphcheck.baselines import set_current_baseline, write_baseline
+from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
+from graphcheck.contracts.profile import BaselineProfile
+from graphcheck.diff import diff as compare_baselines
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json
 from graphcheck.profiler import profile as build_profile
@@ -125,13 +127,16 @@ def profile(
             client.close()
 
         path = write_baseline(baseline)
+        _print_profile_summary(
+            baseline,
+            path,
+        )
 
     except GraphCheckError as exc:
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
 
-    typer.echo(path)
 
 
 @baseline_app.command("set")
@@ -149,3 +154,97 @@ def baseline_set(
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"Baseline set to {selected.name}")
+
+
+@app.command("diff")
+def diff_command(
+    current_baseline_name: str | None = typer.Argument(
+        None,
+        help="Current Baseline filename or path.",
+    ),
+    latest_baseline_name: str | None = typer.Argument(
+        None,
+        help="Latest Baseline filename or path.",
+    ),
+) -> None:
+    """Compare two stored baseline snapshots."""
+    try:
+        current_baseline_path, latest_baseline_path = resolve_diff_baselines(
+            current_baseline_name,
+            latest_baseline_name,
+        )
+        current_baseline = BaselineProfile.model_validate_json(
+            current_baseline_path.read_text(encoding="utf-8")
+        )
+        latest_baseline = BaselineProfile.model_validate_json(
+            latest_baseline_path.read_text(encoding="utf-8")
+        )
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+    if current_baseline.target != latest_baseline.target:
+        _print_target_identity_warning(current_baseline, latest_baseline)
+        if not typer.confirm("Do you want to continue?", default=False):
+            typer.echo("Diff cancelled by user.")
+            return
+
+    messages = compare_baselines(current_baseline, latest_baseline)
+    if not messages:
+        typer.echo("No drift detected.")
+        return
+
+    typer.echo("Graph drift detected.")
+    typer.echo()
+    for message in messages:
+        typer.echo(message)
+
+
+def _print_target_identity_warning(
+    current_baseline: BaselineProfile,
+    latest_baseline: BaselineProfile,
+) -> None:
+    typer.echo("WARNING")
+    typer.echo()
+    typer.echo("The selected baseline snapshots belong to different database / target identities.")
+    typer.echo()
+    typer.echo("Current Baseline")
+    typer.echo(json.dumps(current_baseline.target.model_dump(), indent=2, sort_keys=True))
+    typer.echo()
+    typer.echo("Latest Baseline")
+    typer.echo(json.dumps(latest_baseline.target.model_dump(), indent=2, sort_keys=True))
+    typer.echo()
+    typer.echo(
+        "Comparing baseline snapshots from different databases or targets may produce "
+        "misleading drift results."
+    )
+
+
+def _print_profile_summary(
+    baseline: BaselineProfile,
+    baseline_path: Path,
+) -> None:
+    typer.echo("Profile completed.")
+    typer.echo()
+
+    typer.echo(f"Status: {baseline.status}")
+
+    if baseline.partial_reason:
+        typer.echo(f"Reason: {baseline.partial_reason}")
+
+    typer.echo()
+
+    typer.echo(f"Nodes: {baseline.statistics.node_count}")
+    typer.echo(f"Relationships: {baseline.statistics.relationship_count}")
+
+    typer.echo()
+
+    typer.echo(f"Labels: {len(baseline.graph_schema.labels)}")
+    typer.echo(f"Relationship Types: {len(baseline.graph_schema.relationship_types)}")
+    typer.echo(f"Constraints: {len(baseline.graph_schema.constraints)}")
+    typer.echo(f"Indexes: {len(baseline.graph_schema.indexes)}")
+
+    typer.echo()
+
+    typer.echo(f"Baseline written to:\n{baseline_path}")

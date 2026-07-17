@@ -8,6 +8,7 @@ from graphcheck.baselines import (
     get_current_baseline,
     latest_baseline,
     list_baselines,
+    resolve_diff_baselines,
     set_current_baseline,
     write_baseline,
 )
@@ -23,11 +24,12 @@ def _profile() -> BaselineProfile:
 
 def test_write_baseline_creates_timestamped_canonical_profile(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
     profile = _profile()
 
     path = write_baseline(profile)
 
-    assert path.parent == Path(".graphcheck/baselines")
+    assert path.parent == tmp_path / ".graphcheck" / "baselines"
     assert re.fullmatch(r"\d{8}T\d{6}\.json", path.name)
     assert path.exists()
     assert path.read_text(encoding="utf-8") == profile.model_dump_json(
@@ -44,30 +46,50 @@ def _snapshot(directory: Path, filename: str) -> Path:
     return path
 
 
-def test_set_current_baseline_selects_latest_snapshot(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("filenames", "expected_current"),
+    [
+        (["20260716T170000.json"], "20260716T170000.json"),
+        (
+            ["20260716T170000.json", "20260716T171000.json"],
+            "20260716T170000.json",
+        ),
+        (
+            [
+                "20260716T170000.json",
+                "20260716T171000.json",
+                "20260716T172000.json",
+            ],
+            "20260716T171000.json",
+        ),
+    ],
+)
+def test_set_current_baseline_selects_previous_snapshot_by_default(
+    tmp_path,
+    monkeypatch,
+    filenames: list[str],
+    expected_current: str,
+) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
     directory = tmp_path / ".graphcheck" / "baselines"
-    _snapshot(directory, "20260714T120000.json")
-    latest = _snapshot(directory, "20260714T143522.json")
+    snapshots = [_snapshot(directory, filename) for filename in filenames]
     _snapshot(directory, "notes.json")
 
     selected = set_current_baseline()
 
-    assert [path.name for path in list_baselines()] == [
-        "20260714T120000.json",
-        "20260714T143522.json",
-    ]
-    assert latest_baseline() == Path(".graphcheck/baselines/20260714T143522.json")
-    assert selected == Path(".graphcheck/baselines/20260714T143522.json")
-    assert selected.resolve() == latest
+    assert [path.name for path in list_baselines()] == filenames
+    assert latest_baseline() == snapshots[-1]
+    assert selected == directory / expected_current
     assert json.loads(Path(".graphcheck/current-baseline.json").read_text(encoding="utf-8")) == {
-        "baseline": "20260714T143522.json"
+        "baseline": expected_current
     }
     assert get_current_baseline() == selected
 
 
 def test_set_current_baseline_selects_specific_snapshot(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
     directory = tmp_path / ".graphcheck" / "baselines"
     requested = _snapshot(directory, "20260714T120000.json")
     _snapshot(directory, "20260714T143522.json")
@@ -82,6 +104,7 @@ def test_set_current_baseline_selects_specific_snapshot(tmp_path, monkeypatch) -
 
 def test_set_current_baseline_rejects_missing_directory(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
 
     with pytest.raises(GraphCheckError, match="No timestamped baseline snapshots") as caught:
         set_current_baseline()
@@ -91,6 +114,7 @@ def test_set_current_baseline_rejects_missing_directory(tmp_path, monkeypatch) -
 
 def test_set_current_baseline_rejects_missing_requested_snapshot(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
     _snapshot(
         tmp_path / ".graphcheck" / "baselines",
         "20260714T120000.json",
@@ -101,3 +125,59 @@ def test_set_current_baseline_rejects_missing_requested_snapshot(tmp_path, monke
 
     assert caught.value.error.code == "baseline.not_found"
     assert not Path(".graphcheck/current-baseline.json").exists()
+
+
+def test_baseline_paths_use_discovered_project_root(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    nested = project_root / "nested" / "directory"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: project_root)
+
+    written = write_baseline(_profile())
+    selected = set_current_baseline(written.name)
+
+    assert written.parent == project_root / ".graphcheck" / "baselines"
+    assert not (nested / ".graphcheck").exists()
+    assert (project_root / ".graphcheck" / "current-baseline.json").exists()
+    assert get_current_baseline() == selected
+
+
+def test_resolve_diff_baselines_uses_previous_and_latest(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    directory = tmp_path / ".graphcheck" / "baselines"
+    previous = _snapshot(directory, "20260714T120000.json")
+    latest = _snapshot(directory, "20260714T143522.json")
+
+    assert resolve_diff_baselines() == (previous, latest)
+
+
+def test_resolve_diff_baselines_honours_current_selection(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    directory = tmp_path / ".graphcheck" / "baselines"
+    selected = _snapshot(directory, "20260710T120000.json")
+    _snapshot(directory, "20260714T120000.json")
+    latest = _snapshot(directory, "20260714T143522.json")
+    set_current_baseline(selected.name)
+
+    assert resolve_diff_baselines() == (selected, latest)
+
+
+def test_resolve_diff_baselines_resolves_explicit_names_and_paths(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    directory = tmp_path / ".graphcheck" / "baselines"
+    current = _snapshot(directory, "20260714T120000.json")
+    latest = tmp_path / "latest.json"
+    latest.write_text("{}", encoding="utf-8")
+
+    assert resolve_diff_baselines(current.name, str(latest)) == (current, latest)
+
+
+def test_resolve_diff_baselines_requires_two_snapshots(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    _snapshot(tmp_path / ".graphcheck" / "baselines", "20260714T120000.json")
+
+    with pytest.raises(GraphCheckError) as caught:
+        resolve_diff_baselines()
+
+    assert caught.value.error.code == "baseline.missing"

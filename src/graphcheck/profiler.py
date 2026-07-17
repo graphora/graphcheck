@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from statistics import median
 from typing import Any
@@ -22,26 +23,216 @@ from graphcheck.contracts.profile import (
 )
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
+#test addition
+#DEFAULT_PROFILE_BUDGET_SECONDS = 2
+DEFAULT_PROFILE_BUDGET_SECONDS = 60
+
 
 
 def profile(client: Neo4jClient) -> BaselineProfile:
+    start_time = time.monotonic()
     target, _, counts = client.probe()
-    labels = collect_labels(client)
+    labels: list[LabelProfile] = []
+    relationship_types: list[RelationshipTypeProfile] = []
+    constraints: list[ConstraintProfile] = []
+    indexes: list[IndexProfile] = []
+    property_coverage: list[PropertyCoverage] = []
+
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget after probe.",
+        )
+
+    try:
+        labels = collect_labels(client)
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting labels: {exc}",
+        )
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting labels.",
+        )
+
+    try:
+        relationship_types = collect_relationship_types(client)
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting relationship types: {exc}",
+        )
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting relationship types.",
+        )
+
+    try:
+        constraints = collect_constraints(client)
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting constraints: {exc}",
+        )
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting constraints.",
+        )
+
+    try:
+        indexes = collect_indexes(client)
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting indexes: {exc}",
+        )
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting indexes.",
+        )
+
+    try:
+        property_coverage = collect_property_coverage(client)
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting property coverage: {exc}",
+        )
+    if _budget_exceeded(start_time):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting property coverage.",
+        )
+
     graph_schema = GraphSchema(
         labels=labels,
-        relationship_types=collect_relationship_types(client),
-        constraints=collect_constraints(client),
-        indexes=collect_indexes(client),
+        relationship_types=relationship_types,
+        constraints=constraints,
+        indexes=indexes,
     )
     statistics = ProfileStatistics(
         node_count=counts.nodes,
         relationship_count=counts.relationships,
-        property_coverage=collect_property_coverage(client),
+        property_coverage=property_coverage,
     )
     return BaselineProfile(
         schema_version="1.0",
         status=ProfileStatus.COMPLETE,
         partial_reason=None,
+        target=target,
+        metadata=ProfileMetadata(
+            generated_at=datetime.now(UTC).isoformat(),
+            graphcheck_version=__version__,
+        ),
+        schema=graph_schema,
+        statistics=statistics,
+        fingerprint=profile_fingerprint(graph_schema, statistics),
+    )
+
+
+def _partial_profile(
+    target,
+    counts,
+    labels: list[LabelProfile],
+    relationship_types: list[RelationshipTypeProfile],
+    constraints: list[ConstraintProfile],
+    indexes: list[IndexProfile],
+    property_coverage: list[PropertyCoverage],
+    reason: str,
+) -> BaselineProfile:
+    graph_schema = GraphSchema(
+        labels=labels,
+        relationship_types=relationship_types,
+        constraints=constraints,
+        indexes=indexes,
+    )
+
+    statistics = ProfileStatistics(
+        node_count=counts.nodes,
+        relationship_count=counts.relationships,
+        property_coverage=property_coverage,
+    )
+
+    return BaselineProfile(
+        schema_version="1.0",
+        status=ProfileStatus.PARTIAL,
+        partial_reason=reason,
         target=target,
         metadata=ProfileMetadata(
             generated_at=datetime.now(UTC).isoformat(),
@@ -186,10 +377,33 @@ def _property_count(client: Neo4jClient, label_ref: str, property_name: str) -> 
     return int(rows[0]["count"]) if rows else 0
 
 
+def _relationship_properties(client: Neo4jClient, relationship_type_ref: str) -> list[str]:
+    rows = client.run_read(
+        f"MATCH ()-[r:{relationship_type_ref}]->() UNWIND keys(r) AS property "
+        "RETURN DISTINCT property ORDER BY property"
+    )
+    return sorted(str(row["property"]) for row in rows)
+
+
+def _relationship_property_count(
+    client: Neo4jClient,
+    relationship_type_ref: str,
+    property_name: str,
+) -> int:
+    rows = client.run_read(
+        f"MATCH ()-[r:{relationship_type_ref}]->() "
+        "WHERE r[$property] IS NOT NULL RETURN count(r) AS count",
+        {"property": property_name},
+    )
+    return int(rows[0]["count"]) if rows else 0
+
+
 def _property_type(client: Neo4jClient, label_ref: str, property_name: str) -> str:
     try:
         rows = client.run_read(
             f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL "
+            "WITH n "
+            "ORDER BY id(n) "
             "RETURN n[$property] AS value LIMIT 1",
             {"property": property_name},
         )
@@ -218,6 +432,10 @@ def _python_value_type(value: Any) -> str:
     return value.__class__.__name__
 
 
+def _budget_exceeded(start_time: float) -> bool:
+    return (time.monotonic() - start_time) >= DEFAULT_PROFILE_BUDGET_SECONDS
+
+
 def _coverage(populated_count: int, total_count: int) -> float:
     if total_count == 0:
         return 0.0
@@ -229,7 +447,19 @@ def _cypher_identifier(value: str) -> str:
 
 
 def collect_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
-    coverage = []
+    
+    coverage = [
+        *collect_node_property_coverage(client),
+        *collect_relationship_property_coverage(client),
+    ]
+    return sorted(
+        coverage,
+        key=lambda item: (item.owner, item.owner_name, item.property),
+    )
+
+
+def collect_node_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
+    coverage: list[PropertyCoverage] = []
 
     labels = sorted(
         str(row["label"]) for row in client.run_read("CALL db.labels() YIELD label RETURN label")
@@ -258,11 +488,36 @@ def collect_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
                 )
             )
 
-    return sorted(
-        coverage,
-        key=lambda c: (
-            c.owner,
-            c.owner_name,
-            c.property,
-        ),
+    return coverage
+
+
+def collect_relationship_property_coverage(
+    client: Neo4jClient,
+) -> list[PropertyCoverage]:
+    coverage: list[PropertyCoverage] = []
+    relationship_types = sorted(
+        str(row["relationshipType"])
+        for row in client.run_read(
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+        )
     )
+
+    for relationship_type in relationship_types:
+        relationship_type_ref = _cypher_identifier(relationship_type)
+        relationship_count = _relationship_type_count(client, relationship_type_ref)
+        for property_name in _relationship_properties(client, relationship_type_ref):
+            populated_count = _relationship_property_count(
+                client,
+                relationship_type_ref,
+                property_name,
+            )
+            coverage.append(
+                PropertyCoverage(
+                    owner="relationship",
+                    owner_name=relationship_type,
+                    property=property_name,
+                    coverage=_coverage(populated_count, relationship_count),
+                )
+            )
+
+    return coverage
