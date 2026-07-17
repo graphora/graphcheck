@@ -1,20 +1,22 @@
 # SPEC-09 — Packs
 
-*Draft for C3.* Packs define reusable check types and heuristic finding metadata. They are
-data-first artifacts consumed through SPEC-02 check YAML and, later, the C1 engine.
+*Frozen for v0.* Packs define reusable check types, their strict suite payloads, executable
+template bindings, capability requirements, sampling declarations, and evidence contracts. They
+are data-first artifacts consumed through SPEC-02 check YAML and the C1 engine.
 
 ## Scope
 
-This spec covers the built-in core conformance pack and the separate PII heuristic pack.
-It does not define C1 execution, Cypher compilation, result scoring, or fixture-graph
-acceptance. Those remain engine/runtime responsibilities.
+This spec covers the built-in core conformance pack and the separate executable PII heuristic
+pack. C1 still owns Cypher implementation, read-only execution, verdict construction, result
+scoring, and fixture-graph acceptance.
 
 ## Status
 
-This is the metadata/schema contract for C3. C1 now compiles and evaluates the core
-conformance templates and consumes their validated `requires` declarations during
-`graphcheck debug` capability preflight. Runtime PII matching, Luhn/Verhoeff
-validation, and fixture-graph assertions remain deferred.
+This is the complete built-in C3 contract. Both packs load through the public suite registry and
+the validated runtime catalog. C1 compiles and evaluates all observable core templates plus the
+PII name/value templates, including Luhn and Verhoeff validation. Both `graphcheck debug` and
+`graphcheck run` consume capability declarations from the same manifests. Fixture-graph assertions
+remain deferred until the fixture lands.
 
 ## Relationship To SPEC-02
 
@@ -32,13 +34,11 @@ The `check` value selects a pack-owned `with` schema from
 payload, normalizes defaults, and keeps the validated payload on
 `LoadedCheck.spec.with_`.
 
-Pack metadata files do not replace user check YAML. They describe the built-in
-check types that the engine will later compile and evaluate.
-
-Runtime loading of pack metadata for query compilation is deferred to C1. Until
-that lands, `core.yml` and `pii.yml` are data-only artifacts validated in full
-against the typed contract in `graphcheck.packs.metadata` and the generated
-`docs/specs/pack.schema.json`.
+Pack metadata files do not replace user check YAML. They declare the built-in check types and bind
+each check name to a registered C1 template. At runtime, `graphcheck.packs.catalog` discovers both
+`.yml` and `.yaml` manifests, validates them through `graphcheck.packs.metadata`, rejects duplicate
+check declarations, and exposes one catalog to compilation and capability preflight. A suite model
+without manifest metadata, or a manifest template without a compiler callback, fails loudly.
 
 ## Metadata Contract
 
@@ -51,14 +51,14 @@ model rejects unknown fields, all required fields are explicit, pack and
 confidence values are literals, core capabilities are limited to `read`,
 `show_procedures`, `apoc`, and `count_store`, and PII checksum values are limited
 to `luhn` and `verhoeff`.
-Core metadata uses distinct sampled and unsampled variants: `sampled: true`
+Check metadata uses distinct sampled and unsampled variants: `sampled: true`
 requires `estimate.required_when_sampled: true`, while unsampled entries reject
 `estimate` metadata. These boolean literals require actual JSON/YAML booleans;
 integer `0`/`1` values are never coerced to `false`/`true`. The same rule applies
 to PII `sample_required: true`.
 
 The generated schema also publishes the typed cross-field and collection
-invariants: every core check's `template` must match its key, capabilities and
+invariants: every built-in check's `template` must match its key, capabilities and
 evidence entries are unique, the PII report fields are the exact frozen set, and
 PII pattern IDs are unique. PII patterns are ID-keyed objects rather than arrays,
 so ID uniqueness follows from standard JSON object-key semantics without a
@@ -91,13 +91,18 @@ rather than making a check appear runnable.
 4. `docs/specs/check.schema.json` is regenerated whenever the registry changes.
    `docs/specs/check.envelope.schema.json` remains the frozen envelope schema;
    `docs/specs/pack.schema.json` publishes the generated metadata contract.
-5. Every core check metadata entry declares what it catches, what it does not
+5. Every executable check metadata entry declares what it catches, what it does not
    catch, required capabilities, whether it is sampled, and evidence pointer
    fields.
 6. Runtime fail/warn results must include evidence pointers. This spec declares
    the evidence contract; C1 enforces it during evaluation.
 7. Runtime execution failures must produce `errored` results, not silent skips or
    optimistic passes. C1 owns that behavior.
+8. A missing declared target capability prevents execution and produces an explicit
+   `skipped:unsupported` result plus partial-run metadata. It is not a pass and is not an attempted
+   query error.
+9. The manifest `sampled` declaration must agree with the compiled plan. A disagreement is
+   `packs.runtime_mismatch`.
 
 ## Core Conformance Pack
 
@@ -216,10 +221,33 @@ in `docs/specs/check.schema.json`.
 ## PII Pack
 
 The PII pack lives at `src/graphcheck/packs/pii.yml`. It is separate from the core
-conformance pack.
+conformance pack. Its two executable checks use SPEC-02's existing `conformance` collection so the
+frozen suite envelope and SPEC-01 pattern enum do not change.
 
 PII findings are heuristic and sampled. Output must never claim complete PII
 discovery; the pack metadata carries an explicit completeness notice.
+
+```yaml
+conformance:
+  - id: likely-pii-property-names
+    check: pii_name_match
+    with:
+      label: Customer                 # optional
+      patterns: [email, phone]        # optional; defaults to all installed name patterns
+      sample_size: 1000               # optional; positive integer
+
+  - id: likely-pii-property-values
+    check: pii_value_match
+    with:
+      label: Customer                 # optional
+      properties: [notes, external_id] # optional; restricts property keys
+      patterns: [email, credit_card]  # optional; defaults to all installed value patterns
+      sample_size: 1000               # optional; positive integer
+```
+
+All `with` models are strict. Pattern identifiers are closed literals from the installed PII
+manifest, list entries must be unique, and explicitly selected properties are checked against
+`db.propertyKeys()`. A missing label/property is an errored schema reference, never an empty pass.
 
 ### Name-Match Heuristic
 
@@ -263,7 +291,25 @@ The current value-match declarations are:
 
 Value-match reports must include location, exposure count, and confidence.
 
-## C1 Consumption Plan
+### Runtime and privacy contract
+
+Both PII checks first execute a population query, derive the per-check seed defined by SPEC-04,
+and select property occurrences in a stable seed-derived order. The engine runs the exact
+population when policy/configuration permits; a strict subset carries
+`estimate:{sample_size,population,confidence,ci}` using the 95% Wilson interval. Even a sampled
+zero-match pass retains estimate metadata and the completeness notice.
+
+Name matching is case-insensitive over the installed alias catalog. Value matching uses full regex
+matches and applies a declared Luhn or Verhoeff checksum after the regex succeeds. A finding groups
+the pattern, node labels, and property key and reports projected `exposure_count` plus the declared
+categorical confidence. Raw matched property values must not appear in `measured`, `expected`,
+evidence, console output, JSON, or HTML artifacts.
+
+Every failing PII result contains node evidence pointers. Missing/malformed candidates, a broken
+query, timeout, schema warning, population/result disagreement, invalid checksum metadata, or
+missing pointer produces `errored`; none can become a pass or a silent skip.
+
+## Runtime consumption
 
 C1 consumes packs in this order:
 
@@ -286,30 +332,34 @@ compares the metadata `requires` list with the live SPEC-03 capability probe. It
 reports the suite/check identity for each missing capability. Effective
 `generated:true` checks remain validated but are not reported as active blockers.
 
+The run path performs the same lookup before compilation. Missing `apoc` or `count_store`
+capabilities produce `skipped` / `skip_reason: unsupported`, name the affected suite/check in the
+partial reason, and do not submit the query. Once a query is attempted, connector/compiler/timeout
+failures are `errored` under SPEC-04.
+
 ## Deferred Work
 
-The following remain deferred:
-
-- Runtime PII scanning and checksum execution.
-- Luhn and Verhoeff helper implementations.
-- Fixture graph assertions for planted defects.
+Only fixture-graph assertions for planted defects remain deferred because the fixture has not
+landed on this branch. No built-in C3 loader, compiler binding, PII evaluator, checksum, sampling,
+capability, or evidence path is deferred.
 
 ## Verification
 
-The current test coverage for this spec lives in `tests/test_packs.py` and
-`tests/contracts/test_check_validation.py`.
+The current test coverage for this spec lives in `tests/test_packs.py`,
+`tests/contracts/test_check_validation.py`, `tests/engine/test_core_pack_compiler.py`,
+`tests/engine/test_pii_pack_runtime.py`, and the opt-in Neo4j integration suite.
 
 The tests assert:
 
 - Both metadata files pass the complete typed and generated JSON Schema contracts.
 - Unknown or missing metadata fields and invalid capability/confidence values fail.
 - Sampled metadata requires an estimate contract and unsampled metadata rejects it.
-- All 12 core conformance checks are registered.
+- All 12 core and both PII conformance checks are registered and declared by the executable catalog.
 - Registered `with` models are strict.
 - Whitespace-only identifiers fail through both `load_suite()` and the generated
   combined check schema.
-- SPEC-02 `load_suite()` accepts all 12 core conformance checks.
-- Core pack metadata matches the registry.
+- SPEC-02 `load_suite()` accepts all 14 built-in conformance checks.
+- Core and PII pack metadata match the registry and their compiler bindings.
 - Runtime capability requirements are read from both `.yml` and `.yaml` pack metadata.
 - Missing APOC reports the affected suite/check identity and install action in human and JSON debug
   output.
@@ -318,4 +368,7 @@ The tests assert:
 - Sampled checks declare an estimate contract.
 - The PII pack is separate and declares heuristic limits.
 - PII name-match and value-match patterns cover the required categories.
-- The generated combined SPEC-02 schema contains all core checks.
+- PII regex/checksum matching, raw-value redaction, evidence, malformed-result errors, exact and
+  sampled estimates, missing schema, timeouts, and seed determinism are exercised at engine level.
+- Capability gaps become unsupported partial skips without executing a query.
+- The generated combined SPEC-02 schema contains all built-in checks.

@@ -294,6 +294,27 @@ class Engine:
                         )
                     )
                     continue
+                capability_check = getattr(self.compiler, "missing_capabilities", None)
+                missing_capabilities = (
+                    tuple(capability_check(check, resolved_target))
+                    if callable(capability_check)
+                    else ()
+                )
+                if missing_capabilities:
+                    check_results.append(
+                        _skipped_result(
+                            check,
+                            suite_input.suite.suite,
+                            SkipReason.UNSUPPORTED,
+                        )
+                    )
+                    rendered = ", ".join(missing_capabilities)
+                    _append_once(
+                        partial_reasons,
+                        f"check {suite_input.suite.suite}/{check.id} requires "
+                        f"missing capability: {rendered}",
+                    )
+                    continue
                 if self._monotonic() >= deadline:
                     check_results.append(
                         _skipped_result(
@@ -522,10 +543,14 @@ class Engine:
         )
         sample_size = decision.sample_size if requested is None else min(population, int(requested))
         resolved = {**params, "sample_size": sample_size}
+        compiled_params = {**compiled.params, "sample_size": sample_size}
+        if "sample_population" in params:
+            resolved["sample_population"] = population
+            compiled_params["sample_population"] = population
         return (
             replace(
                 compiled,
-                params={**compiled.params, "sample_size": sample_size},
+                params=compiled_params,
                 expected={**compiled.expected, "sample_size": sample_size},
                 sample_population=population,
             ),

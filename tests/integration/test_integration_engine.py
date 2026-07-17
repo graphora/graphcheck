@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from neo4j import GraphDatabase
 
 from graphcheck.contracts.results import Verdict
 from graphcheck.engine.runner import Engine
@@ -99,3 +100,44 @@ competency:
 
     assert results.checks[0].verdict is Verdict.ERRORED
     assert count == 0
+
+
+def test_pii_pack_executes_name_and_value_checks_with_real_cypher(neo4j_profile):
+    driver = GraphDatabase.driver(
+        neo4j_profile.uri,
+        auth=(neo4j_profile.user, neo4j_profile.password),
+    )
+    try:
+        with driver.session(database=neo4j_profile.database) as session:
+            session.run(
+                "CREATE (:GraphCheckPiiFixture {email: $email, notes: $card})",
+                email="person@example.com",
+                card="4111 1111 1111 1111",
+            ).consume()
+    finally:
+        driver.close()
+
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(client).run_yaml(
+            """
+suite: pii-integration
+conformance:
+  - id: names
+    check: pii_name_match
+    with: {label: GraphCheckPiiFixture, patterns: [email]}
+  - id: values
+    check: pii_value_match
+    with:
+      label: GraphCheckPiiFixture
+      properties: [notes]
+      patterns: [credit_card]
+"""
+        )
+    finally:
+        client.close()
+
+    assert [check.verdict for check in results.checks] == [Verdict.FAIL, Verdict.FAIL]
+    assert all(check.estimate is False for check in results.checks)
+    assert all(check.evidence and check.evidence.elements for check in results.checks)
+    assert "4111 1111 1111 1111" not in repr(results)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -59,6 +60,9 @@ class VerdictEvaluator:
         row = _single_summary_row(compiled, rows)
         _require_schema(compiled, row)
 
+        if spec.check in {"pii_name_match", "pii_value_match"}:
+            return self._pii(compiled, row, spec.check)
+
         if spec.check == "completeness":
             coverage = _number(row, "coverage", compiled)
             population = _integer(row, "population", compiled)
@@ -115,6 +119,105 @@ class VerdictEvaluator:
             compiled,
             explicit=row.get("evidence", []),
             total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence, estimate=estimate)
+
+    def _pii(
+        self,
+        compiled: CompiledCheck,
+        row: Mapping[str, Any],
+        check_name: str,
+    ) -> Evaluation:
+        population = _integer(row, "population", compiled)
+        sample_size = _integer(row, "sample_size", compiled)
+        if sample_size > population:
+            raise _bad_result(compiled, "sample_size exceeds population")
+        if population > 0 and sample_size == 0:
+            raise _bad_result(compiled, "non-empty PII population has an empty sample")
+        if compiled.sample_population is not None and population != compiled.sample_population:
+            raise _bad_result(
+                compiled,
+                "sample query population disagrees with its deterministic preflight",
+            )
+        candidates = row.get("candidates")
+        if not isinstance(candidates, list):
+            raise _bad_result(compiled, "PII summary candidates is not a list")
+        if len(candidates) != sample_size:
+            raise _bad_result(compiled, "PII candidate count disagrees with sample_size")
+
+        confidence = compiled.expected.get("confidence")
+        patterns = compiled.expected.get("patterns")
+        notice = compiled.expected.get("completeness_notice")
+        if confidence not in {"name-match", "value-match"}:
+            raise _bad_result(compiled, "PII confidence is invalid")
+        if not isinstance(patterns, list) or not patterns:
+            raise _bad_result(compiled, "PII patterns are missing")
+        if not isinstance(notice, str) or not notice.strip():
+            raise _bad_result(compiled, "PII completeness notice is missing")
+
+        grouped: Counter[tuple[str, tuple[str, ...], str]] = Counter()
+        matched_pointers: list[EvidenceElement] = []
+        matched_candidates = 0
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                raise _bad_result(compiled, "PII candidate is not a mapping")
+            property_name = candidate.get("property")
+            pointer = _pointer_from_value(candidate.get("evidence"))
+            if not isinstance(property_name, str) or not property_name:
+                raise _bad_result(compiled, "PII candidate property is invalid")
+            if pointer is None or pointer.kind != "node":
+                raise _bad_result(compiled, "PII candidate omitted its node evidence pointer")
+
+            matched_pattern_ids = _pii_matches(
+                check_name,
+                property_name,
+                candidate.get("value"),
+                patterns,
+                compiled,
+            )
+            if not matched_pattern_ids:
+                continue
+            matched_candidates += 1
+            matched_pointers.append(pointer)
+            labels = tuple(sorted(pointer.labels or []))
+            for pattern_id in matched_pattern_ids:
+                grouped[(pattern_id, labels, property_name)] += 1
+
+        findings = []
+        for (pattern_id, labels, property_name), observed in sorted(grouped.items()):
+            exposure_count = (
+                observed
+                if sample_size == population
+                else round(population * observed / sample_size)
+            )
+            findings.append(
+                {
+                    "pattern": pattern_id,
+                    "location": {"labels": list(labels), "property": property_name},
+                    "exposure_count": exposure_count,
+                    "confidence": confidence,
+                }
+            )
+
+        measured: dict[str, object] = {
+            "population": population,
+            "sample_size": sample_size,
+            "matches": matched_candidates,
+            "findings": findings,
+            "confidence": confidence,
+            "completeness_notice": notice,
+        }
+        estimate: Estimate | Literal[False] = False
+        if sample_size < population:
+            estimate = wilson_estimate(matched_candidates, sample_size, population)
+        if matched_candidates == 0:
+            return Evaluation(True, measured, estimate=estimate)
+
+        evidence = _build_evidence(
+            f"{compiled.name} found {matched_candidates} sampled PII exposure(s).",
+            compiled,
+            explicit=matched_pointers,
+            total_count=matched_candidates,
         )
         return Evaluation(False, measured, evidence=evidence, estimate=estimate)
 
@@ -270,6 +373,7 @@ _SUMMARY_INTERNAL_FIELDS = {
     "schema_ok",
     "missing_labels",
     "missing_relationship_types",
+    "missing_properties",
     "evidence",
 }
 
@@ -291,8 +395,10 @@ def _require_schema(compiled: CompiledCheck, row: Mapping[str, Any]) -> None:
         raise _bad_result(compiled, "compiled summary schema_ok is not boolean")
     labels = list(row.get("missing_labels") or [])
     rel_types = list(row.get("missing_relationship_types") or [])
+    properties = list(row.get("missing_properties") or [])
     missing = [*(f"label {item!r}" for item in labels)]
     missing.extend(f"relationship type {item!r}" for item in rel_types)
+    missing.extend(f"property {item!r}" for item in properties)
     detail = ", ".join(missing) or "an unknown graph schema token"
     raise GraphCheckError(
         "engine.schema_reference_missing",
@@ -335,6 +441,109 @@ def _bad_result(compiled: CompiledCheck, detail: str) -> GraphCheckError:
         f"Check {compiled.check.id!r} cannot be evaluated: {detail}.",
         "Fix the compiler/query so it returns the documented C1 result shape.",
     )
+
+
+def _pii_matches(
+    check_name: str,
+    property_name: str,
+    value: object,
+    patterns: list[object],
+    compiled: CompiledCheck,
+) -> list[str]:
+    matches: list[str] = []
+    for pattern in patterns:
+        if not isinstance(pattern, Mapping):
+            raise _bad_result(compiled, "PII pattern is not a mapping")
+        pattern_id = pattern.get("id")
+        if not isinstance(pattern_id, str) or not pattern_id:
+            raise _bad_result(compiled, "PII pattern id is invalid")
+        if check_name == "pii_name_match":
+            keys = pattern.get("keys")
+            if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+                raise _bad_result(compiled, f"PII name pattern {pattern_id!r} has invalid keys")
+            if property_name.casefold() in {key.casefold() for key in keys}:
+                matches.append(pattern_id)
+            continue
+
+        if check_name != "pii_value_match":
+            raise _bad_result(compiled, f"unsupported PII check {check_name!r}")
+        if not isinstance(value, str):
+            raise _bad_result(compiled, "PII value candidate is not a string")
+        regex = pattern.get("regex")
+        checksum = pattern.get("checksum")
+        if not isinstance(regex, str):
+            raise _bad_result(compiled, f"PII value pattern {pattern_id!r} has no regex")
+        try:
+            regex_matches = re.fullmatch(regex, value) is not None
+        except re.error as exc:  # metadata validation should make this unreachable
+            raise _bad_result(
+                compiled,
+                f"PII value pattern {pattern_id!r} has invalid regex: {exc}",
+            ) from exc
+        if not regex_matches:
+            continue
+        if (
+            checksum is None
+            or (checksum == "luhn" and _luhn_valid(value))
+            or (checksum == "verhoeff" and _verhoeff_valid(value))
+        ):
+            matches.append(pattern_id)
+        elif checksum not in {"luhn", "verhoeff"}:
+            raise _bad_result(
+                compiled,
+                f"PII value pattern {pattern_id!r} has unsupported checksum {checksum!r}",
+            )
+    return matches
+
+
+def _luhn_valid(value: str) -> bool:
+    if any(not (character.isdigit() or character in {" ", "-"}) for character in value):
+        return False
+    digits = [int(character) for character in value if character.isdigit()]
+    if len(digits) < 2:
+        return False
+    checksum = 0
+    parity = len(digits) % 2
+    for index, digit in enumerate(digits):
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
+
+
+_VERHOEFF_D = (
+    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+    (1, 2, 3, 4, 0, 6, 7, 8, 9, 5),
+    (2, 3, 4, 0, 1, 7, 8, 9, 5, 6),
+    (3, 4, 0, 1, 2, 8, 9, 5, 6, 7),
+    (4, 0, 1, 2, 3, 9, 5, 6, 7, 8),
+    (5, 9, 8, 7, 6, 0, 4, 3, 2, 1),
+    (6, 5, 9, 8, 7, 1, 0, 4, 3, 2),
+    (7, 6, 5, 9, 8, 2, 1, 0, 4, 3),
+    (8, 7, 6, 5, 9, 3, 2, 1, 0, 4),
+    (9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+)
+_VERHOEFF_P = (
+    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+    (1, 5, 7, 6, 2, 8, 3, 0, 9, 4),
+    (5, 8, 0, 3, 7, 9, 6, 1, 4, 2),
+    (8, 9, 1, 6, 0, 4, 3, 5, 2, 7),
+    (9, 4, 5, 3, 1, 2, 6, 8, 7, 0),
+    (4, 2, 8, 6, 5, 7, 3, 9, 0, 1),
+    (2, 7, 9, 3, 8, 0, 6, 4, 1, 5),
+    (7, 0, 4, 6, 9, 1, 3, 2, 5, 8),
+)
+
+
+def _verhoeff_valid(value: str) -> bool:
+    if not value or not value.isdigit():
+        return False
+    checksum = 0
+    for index, character in enumerate(reversed(value)):
+        checksum = _VERHOEFF_D[checksum][_VERHOEFF_P[index % 8][int(character)]]
+    return checksum == 0
 
 
 def _columns_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -401,7 +610,6 @@ def _build_evidence(
         pointers.extend(_pointers_from_ids(params))
     if not allow_aggregate:
         pointers = [pointer for pointer in pointers if pointer.kind != "aggregate"]
-
     unique: list[EvidenceElement] = []
     seen: set[tuple[str, str]] = set()
     unique_count = 0

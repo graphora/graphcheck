@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
@@ -233,4 +235,55 @@ def test_random_drift_summaries_are_exact_and_deterministic(current, previous, t
 
     assert first == repeated
     assert first.passed is (abs(current - previous) <= tolerance)
+    assert (first.evidence is None) is first.passed
+
+
+@given(matches=st.lists(st.booleans(), max_size=30))
+def test_random_pii_value_summaries_are_redacted_exact_and_deterministic(matches):
+    suite_yaml = yaml.safe_dump(
+        {
+            "suite": "property-pii",
+            "conformance": [
+                {
+                    "id": "cards",
+                    "check": "pii_value_match",
+                    "with": {"patterns": ["credit_card"], "properties": ["notes"]},
+                }
+            ],
+        }
+    )
+    compiled = replace(
+        compile_check(load_suite(suite_yaml).checks[0], sample_seed=73),
+        sample_population=len(matches),
+    )
+    candidates = [
+        {
+            "evidence": {
+                "kind": "node",
+                "id": f"node-{index}",
+                "labels": ["Payment"],
+            },
+            "property": "notes",
+            "value": "4111 1111 1111 1111" if matched else "4111 1111 1111 1112",
+        }
+        for index, matched in enumerate(matches)
+    ]
+    row = {
+        "schema_ok": True,
+        "missing_labels": [],
+        "missing_relationship_types": [],
+        "missing_properties": [],
+        "population": len(matches),
+        "sample_size": len(matches),
+        "candidates": candidates,
+    }
+
+    first = evaluate_check(compiled, [row])
+    repeated = evaluate_check(compiled, [row])
+
+    assert first == repeated
+    assert first.passed is (not any(matches))
+    assert first.measured["matches"] == sum(matches)
+    assert first.estimate is False
+    assert "4111 1111 1111 1111" not in repr(first)
     assert (first.evidence is None) is first.passed

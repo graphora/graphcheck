@@ -14,7 +14,8 @@ The implementation is split by responsibility:
 | --- | --- |
 | Suite YAML model and validation | `src/graphcheck/contracts/check.py` (SPEC-02) |
 | Compiled check boundary and drift compilers | `src/graphcheck/engine/compiler.py` |
-| Built-in conformance compiler callbacks | `src/graphcheck/engine/core_pack.py` |
+| Validated executable pack catalog | `src/graphcheck/packs/catalog.py` and SPEC-09 |
+| Built-in core/PII compiler callbacks | `src/graphcheck/engine/core_pack.py` and `src/graphcheck/engine/pii_pack.py` |
 | Read-only connector execution | `src/graphcheck/engine/executor.py` and SPEC-03 |
 | Parameter-token resolution | `src/graphcheck/engine/parameters.py` |
 | Pure verdict evaluation and evidence extraction | `src/graphcheck/engine/evaluator.py` |
@@ -251,20 +252,23 @@ Unknown or unresolved tokens are errors, never silently treated as literals.
 
 Built-in conformance and drift queries inventory `db.labels()` and `db.relationshipTypes()` and
 return `schema_ok`, `missing_labels`, and `missing_relationship_types` in their single summary row.
-The evaluator rejects a missing/invalid schema marker and turns a referenced missing token into
-`engine.schema_reference_missing`.
+PII value scans additionally inventory `db.propertyKeys()` when the suite explicitly restricts
+properties. The evaluator rejects a missing/invalid schema marker and turns a referenced missing
+label, relationship type, or property into `engine.schema_reference_missing`.
 
-C2 additionally inspects Neo4j query notifications for missing labels/relationship types on
-customer-authored competency queries. A typo therefore cannot become an empty-result pass.
+C2 additionally inspects Neo4j query notifications for missing labels, relationship types, and
+property keys on customer-authored competency queries. A typo therefore cannot become an
+empty-result pass.
 
 ### Conformance compiler registry
 
-SPEC-02's C3 registry owns validation models. C1 owns a separate callback registry mapping the same
-check names to Cypher templates, allowing pack schema and engine compilation to evolve without
-changing the frozen YAML envelope. Loading a check still requires its C3 model to be installed;
-having only a compiler callback is insufficient.
+SPEC-02's C3 registry owns validation models. Validated SPEC-09 manifests map check names to C1
+template names; the compiler callback registry implements those templates without changing the
+frozen YAML envelope. Loading a check requires its C3 model, manifest definition, and compiler
+callback. Any missing layer fails loudly, and a manifest/plan sampling disagreement is
+`packs.runtime_mismatch`.
 
-The engine provides callbacks for the twelve core C3 identifiers:
+The engine provides callbacks for twelve core and two PII C3 identifiers:
 
 | Check | Evaluated rule |
 | --- | --- |
@@ -280,6 +284,8 @@ The engine provides callbacks for the twelve core C3 identifiers:
 | `label_cooccurrence` | No node simultaneously carries both configured labels |
 | `rel_direction` | The configured relationship does not appear with source/target labels reversed |
 | `temporal_sanity` | End-property values are not earlier than start-property values |
+| `pii_name_match` | Sampled property-key occurrences match selected installed personal-data aliases |
+| `pii_value_match` | Sampled string values fully match selected regexes and required Luhn/Verhoeff checksums |
 
 All observable conformance templates return exactly one summary row with a non-negative
 `violation_count`, a population, scalar measurements where applicable, and capped pointer evidence.
@@ -289,6 +295,11 @@ summary arithmetic is `engine.invalid_query_result`, never a finding or pass.
 Neo4j Cypher cannot expose a relationship whose backing-store endpoint cannot be resolved: such a
 relationship is absent before a `MATCH` row exists. For that reason `dangling_rels` raises
 `engine.check_unobservable` rather than returning a misleading zero violations.
+
+PII checks return a population, sample size, and candidate rows with node pointers. The evaluator
+groups findings by installed pattern, node labels, and property key. It never serializes raw
+matched values. Empty/malformed samples, missing pointers, population disagreement, or invalid
+pattern metadata are query-result errors, not passes.
 
 ### Competency compilation
 
@@ -431,9 +442,10 @@ conformance or competency findings; those remain `engine.evidence_missing`.
 
 ## Sampling policy
 
-Sampling applies only to compiler plans explicitly marked sampled (currently `hub_outlier`). Before
-the main query, the engine executes a population query that must return exactly one non-negative
-integer `population`.
+Sampling applies only to compiler plans explicitly marked sampled: `hub_outlier`,
+`pii_name_match`, and `pii_value_match`. The plan must agree with the installed manifest declaration.
+Before the main query, the engine executes a population query that must return exactly one
+non-negative integer `population`.
 
 The per-check seed is SHA-256 over domain-separated, length-prefixed components:
 
@@ -449,9 +461,9 @@ Changing any component changes the derived seed. The policy is exact when popula
 the exhaustive limit or configured sample size; otherwise it selects the configured sample size.
 A check-level sample size may request a smaller sample and is capped at population.
 
-The core `hub_outlier` query orders candidates by a stable seed-derived Cypher key plus node id. The
-sampling module also exposes a deterministic uniform Floyd selector using `O(sample_size)` memory
-for callers with a canonical indexed population.
+The sampled core and PII queries order candidates by a stable seed-derived Cypher key plus node id
+(and property key for PII). The sampling module also exposes a deterministic uniform Floyd selector
+using `O(sample_size)` memory for callers with a canonical indexed population.
 
 Exhaustive outcomes serialize `estimate:false`. A strict subset serializes
 `{sample_size,population,confidence:0.95,ci:[lo,hi]}` using a two-sided 95% Wilson proportion
@@ -523,6 +535,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.duplicate_suite` | Two loaded suites resolve to the same suite id |
 | `engine.target_missing` | No target supplied and connector cannot probe one |
 | `engine.unsupported_pattern` / `engine.compiler_missing` | No compiler exists for the loaded check |
+| `packs.runtime_missing` / `packs.runtime_mismatch` | Installed manifest binding is absent or disagrees with its compiler plan |
 | `engine.invalid_check` / `engine.invalid_target` | Normalized check cannot produce a valid plan |
 | `engine.empty_query` / `engine.parameter_missing` | Competency Cypher is empty or lacks a declared parameter |
 | `engine.parameter_token_unknown` / `engine.parameter_token_unresolved` | Graph-relative parameter cannot resolve |
@@ -530,7 +543,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.baseline_missing` / `engine.baseline_invalid` | Required baseline measurement is absent or invalid |
 | `engine.baseline_partial_missing` | Partial baseline did not collect the requested measurement |
 | `engine.connector_invalid` | C2-compatible read method is absent |
-| `engine.schema_reference_missing` | Label/relationship type does not exist on the target |
+| `engine.schema_reference_missing` | Label/relationship type/property does not exist on the target |
 | `engine.invalid_query_result` | Query returned a malformed or inconsistent evaluator shape |
 | `engine.evidence_missing` | Row-level failed assertion has no real graph pointer |
 | `engine.tolerance_unsupported` / `engine.tolerance_invalid` | Drift tolerance cannot be evaluated |
@@ -549,6 +562,7 @@ Automated coverage includes:
 
 - strict SPEC-02 parsing and normalized pack defaults;
 - deterministic parameterized compilation and every C3 callback registration;
+- executable PII name/value scans, checksums, redaction, evidence, and estimate behavior;
 - driver-enforced read-only execution and write rejection;
 - missing-schema, broken-query, timeout, and one-bad-check isolation paths;
 - every competency shape/regression predicate;
@@ -564,8 +578,8 @@ shape invariants, exact/bag semantics, evidence requirements, and deterministic 
 same suite/graph rows.
 
 Neo4j integration tests are enabled with `GRAPHCHECK_NEO4J_INTEGRATION=1` and cover parameter
-round-trip, broken-query isolation, missing-label errors, and write rejection through a real C2
-session.
+round-trip, broken-query isolation, missing-label errors, write rejection, and both PII templates
+through a real C2 session on supported server versions.
 
 The opt-in performance test requires a preloaded target of at least 10 million nodes through
 `GRAPHCHECK_PERFORMANCE_URI` and `GRAPHCHECK_PERFORMANCE_PASSWORD`. It runs 30 representative
@@ -575,11 +589,10 @@ engine budget reserves the remaining wall time for artifact serialization/report
 ## Deferred v0 integration
 
 End-to-end assertions against `tests/fixtures/fraud-ring.cypher` remain deferred until that fixture
-lands on this branch. SPEC-01 reserves `skipped:unsupported` for capability preflight gaps; the
-current engine run does not yet emit capability-based unsupported skips. SPEC-03 debug preflight
-does load `requires` from validated pack `.yml`/`.yaml` metadata and names blocked suite/checks;
-the installed core pack currently declares only `read`, so it has no live APOC-backed check until
-the corresponding pack manifest and implementation land.
+lands on this branch. Capability preflight is implemented in both debug and run: a missing declared
+`apoc` or `count_store` capability produces `skipped:unsupported`, marks the run partial, and does
+not submit that check's query. The built-in manifests currently require `read`; changing an
+installed declaration changes both preflight paths without a CLI-maintained requirement table.
 
 ## Deliverables
 

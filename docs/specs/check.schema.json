@@ -646,6 +646,172 @@
         {
           "properties": {
             "check": {
+              "const": "pii_name_match"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Sample property occurrences and match property-key aliases from the PII pack.",
+              "properties": {
+                "label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Label"
+                },
+                "patterns": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "enum": [
+                          "ssn",
+                          "dob",
+                          "email",
+                          "phone",
+                          "nric",
+                          "aadhaar",
+                          "address",
+                          "passport",
+                          "credit_card",
+                          "tax_id",
+                          "driver_license",
+                          "bank_account",
+                          "ip_address",
+                          "geolocation",
+                          "biometric"
+                        ],
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Patterns"
+                },
+                "sample_size": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Sample Size"
+                }
+              },
+              "title": "PiiNameMatchWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "pii_value_match"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Sample string property values and apply the PII regex/checksum catalog.",
+              "properties": {
+                "label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Label"
+                },
+                "patterns": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "enum": [
+                          "email",
+                          "e164_phone",
+                          "nric",
+                          "aadhaar",
+                          "credit_card"
+                        ],
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Patterns"
+                },
+                "properties": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Properties"
+                },
+                "sample_size": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Sample Size"
+                }
+              },
+              "title": "PiiValueMatchWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
               "const": "property_format"
             },
             "with": {

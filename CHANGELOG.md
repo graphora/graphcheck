@@ -25,6 +25,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - SPEC-04 Engine, consolidating the C1 and run-command contracts into one detailed source for
   compilation, execution, evaluation, evidence, sampling, baselines, artifacts, and CI behavior.
 - Core and PII pack metadata/schema slice: eleven additional core conformance `with` schemas, strictly typed `core.yml` and `pii.yml` metadata, a generated metadata JSON Schema, SPEC-09, and validation-parity tests.
+- Complete built-in C3 runtime: manifest-driven compiler/capability binding for every registered
+  check plus executable, deterministically sampled PII name/value scans with Luhn/Verhoeff
+  validation, redacted findings, mandatory node evidence, and confidence intervals.
 
 ### Changed
 
@@ -48,3 +51,5 @@ All notable changes to this project are documented here. Format follows [Keep a 
   the deliberately unobservable `dangling_rels` check continues to fail closed.
 - Offline HTML reports now use the same canonical JSON-compatible value normalization as
   `results.json`, including YAML dates, datetimes, binary values, and deterministic set ordering.
+- Missing pack-declared capabilities now produce explicit unsupported partial skips during engine
+  runs, and missing property-key notifications are errored instead of becoming empty passes.

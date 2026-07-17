@@ -991,3 +991,21 @@ def test_unknown_relationship_type_notification_is_a_query_error():
     assert caught.value.error.code == "neo4j.query_failed"
     assert "relationship type" in caught.value.error.message
     assert "OWNZ" in caught.value.error.message
+
+
+def test_unknown_property_key_notification_is_a_query_error():
+    from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
+
+    with pytest.raises(GraphCheckError) as caught:
+        _raise_for_missing_schema_reference(
+            (
+                {
+                    "code": "Neo.ClientNotification.Statement.UnknownPropertyKeyWarning",
+                    "description": "The property key is not in the database: customer_emali",
+                },
+            )
+        )
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "property key" in caught.value.error.message
+    assert "customer_emali" in caught.value.error.message

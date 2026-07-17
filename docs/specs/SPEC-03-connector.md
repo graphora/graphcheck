@@ -137,8 +137,10 @@ connectivity, read access, and procedure visibility.
 
 When a loaded check suite references a check whose pack declares a capability requirement that the
 target does not satisfy, debug reports the suite id, check id, check type, missing capability, and a
-fix. Each missing capability produces a separate blocker. In v0 this is a preflight report only;
-C1 owns turning the same condition into skipped or errored check results during an actual run.
+fix. Each missing capability produces a separate blocker. The run path consumes the same catalog
+and turns a missing declared `apoc` or `count_store` capability into `skipped:unsupported`, marks
+the run partial, and does not submit the blocked query. Failures after a query is attempted remain
+`errored`.
 
 Capability requirements come from the validated `requires` entries in packaged check-pack `.yml`
 and `.yaml` metadata, not from a CLI-maintained table. The catalog is loaded through SPEC-09's

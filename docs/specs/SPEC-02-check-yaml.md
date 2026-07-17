@@ -95,7 +95,8 @@ to this section.
 
 - `src/graphcheck/packs/__init__.py` — the pack registry + built-in core conformance `with` models.
 - `src/graphcheck/packs/core.yml` — data-only metadata for the built-in core conformance pack.
-- `src/graphcheck/packs/pii.yml` — data-only metadata for the separate PII heuristic pack.
+- `src/graphcheck/packs/pii.yml` — validated metadata, executable-template bindings, patterns, and
+  heuristic limits for the separate PII pack (`pii_name_match` and `pii_value_match`).
 - `src/graphcheck/contracts/check.py` — the duplicate-key loader, strict envelope + `Expect` models, defaults/generated resolution, and `REGISTRY`-driven `with` validation.
 - `docs/specs/check.envelope.schema.json` (frozen) + `docs/specs/check.schema.json` (generated, pack-versioned).
 - `tests/contracts/fixtures/suite.valid.yml` + `suite.invalid-*.yml`, and `tests/contracts/test_check_validation.py`.

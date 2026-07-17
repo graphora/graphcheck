@@ -549,6 +549,8 @@ def _missing_schema_kind(notification: Mapping[str, Any]) -> str | None:
         return "label"
     if code.endswith("unknownrelationshiptypewarning"):
         return "relationship type"
+    if code.endswith("unknownpropertykeywarning"):
+        return "property key"
     text = " ".join(str(notification.get(key) or "") for key in ("title", "description")).lower()
     if "label" in text and (
         "unknown label" in text
@@ -562,6 +564,12 @@ def _missing_schema_kind(notification: Mapping[str, Any]) -> str | None:
         or "relationship type is not available" in text
     ):
         return "relationship type"
+    if "property" in text and (
+        "unknown property" in text
+        or "property key is not in the database" in text
+        or "property key is not available" in text
+    ):
+        return "property key"
     return None
 
 

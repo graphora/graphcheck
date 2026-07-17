@@ -12,6 +12,7 @@ from graphcheck.contracts.check import (
 )
 from graphcheck.contracts.results import Pattern
 from graphcheck.errors import GraphCheckError
+from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class CompiledCheck:
     population_query: str | None = None
     population_params: dict[str, object] | None = None
     sample_population: int | None = None
+    evidence_kinds: tuple[str, ...] = ()
+    evidence_id_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -196,10 +199,16 @@ def name_for(check: LoadedCheck) -> str:
 
 
 class CypherCompiler:
-    def __init__(self, *, evidence_cap: int = 100) -> None:
+    def __init__(
+        self,
+        *,
+        evidence_cap: int = 100,
+        pack_catalog: PackCatalog | None = None,
+    ) -> None:
         if isinstance(evidence_cap, bool) or not isinstance(evidence_cap, int) or evidence_cap < 1:
             raise ValueError("evidence_cap must be a positive integer")
         self.evidence_cap = evidence_cap
+        self.pack_catalog = pack_catalog or builtin_pack_catalog()
 
     def compile(self, check: LoadedCheck, *, sample_seed: int = 0) -> CompiledCheck:
         if check.pattern is Pattern.CONFORMANCE:
@@ -218,14 +227,31 @@ class CypherCompiler:
         spec = check.spec
         if not isinstance(spec, ConformanceCheck):
             raise _invalid_loaded_check(check, "conformance")
-        compiler = _CONFORMANCE_COMPILERS.get(spec.check)
+        definition = self.pack_catalog.checks.get(spec.check)
+        if definition is None:
+            raise GraphCheckError(
+                "packs.runtime_missing",
+                f"Conformance check {spec.check!r} is not declared by installed pack metadata.",
+                "Install a pack whose validated YAML declares this check and its runtime template.",
+            )
+        compiler = _CONFORMANCE_COMPILERS.get(definition.template)
         if compiler is None:
             raise GraphCheckError(
                 "engine.compiler_missing",
-                f"No Cypher compiler is registered for conformance check {spec.check!r}.",
+                f"No compiler is registered for pack template {definition.template!r}.",
                 "Install a pack version that provides the check's C1 compiler template.",
             )
-        plan = compiler(dict(spec.with_), self.evidence_cap, sample_seed)
+        runtime_config = dict(spec.with_)
+        if definition.pack == "pii":
+            runtime_config["__pack_metadata__"] = self.pack_catalog.pii
+        plan = compiler(runtime_config, self.evidence_cap, sample_seed)
+        if plan.sampled is not definition.sampled:
+            raise GraphCheckError(
+                "packs.runtime_mismatch",
+                f"Pack check {spec.check!r} declares sampled={definition.sampled!r}, "
+                f"but template {definition.template!r} compiled sampled={plan.sampled!r}.",
+                "Make the pack YAML sampling declaration match its registered compiler.",
+            )
         return CompiledCheck(
             check=check,
             query=plan.query,
@@ -238,7 +264,29 @@ class CypherCompiler:
             population_params=(
                 dict(plan.population_params) if plan.population_params is not None else None
             ),
+            evidence_kinds=definition.evidence_elements,
+            evidence_id_fields=definition.evidence_id_fields,
         )
+
+    def missing_capabilities(self, check: LoadedCheck, target: object) -> tuple[str, ...]:
+        """Return target capabilities that prevent a pack check from being attempted."""
+        if not isinstance(check.spec, ConformanceCheck):
+            return ()
+        definition = self.pack_catalog.checks.get(check.spec.check)
+        if definition is None:
+            return ()
+        capabilities = getattr(target, "capabilities", None)
+        missing: list[str] = []
+        for requirement in definition.requires:
+            unavailable = (
+                requirement == "apoc" and not bool(getattr(capabilities, "apoc", False))
+            ) or (
+                requirement == "count_store"
+                and not bool(getattr(capabilities, "count_store", False))
+            )
+            if unavailable:
+                missing.append(requirement)
+        return tuple(missing)
 
     def _compile_competency(self, check: LoadedCheck) -> CompiledCheck:
         spec = check.spec
@@ -492,8 +540,9 @@ def _register_builtin_pack_compilers() -> None:
     # The pack registry remains model-only. Importing the C1 bridge installs compiler
     # callbacks for the template names carried by C3's data-only core pack.
     from graphcheck.engine import core_pack as loaded_core_pack
+    from graphcheck.engine import pii_pack as loaded_pii_pack
 
-    del loaded_core_pack
+    del loaded_core_pack, loaded_pii_pack
 
 
 _register_builtin_pack_compilers()

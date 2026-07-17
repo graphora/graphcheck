@@ -147,3 +147,67 @@ class TemporalSanityWith(_WithBase):
         if self.start_property == self.end_property:
             raise ValueError("temporal_sanity requires distinct start and end properties")
         return self
+
+
+class _PiiWithBase(_WithBase):
+    label: Identifier | None = None
+    sample_size: PositiveJsonSchemaInteger | None = None
+
+
+@register("pii_name_match")
+class PiiNameMatchWith(_PiiWithBase):
+    """Sample property occurrences and match property-key aliases from the PII pack."""
+
+    patterns: (
+        list[
+            Literal[
+                "ssn",
+                "dob",
+                "email",
+                "phone",
+                "nric",
+                "aadhaar",
+                "address",
+                "passport",
+                "credit_card",
+                "tax_id",
+                "driver_license",
+                "bank_account",
+                "ip_address",
+                "geolocation",
+                "biometric",
+            ]
+        ]
+        | None
+    ) = Field(default=None, min_length=1)
+
+    @field_validator("patterns")
+    @classmethod
+    def patterns_must_be_unique(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("PII patterns must not contain duplicate entries")
+        return value
+
+
+@register("pii_value_match")
+class PiiValueMatchWith(_PiiWithBase):
+    """Sample string property values and apply the PII regex/checksum catalog."""
+
+    patterns: list[Literal["email", "e164_phone", "nric", "aadhaar", "credit_card"]] | None = Field(
+        default=None, min_length=1
+    )
+    properties: list[Identifier] | None = Field(default=None, min_length=1)
+
+    @field_validator("patterns")
+    @classmethod
+    def patterns_must_be_unique(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("PII patterns must not contain duplicate entries")
+        return value
+
+    @field_validator("properties")
+    @classmethod
+    def properties_must_be_unique(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("PII properties must not contain duplicate entries")
+        return value

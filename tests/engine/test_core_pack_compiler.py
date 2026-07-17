@@ -7,7 +7,7 @@ from graphcheck.contracts.check import ConformanceCheck, LoadedCheck, load_suite
 from graphcheck.contracts.results import Pattern, Severity
 from graphcheck.engine.compiler import CypherCompiler, _parameter_names
 from graphcheck.errors import GraphCheckError
-from graphcheck.packs import REGISTRY
+from graphcheck.packs.metadata import CORE_CHECK_NAMES
 
 
 def _loaded(name: str, config: dict[str, object]) -> LoadedCheck:
@@ -106,7 +106,7 @@ CASES = [
 
 
 def test_public_compiler_cases_cover_every_registered_observable_core_check():
-    assert {name for name, _config, _kind in CASES} == set(REGISTRY) - {"dangling_rels"}
+    assert {name for name, _config, _kind in CASES} == set(CORE_CHECK_NAMES) - {"dangling_rels"}
 
 
 @pytest.mark.parametrize(("name", "config", "evidence_kind"), CASES)

@@ -64,6 +64,7 @@ CORE_CHECK_NAMES: tuple[CoreCheckName, ...] = (
 
 type CapabilityRequirement = Literal["read", "show_procedures", "apoc", "count_store"]
 type EvidenceKind = Literal["node", "rel"]
+type PiiCheckName = Literal["pii_name_match", "pii_value_match"]
 
 
 class _StrictMetadata(BaseModel):
@@ -194,6 +195,52 @@ class CorePackMetadata(_StrictMetadata):
     checks: CoreChecksMetadata
 
 
+class _PiiCheckMetadataBase(_StrictMetadata):
+    catches: NonWhitespaceString
+    does_not_catch: NonWhitespaceString
+    requires: list[CapabilityRequirement] = Field(
+        min_length=1,
+        json_schema_extra={"uniqueItems": True},
+    )
+    sampled: StrictTrueLiteral
+    estimate: EstimateMetadata
+    evidence: EvidenceMetadata
+    template: PiiCheckName
+
+    @field_validator("requires")
+    @classmethod
+    def capabilities_must_be_unique(
+        cls, value: list[CapabilityRequirement]
+    ) -> list[CapabilityRequirement]:
+        if len(value) != len(set(value)):
+            raise ValueError("requires must not contain duplicate capabilities")
+        return value
+
+
+class PiiChecksMetadata(_StrictMetadata):
+    pii_name_match: _PiiCheckMetadataBase = Field(
+        json_schema_extra={"properties": {"template": {"const": "pii_name_match"}}}
+    )
+    pii_value_match: _PiiCheckMetadataBase = Field(
+        json_schema_extra={"properties": {"template": {"const": "pii_value_match"}}}
+    )
+
+    @model_validator(mode="after")
+    def templates_must_match_check_names(self) -> PiiChecksMetadata:
+        for name in ("pii_name_match", "pii_value_match"):
+            metadata = getattr(self, name)
+            if metadata.template != name:
+                raise ValueError(
+                    f"PII check {name!r} must declare matching template {name!r}, "
+                    f"not {metadata.template!r}"
+                )
+        return self
+
+    def items(self):
+        for name in ("pii_name_match", "pii_value_match"):
+            yield name, getattr(self, name)
+
+
 class PiiNamePatternMetadata(_StrictMetadata):
     keys: list[NonWhitespaceString] = Field(
         min_length=1,
@@ -257,6 +304,7 @@ class PiiPackMetadata(_StrictMetadata):
     pack: Literal["pii"]
     version: Literal[PACK_VERSION]
     completeness_notice: NonWhitespaceString
+    checks: PiiChecksMetadata
     name_match: PiiNameMatchMetadata
     value_match: PiiValueMatchMetadata
 
