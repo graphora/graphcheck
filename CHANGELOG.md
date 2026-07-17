@@ -28,6 +28,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
+  measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).
 
 ### Fixed
@@ -38,7 +40,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
   missing schema-reference warnings become structured errors, per-query timeouts reach the driver,
   and target fingerprints now hash graph schema tokens plus counts rather than connection details.
 - Debug probing now reports checks blocked by missing Neo4j read access instead of aborting while loading graph counts, including scoped privileges and `HOME GRAPH` grants or denials.
-
-### Changed
-
-- Project runtime and CI target moved to Python 3.12+, with the test matrix narrowed to Python 3.12 and 3.13.
+- Count-drift tolerance breaches now produce fail/warn findings with deterministic aggregate-scope
+  evidence, including decreases to zero, instead of `engine.evidence_missing` errors.
+- All observable core conformance checks now load through the public SPEC-02 registry/compiler path;
+  the deliberately unobservable `dangling_rels` check continues to fail closed.
+- Offline HTML reports now use the same canonical JSON-compatible value normalization as
+  `results.json`, including YAML dates, datetimes, binary values, and deterministic set ordering.

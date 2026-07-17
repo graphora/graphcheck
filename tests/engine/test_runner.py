@@ -177,7 +177,7 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     payload = results.model_dump(mode="json", by_alias=True, exclude_none=False)
 
     assert set(payload) == {"schema_version", "run", "score", "totals", "suites", "checks"}
-    assert results.schema_version == "1.0"
+    assert results.schema_version == "1.1"
     assert results.run.id == "run-123"
     assert results.run.started_at == "2026-07-13T10:00:00Z"
     assert results.run.finished_at == "2026-07-13T10:00:02Z"
@@ -528,6 +528,117 @@ def test_partial_drift_baseline_marks_run_partial_while_check_can_pass():
     assert results.checks[0].verdict is Verdict.PASS
     assert results.checks[0].measured["baseline"] == 100.0
     assert results.checks[0].measured["current"] == 100.0
+
+
+@pytest.mark.parametrize(
+    (
+        "metric",
+        "target",
+        "baseline_key",
+        "current",
+        "severity",
+        "expected_verdict",
+        "expected_id",
+    ),
+    [
+        pytest.param(
+            "node_count",
+            "{label: Customer}",
+            "label=Customer",
+            80,
+            "error",
+            Verdict.FAIL,
+            "node_count:label=Customer",
+            id="node-count-decrease",
+        ),
+        pytest.param(
+            "node_count",
+            "{label: Customer}",
+            "label=Customer",
+            0,
+            "error",
+            Verdict.FAIL,
+            "node_count:label=Customer",
+            id="node-count-decrease-to-zero",
+        ),
+        pytest.param(
+            "relationship_count",
+            "{type: OWNS}",
+            "type=OWNS",
+            80,
+            "warn",
+            Verdict.WARN,
+            "relationship_count:type=OWNS",
+            id="relationship-count-decrease",
+        ),
+    ],
+)
+def test_compiled_count_drift_failures_use_aggregate_scope_evidence(
+    metric,
+    target,
+    baseline_key,
+    current,
+    severity,
+    expected_verdict,
+    expected_id,
+):
+    suite = f"""\
+suite: aggregate-drift
+drift:
+  - id: changed-count
+    severity: {severity}
+    metric: {metric}
+    target: {target}
+    baseline: latest
+    tolerance: {{max_drop_pct: 10}}
+"""
+    client = RichClient(
+        [
+            QueryResult(
+                [
+                    {
+                        "schema_ok": True,
+                        "missing_labels": [],
+                        "missing_relationship_types": [],
+                        "current": current,
+                        "population": current,
+                        "evidence": [],
+                    }
+                ],
+                (
+                    "schema_ok",
+                    "missing_labels",
+                    "missing_relationship_types",
+                    "current",
+                    "population",
+                    "evidence",
+                ),
+                (),
+            )
+        ]
+    )
+    baselines = {"latest": {metric: {baseline_key: 100}}}
+
+    results = _engine(client, baselines=baselines).run_yaml(suite, target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is expected_verdict
+    assert check.error is None
+    assert check.measured == {
+        "current": float(current),
+        "baseline": 100.0,
+        "delta": float(current - 100),
+        "change_pct": float(current - 100),
+    }
+    assert "[] AS evidence" in check.compiled_query
+    assert check.evidence is not None
+    assert check.evidence.elements[0].kind == "aggregate"
+    assert check.evidence.elements[0].id == expected_id
+    assert check.evidence.total_count == 1
+    assert check.evidence.truncated is False
+    query, params, _timeout = client.read_calls[0]
+    assert query == check.compiled_query
+    assert params == check.params
 
 
 def test_partial_baseline_missing_measurement_keeps_the_run_partial():

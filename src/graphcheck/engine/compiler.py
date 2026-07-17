@@ -154,7 +154,6 @@ def _compile_completeness(
         params={
             "label": label,
             "property": property_name,
-            "threshold": threshold,
             "evidence_cap": evidence_cap,
             "required_labels": [label],
             "required_relationship_types": [],

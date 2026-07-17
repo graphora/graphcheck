@@ -175,12 +175,15 @@ class Neo4jClient:
                 can_show_procedures = False
             elif not _is_apoc_absent_error(exc):
                 raise
-        counts = _call_with_timeout(self._counts, deadline)
-        labels, relationship_types = _call_with_timeout(self._schema_tokens, deadline)
 
         can_read = True
         try:
-            can_read = self._can_read(edition)
+            remaining = _remaining_timeout(deadline)
+            can_read = (
+                self._can_read(edition)
+                if remaining is None
+                else self._can_read(edition, timeout_s=remaining)
+            )
         except GraphCheckError as exc:
             if exc.error.code == "neo4j.permission_denied":
                 can_read = False
@@ -188,25 +191,29 @@ class Neo4jClient:
                 raise
 
         counts = Counts(nodes=None, relationships=None)
+        labels: tuple[str, ...] = ()
+        relationship_types: tuple[str, ...] = ()
         count_store = False
         if can_read:
             try:
-                counts = self._counts()
+                counts = _call_with_timeout(self._counts, deadline)
             except GraphCheckError as exc:
                 if exc.error.code == "neo4j.permission_denied":
                     can_read = False
                 else:
                     raise
             else:
-                count_store = self._count_store_usable()
+                labels, relationship_types = _call_with_timeout(self._schema_tokens, deadline)
+                count_store = _call_with_timeout(self._count_store_usable, deadline)
 
         target = RunTarget(
             database=self._profile.database,
             server_version=version,
             edition=edition,
-            fingerprint=_fingerprint(self._profile.uri, self._profile.database, version),
+            fingerprint=_fingerprint(labels, relationship_types, counts),
             capabilities=Capabilities(apoc=apoc, count_store=count_store),
         )
+        _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts
 
     def _server_info(self, *, timeout_s: float | None = None) -> tuple[str, str]:
@@ -244,20 +251,23 @@ class Neo4jClient:
             return bool(rows and int(rows[0]["count"]) > 0)
         return bool(rows)
 
-    def _can_read(self, edition: str) -> bool:
+    def _can_read(self, edition: str, *, timeout_s: float | None = None) -> bool:
         # Community Edition users have implied administrator privileges. Enterprise
         # graph security can instead hide all graph data and return an empty result,
         # so a successful MATCH is not sufficient evidence of read visibility.
         if edition != "enterprise":
             return True
 
-        rows = self.run_read(
+        deadline = _timeout_deadline(timeout_s)
+        rows = _run_read_with_timeout(
+            self,
             "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment "
-            "RETURN access, action, graph, resource, segment"
+            "RETURN access, action, graph, resource, segment",
+            _remaining_timeout(deadline),
         )
         configured_database = self._profile.database.lower()
         home_database_names = (
-            self._home_database_names()
+            self._home_database_names(timeout_s=_remaining_timeout(deadline))
             if any(str(row.get("graph", "")).upper() == "HOME" for row in rows)
             else set()
         )
@@ -300,8 +310,8 @@ class Neo4jClient:
 
         return has_full_grant("NODE(*)") and has_full_grant("RELATIONSHIP(*)")
 
-    def _home_database_names(self) -> set[str]:
-        rows = self.run_read("SHOW HOME DATABASE")
+    def _home_database_names(self, *, timeout_s: float | None = None) -> set[str]:
+        rows = _run_read_with_timeout(self, "SHOW HOME DATABASE", timeout_s)
         if not rows:
             return set()
 
@@ -312,9 +322,18 @@ class Neo4jClient:
         names.discard("")
         return names
 
-    def _counts(self) -> Counts:
-        nodes = self.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"]
-        relationships = self.run_read("MATCH ()-[r]->() RETURN count(r) AS count")[0]["count"]
+    def _counts(self, *, timeout_s: float | None = None) -> Counts:
+        deadline = _timeout_deadline(timeout_s)
+        nodes = _run_read_with_timeout(
+            self,
+            "MATCH (n) RETURN count(n) AS count",
+            _remaining_timeout(deadline),
+        )[0]["count"]
+        relationships = _run_read_with_timeout(
+            self,
+            "MATCH ()-[r]->() RETURN count(r) AS count",
+            _remaining_timeout(deadline),
+        )[0]["count"]
         return Counts(nodes=int(nodes), relationships=int(relationships))
 
     def _schema_tokens(
@@ -405,6 +424,8 @@ def _run_read_with_timeout(
     return (
         client.run_read(query) if timeout_s is None else client.run_read(query, timeout_s=timeout_s)
     )
+
+
 def init_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:

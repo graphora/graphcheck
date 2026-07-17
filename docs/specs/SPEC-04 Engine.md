@@ -39,7 +39,8 @@ The engine SHALL:
 - execute only through C2's read API and propagate per-query deadlines where supported;
 - distinguish assertion findings from compile, query, timeout, schema, and evaluation errors;
 - isolate one check's error from later checks unless `--fail-fast` is active;
-- require real node/relationship pointers for every `fail` and `warn`;
+- require real node/relationship pointers for row-level `fail` and `warn` findings and deterministic
+  measurement-scope pointers for aggregate drift findings;
 - label every sampled result as an estimate with reproducibility metadata;
 - produce a fully validated SPEC-01 `Results` model; and
 - preserve partial coverage explicitly instead of silently truncating a run.
@@ -124,7 +125,9 @@ With the default project configuration these resolve to:
 
 The JSON writer first normalizes through the SPEC-01 Pydantic model, then validates the structural
 JSON Schema, retains every frozen nullable key, and writes deterministic indented/sorted JSON with a
-trailing newline.
+trailing newline. The JSON and HTML writers share one JSON-compatible value normalizer: YAML/Python
+dates and datetimes use Pydantic's ISO representation, binary values use URL-safe base64, and sets
+are ordered by their canonical JSON representation before becoming arrays.
 
 The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and no
 JavaScript, CDN, external font, image, stylesheet, or link dependency. It opens offline and shows
@@ -305,7 +308,10 @@ The engine compiles these metrics:
 
 Count metrics return a current aggregate and population. Property coverage returns a percentage in
 the closed interval `0..100` and pointer evidence to elements missing the property. Unknown target
-keys and unsupported metrics are compile errors.
+keys and unsupported metrics are compile errors. Every node/relationship-count drift finding gets
+one deterministic aggregate-scope pointer from the metric and the target sorted by key, for example
+`node_count:label=Customer` or `relationship_count:type=OWNS`. Property-coverage drift does not use
+this fallback because its compiled query can identify the concrete elements missing the property.
 
 ## Read-only execution
 
@@ -389,7 +395,9 @@ conformance completeness's `0..1` ratio.
 
 ## Evidence accuracy contract
 
-Every `fail` and `warn` SHALL contain at least one real graph pointer. Evidence is deduplicated by
+Every `fail` and `warn` SHALL contain at least one honest evidence pointer. Row-level findings require
+real node or relationship pointers. Aggregate count drift instead carries a logical aggregate
+pointer whose ID is the canonical metric/target measurement scope. Evidence is deduplicated by
 `(kind,id)`, capped at the configured evidence cap, and labeled with `truncated`, `cap`, and
 `total_count`.
 
@@ -397,9 +405,14 @@ Accepted pointer sources are:
 
 - raw Neo4j Node and Relationship objects;
 - graph values nested in mappings, lists, sets, tuples, and path-like `nodes`/`relationships`;
-- typed mappings `{kind: node|rel, id, labels?|type?}`;
+- typed query-result mappings `{kind: node|rel, id, labels?|type?}`;
 - explicit `node_element_id`, `rel_element_id`, or `relationship_element_id` aliases; and
-- pointer evidence supplied by a baseline provider.
+- validated node/relationship evidence supplied by a baseline provider, plus aggregate baseline
+  evidence for node/relationship-count drift.
+
+Query results cannot self-declare `kind: aggregate`; only the count-drift evaluator or a validated
+baseline provider can create aggregate evidence. This prevents a pointerless conformance,
+competency, or property-coverage finding from bypassing the graph-pointer requirement.
 
 Arbitrary fields ending in `_id` are not element pointers. Domain identifiers are never promoted to
 Neo4j identity.
@@ -409,10 +422,12 @@ If an assertion fails but none of the accepted sources yields a pointer, evaluat
 competency checks intended to fail on returned rows should therefore project a node, relationship,
 path, typed pointer, or explicit element-id alias.
 
-Aggregate node/relationship-count drift has no honest current element to blame and deliberately
-returns no arbitrary evidence. Such a drift can fail only when the query/baseline supplies causal
-identity evidence; otherwise it becomes `engine.evidence_missing`. This is fail-closed behavior, not
-a skipped or passing result.
+Aggregate count-drift decreases have no honest current element to blame: deleted elements cannot be
+selected from the current graph. If neither the compiled result nor baseline provides concrete
+identity evidence, the evaluator emits a deterministic `aggregate` pointer such as
+`node_count:label=Customer`. Its `total_count` is `1` because the pointer describes one measurement
+scope, not a truncated sample of the population. It must not be used to rescue pointerless
+conformance or competency findings; those remain `engine.evidence_missing`.
 
 ## Sampling policy
 
@@ -517,7 +532,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.connector_invalid` | C2-compatible read method is absent |
 | `engine.schema_reference_missing` | Label/relationship type does not exist on the target |
 | `engine.invalid_query_result` | Query returned a malformed or inconsistent evaluator shape |
-| `engine.evidence_missing` | Failed assertion has no real graph pointer |
+| `engine.evidence_missing` | Row-level failed assertion has no real graph pointer |
 | `engine.tolerance_unsupported` / `engine.tolerance_invalid` | Drift tolerance cannot be evaluated |
 | `engine.sampling_invalid` | Population/sample plan is malformed |
 | `engine.check_unobservable` | Requested rule cannot be observed accurately in Cypher |

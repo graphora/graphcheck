@@ -1,12 +1,13 @@
 import re
 
 import pytest
+import yaml
 
-from graphcheck.contracts.check import ConformanceCheck, LoadedCheck
+from graphcheck.contracts.check import ConformanceCheck, LoadedCheck, load_suite
 from graphcheck.contracts.results import Pattern, Severity
-from graphcheck.engine import core_pack as _core_pack  # noqa: F401 - imports compiler registrations
 from graphcheck.engine.compiler import CypherCompiler, _parameter_names
 from graphcheck.errors import GraphCheckError
+from graphcheck.packs import REGISTRY
 
 
 def _loaded(name: str, config: dict[str, object]) -> LoadedCheck:
@@ -22,6 +23,11 @@ def _loaded(name: str, config: dict[str, object]) -> LoadedCheck:
 
 
 CASES = [
+    (
+        "completeness",
+        {"label": "GcComplete", "property": "gc_required_property", "threshold": 0.95},
+        "node",
+    ),
     (
         "cardinality",
         {
@@ -99,9 +105,48 @@ CASES = [
 ]
 
 
+def test_public_compiler_cases_cover_every_registered_observable_core_check():
+    assert {name for name, _config, _kind in CASES} == set(REGISTRY) - {"dangling_rels"}
+
+
+@pytest.mark.parametrize(("name", "config", "evidence_kind"), CASES)
+def test_public_suite_loader_reaches_each_observable_core_compiler(name, config, evidence_kind):
+    suite = load_suite(
+        yaml.safe_dump(
+            {
+                "suite": "core-loader",
+                "conformance": [
+                    {"id": f"loaded-{name}", "check": name, "with": config},
+                ],
+            }
+        )
+    )
+
+    compiled = CypherCompiler().compile(suite.checks[0], sample_seed=91)
+
+    assert compiled.check.spec.check == name
+    assert f"kind: '{evidence_kind}'" in compiled.query
+    assert _parameter_names(compiled.query) == compiled.params.keys()
+
+
 def test_dangling_relationship_check_fails_closed_instead_of_optimistically_passing():
+    suite = load_suite(
+        yaml.safe_dump(
+            {
+                "suite": "core-loader",
+                "conformance": [
+                    {
+                        "id": "loaded-dangling-rels",
+                        "check": "dangling_rels",
+                        "with": {"rel_type": "OWNS"},
+                    },
+                ],
+            }
+        )
+    )
+
     with pytest.raises(GraphCheckError) as caught:
-        CypherCompiler().compile(_loaded("dangling_rels", {"rel_type": "OWNS"}))
+        CypherCompiler().compile(suite.checks[0])
 
     assert caught.value.error.code == "engine.check_unobservable"
 

@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
+from graphcheck.reporting.writer import json_compatible
 
 runner = CliRunner()
 TARGET = RunTarget(
@@ -53,6 +55,12 @@ def _payload(tmp_path: Path) -> dict:
     return json.loads(
         (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(encoding="utf-8")
     )
+
+
+def test_artifact_value_normalization_is_deterministic_for_yaml_sets():
+    assert json_compatible({"values": {"gamma", "alpha", "beta"}}) == {
+        "values": ["alpha", "beta", "gamma"]
+    }
 
 
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
@@ -117,6 +125,73 @@ competency:
     assert "exit code: 0" in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
+
+
+def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(
+    tmp_path, monkeypatch
+):
+    _project(
+        tmp_path,
+        {
+            "dates.yml": """\
+suite: dates
+competency:
+  - id: pinned-date
+    question: Does the graph return the pinned date values?
+    query: RETURN $as_of AS as_of, $observed_at AS observed_at, $payload AS payload
+    params:
+      as_of: 2026-01-01
+      observed_at: 2026-01-01T12:30:00Z
+      payload: !!binary /w==
+    expect:
+      equals:
+        - as_of: 2026-01-01
+          observed_at: 2026-01-01T12:30:00Z
+          payload: !!binary /w==
+"""
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult(
+                [
+                    {
+                        "as_of": date(2026, 1, 1),
+                        "observed_at": datetime(2026, 1, 1, 12, 30, tzinfo=UTC),
+                        "payload": b"\xff",
+                    }
+                ],
+                ("as_of", "observed_at", "payload"),
+                (),
+            )
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    payload = _payload(tmp_path)
+    assert payload["checks"][0]["params"] == {
+        "as_of": "2026-01-01",
+        "observed_at": "2026-01-01T12:30:00Z",
+        "payload": "_w==",
+    }
+    assert payload["checks"][0]["expected"]["equals"] == [
+        {
+            "as_of": "2026-01-01",
+            "observed_at": "2026-01-01T12:30:00Z",
+            "payload": "_w==",
+        }
+    ]
+    assert payload["checks"][0]["measured"]["equals"] is True
+    report = (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
+        encoding="utf-8"
+    )
+    assert "2026-01-01" in report
+    assert "2026-01-01T12:30:00Z" in report
+    assert "_w==" in report
 
 
 @pytest.mark.parametrize(

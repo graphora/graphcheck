@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, Verdict
-from graphcheck.reporting.writer import load_results
+from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
     Verdict.FAIL: 0,
@@ -184,7 +184,12 @@ def _evidence(check: CheckResult) -> str:
     assert check.evidence is not None
     rows = []
     for element in check.evidence.elements:
-        descriptor = element.type if element.kind == "rel" else ", ".join(element.labels or [])
+        if element.kind == "rel":
+            descriptor = element.type
+        elif element.kind == "node":
+            descriptor = ", ".join(element.labels or [])
+        else:
+            descriptor = "aggregate measurement scope"
         rows.append(
             "<tr>"
             f"<td>{_escape(element.kind)}</td>"
@@ -196,7 +201,7 @@ def _evidence(check: CheckResult) -> str:
         "<h4>Evidence</h4>"
         f"<p>{_escape(check.evidence.message)} "
         f"({check.evidence.total_count} total, cap {check.evidence.cap})</p>"
-        "<table><thead><tr><th>Kind</th><th>ID</th><th>Labels/Type</th></tr></thead>"
+        "<table><thead><tr><th>Kind</th><th>ID</th><th>Labels/Type/Scope</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
@@ -210,7 +215,7 @@ def _details_open(check: CheckResult) -> str:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True)
+    return json.dumps(json_compatible(value), sort_keys=True)
 
 
 def _escape(value: object) -> str:

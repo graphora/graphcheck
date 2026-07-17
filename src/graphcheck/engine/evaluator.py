@@ -238,12 +238,20 @@ class VerdictEvaluator:
         if not failures:
             return Evaluation(True, measured)
         explicit = [*row.get("evidence", []), *baseline.evidence]
+        total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
+        if spec.metric in {"node_count", "relationship_count"}:
+            # Counts describe a measurement scope, not a set of currently offending elements.
+            # Keep any baseline/current pointers as supplemental context, but put the honest scope
+            # first so a small evidence cap can never replace it with an arbitrary survivor.
+            explicit.insert(0, _aggregate_count_drift_pointer(spec))
+            total_count = 1
         message = f"{compiled.name}: " + "; ".join(failures)
         evidence = _build_evidence(
             message,
             compiled,
             explicit=explicit,
-            total_count=max(1, _coerce_nonnegative_int(row.get("population", 0))),
+            total_count=total_count,
+            allow_aggregate=spec.metric in {"node_count", "relationship_count"},
         )
         return Evaluation(False, measured, evidence=evidence)
 
@@ -380,6 +388,7 @@ def _build_evidence(
     rows: Iterable[Mapping[str, Any]] = (),
     params: Mapping[str, object] | None = None,
     total_count: int,
+    allow_aggregate: bool = False,
 ) -> Evidence:
     pointers: list[EvidenceElement] = []
     for value in explicit:
@@ -390,6 +399,8 @@ def _build_evidence(
         pointers.extend(_pointers_from_row(row))
     if params:
         pointers.extend(_pointers_from_ids(params))
+    if not allow_aggregate:
+        pointers = [pointer for pointer in pointers if pointer.kind != "aggregate"]
 
     unique: list[EvidenceElement] = []
     seen: set[tuple[str, str]] = set()
@@ -405,7 +416,7 @@ def _build_evidence(
     if not unique:
         raise GraphCheckError(
             "engine.evidence_missing",
-            f"Check {compiled.check.id!r} failed but returned no node/relationship pointer.",
+            f"Check {compiled.check.id!r} failed but returned no evidence pointer.",
             "Project graph entities or `*_id` columns so every finding identifies its source.",
         )
     total = max(total_count, unique_count)
@@ -487,7 +498,7 @@ def _pointer_from_value(value: object) -> EvidenceElement | None:
             kind=kind,
             id=str(identifier),
             labels=list(value.get("labels") or []) if kind == "node" else None,
-            type=str(value["type"]) if kind == "rel" and value.get("type") is not None else None,
+            type=(str(value["type"]) if kind == "rel" and value.get("type") is not None else None),
         )
 
     identifier = getattr(value, "element_id", None)
@@ -502,6 +513,18 @@ def _pointer_from_value(value: object) -> EvidenceElement | None:
     if rel_type is not None:
         return EvidenceElement(kind="rel", id=str(identifier), type=str(rel_type))
     return None
+
+
+def _aggregate_count_drift_pointer(spec: DriftCheck) -> EvidenceElement:
+    scope = ",".join(f"{key}={spec.target[key]}" for key in sorted(spec.target)) or "graph"
+    label = spec.target.get("label")
+    rel_type = spec.target.get("type")
+    return EvidenceElement(
+        kind="aggregate",
+        id=f"{spec.metric}:{scope}",
+        labels=[str(label)] if label is not None else None,
+        type=str(rel_type) if rel_type is not None else None,
+    )
 
 
 def _drift_failures(current: float, baseline: float, tolerance: Mapping[str, object]) -> list[str]:

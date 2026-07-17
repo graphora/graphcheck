@@ -12,7 +12,7 @@ from graphcheck.contracts.check import (
     Expect,
     LoadedCheck,
 )
-from graphcheck.contracts.results import Pattern, Severity
+from graphcheck.contracts.results import EvidenceElement, Pattern, Severity
 from graphcheck.engine.baseline import BaselineValue
 from graphcheck.engine.compiler import CypherCompiler
 from graphcheck.engine.evaluator import _pointers_from_row, evaluate_check
@@ -240,6 +240,19 @@ def test_domain_property_ids_are_not_fabricated_into_element_pointers():
 
     with pytest.raises(GraphCheckError) as caught:
         evaluate_check(compiled, [{"account_id": "A-1"}], columns=["account_id"])
+
+    assert caught.value.error.code == "engine.evidence_missing"
+
+
+def test_query_rows_cannot_claim_aggregate_evidence_for_row_level_findings():
+    compiled = replace(_competency({"contains": ["expected"]}), params={})
+
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(
+            compiled,
+            [{"value": "actual", "evidence": {"kind": "aggregate", "id": "fake:scope"}}],
+            columns=["value", "evidence"],
+        )
 
     assert caught.value.error.code == "engine.evidence_missing"
 
@@ -589,6 +602,35 @@ def test_property_coverage_drift_requires_c4_percent_units(current, previous):
 
     assert caught.value.error.code == "engine.invalid_query_result"
     assert "percent units" in caught.value.error.message
+
+
+def test_property_coverage_drift_still_requires_concrete_element_evidence():
+    spec = DriftCheck(
+        id="coverage",
+        metric="property_coverage",
+        target={"label": "Customer", "property": "tax_id"},
+        baseline="release-42",
+        tolerance={"max_drop_pct": 5},
+    )
+    compiled = CypherCompiler().compile(_loaded(spec, Pattern.DRIFT))
+    row = {
+        "schema_ok": True,
+        "missing_labels": [],
+        "missing_relationship_types": [],
+        "current": 80,
+        "population": 10,
+        "evidence": [],
+    }
+
+    aggregate_only_baseline = BaselineValue(
+        100,
+        evidence=(EvidenceElement(kind="aggregate", id="property_coverage:fake"),),
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(compiled, [row], baseline=aggregate_only_baseline)
+
+    assert caught.value.error.code == "engine.evidence_missing"
 
 
 def test_evaluation_is_independent_of_check_severity():

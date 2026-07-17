@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from graphcheck.contracts.results import Pattern, Severity

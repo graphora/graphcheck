@@ -7,10 +7,10 @@ import typer
 from graphcheck import __version__
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.contracts.results import CheckError, Results
+from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
-from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.project import (
     ARTIFACTS_DIR,
     PROJECT_FILE,
@@ -114,7 +114,38 @@ def debug(
     typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
-    typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
+    can_see = []
+    if trace.visibility.can_connect:
+        can_see.append("connect")
+    if trace.visibility.can_read:
+        can_see.append("read")
+    if trace.visibility.can_show_procedures:
+        can_see.append("procedures")
+    cannot_see = []
+    if not trace.visibility.can_connect:
+        cannot_see.append("connect")
+    if not trace.visibility.can_read:
+        cannot_see.append("read")
+    if not trace.visibility.can_show_procedures:
+        cannot_see.append("procedures")
+    typer.echo(f"Credentials can see: {', '.join(can_see) if can_see else 'none detected'}")
+    cannot_see_text = ", ".join(cannot_see) if cannot_see else "none detected"
+    typer.echo(f"Credentials cannot see: {cannot_see_text}")
+    if trace.blocked_checks:
+        typer.echo("Blocked checks:")
+        for blocked in trace.blocked_checks:
+            typer.echo(
+                f"- {blocked.suite}/{blocked.check_id} requires "
+                f"{blocked.missing_capability}: {blocked.fix}"
+            )
+    else:
+        typer.echo("Blocked checks: none")
+    if trace.counts.nodes is None or trace.counts.relationships is None:
+        typer.echo("Counts: unavailable (read access denied)")
+    else:
+        typer.echo(
+            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
+        )
 
 
 @app.command("run")
@@ -297,35 +328,3 @@ def _print_run_summary(results: Results, results_path: Path, report_path: Path) 
         _print_setup_error(results.run.error)
     typer.echo(f"Results: {results_path}")
     typer.echo(f"Report: {report_path}")
-    can_see = []
-    if trace.visibility.can_connect:
-        can_see.append("connect")
-    if trace.visibility.can_read:
-        can_see.append("read")
-    if trace.visibility.can_show_procedures:
-        can_see.append("procedures")
-    cannot_see = []
-    if not trace.visibility.can_connect:
-        cannot_see.append("connect")
-    if not trace.visibility.can_read:
-        cannot_see.append("read")
-    if not trace.visibility.can_show_procedures:
-        cannot_see.append("procedures")
-    typer.echo(f"Credentials can see: {', '.join(can_see) if can_see else 'none detected'}")
-    cannot_see_text = ", ".join(cannot_see) if cannot_see else "none detected"
-    typer.echo(f"Credentials cannot see: {cannot_see_text}")
-    if trace.blocked_checks:
-        typer.echo("Blocked checks:")
-        for blocked in trace.blocked_checks:
-            typer.echo(
-                f"- {blocked.suite}/{blocked.check_id} requires "
-                f"{blocked.missing_capability}: {blocked.fix}"
-            )
-    else:
-        typer.echo("Blocked checks: none")
-    if trace.counts.nodes is None or trace.counts.relationships is None:
-        typer.echo("Counts: unavailable (read access denied)")
-    else:
-        typer.echo(
-            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
-        )

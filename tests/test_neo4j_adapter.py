@@ -167,6 +167,45 @@ def test_count_probe_recomputes_remaining_timeout_between_queries(monkeypatch):
     assert captured == [pytest.approx(9.0), pytest.approx(7.5)]
 
 
+def test_enterprise_privilege_probe_recomputes_timeout_for_home_database(monkeypatch):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    captured = []
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "MATCH",
+            "graph": "HOME",
+            "resource": "ALL_PROPERTIES",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "MATCH",
+            "graph": "HOME",
+            "resource": "ALL_PROPERTIES",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    def run_read(query, *, timeout_s):
+        captured.append(timeout_s)
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query == "SHOW HOME DATABASE":
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    ticks = iter([0.0, 1.0, 2.5])
+    monkeypatch.setattr("graphcheck.neo4j_adapter.time.monotonic", lambda: next(ticks))
+    client.run_read = run_read
+
+    assert client._can_read("enterprise", timeout_s=10.0) is True
+    assert captured == [pytest.approx(9.0), pytest.approx(7.5)]
+
+
 def test_schema_tokens_are_canonicalized_for_fingerprinting():
     client = object.__new__(Neo4jClient)
     client.run_read = lambda query: [
@@ -180,6 +219,8 @@ def test_schema_tokens_are_canonicalized_for_fingerprinting():
         ("Account", "Customer"),
         ("CONTROLS", "OWNS"),
     )
+
+
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [
@@ -696,6 +737,8 @@ def test_transaction_timeout_error_has_an_actionable_timeout_fix():
     assert mapped.error.code == "neo4j.query_failed"
     assert "timed out" in mapped.error.message
     assert "sampling" in mapped.error.fix
+
+
 def test_map_neo4j_error_uses_driver_security_code_for_permission_denial():
     exc = Exception("operation rejected")
     exc.code = "Neo.ClientError.Security.Forbidden"

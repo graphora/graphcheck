@@ -82,11 +82,11 @@ def test_completeness_compiler_parameterizes_dynamic_schema_tokens_and_evidence_
     assert compiled.params == {
         "label": label,
         "property": property_name,
-        "threshold": 0.875,
         "evidence_cap": 7,
         "required_labels": [label],
         "required_relationship_types": [],
     }
+    assert compiled.expected == {"threshold": 0.875}
     assert compiled.expected == {"threshold": 0.875}
     assert "schema_ok" in compiled.query
     assert "violation_count" in compiled.query
