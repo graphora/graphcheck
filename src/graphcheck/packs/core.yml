@@ -1,0 +1,113 @@
+pack: core
+version: 0.1.0
+checks:
+  completeness:
+    catches: Required or high-coverage properties missing from nodes with a target label.
+    does_not_catch: Whether the property value is valid, unique, or semantically correct.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: completeness
+  cardinality:
+    catches: Nodes whose expected relationship count is not exactly the configured value.
+    does_not_catch: Whether the related node is otherwise valid or whether alternate paths satisfy the model.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: cardinality
+  no_orphans:
+    catches: Nodes with a required label that have no matching relationship.
+    does_not_catch: Isolated nodes that are valid by design or missing relationships of unrelated types.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: no_orphans
+  dangling_rels:
+    catches: Relationship records whose endpoints cannot be resolved by the backing store.
+    does_not_catch: Semantically wrong relationships whose endpoints exist.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [rel]
+      id_fields: [rel_id]
+    template: dangling_rels
+  property_type:
+    catches: Property values whose observed runtime type differs from the declared type.
+    does_not_catch: Values of the correct type but invalid format or domain.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: property_type
+  property_format:
+    catches: String properties that do not match the configured regular expression.
+    does_not_catch: Missing properties unless combined with completeness.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: property_format
+  value_in_set:
+    catches: Property values outside an allowed finite set.
+    does_not_catch: Values inside the set that are stale or contextually wrong.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: value_in_set
+  uniqueness:
+    catches: Duplicate values for a property expected to be unique within a label.
+    does_not_catch: Missing values or duplicates across labels unless configured separately.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_ids]
+    template: uniqueness
+  hub_outlier:
+    catches: Nodes whose relationship degree is far above the configured population norm.
+    does_not_catch: Legitimate hubs or low-degree anomalies.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: hub_outlier
+  label_cooccurrence:
+    catches: Nodes that carry two labels declared mutually exclusive.
+    does_not_catch: Label pairs not explicitly configured.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: label_cooccurrence
+  rel_direction:
+    catches: Relationships whose endpoints imply the relationship is pointing the wrong way.
+    does_not_catch: Incorrect relationship types where the direction is otherwise valid.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [rel]
+      id_fields: [rel_id]
+    template: rel_direction
+  temporal_sanity:
+    catches: Records where an end timestamp is earlier than its start timestamp.
+    does_not_catch: Missing timestamps or timestamps that are plausible but inaccurate.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: temporal_sanity

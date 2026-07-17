@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
-import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from graphcheck.contracts.results import Pattern, Severity
+from graphcheck.contracts.scalars import JsonSchemaInteger
 from graphcheck.packs import REGISTRY
-
-
-class DuplicateKeyError(ValueError):
-    """A mapping key appeared more than once in a suite YAML file."""
+from graphcheck.yaml_loader import DuplicateKeyError as DuplicateKeyError
+from graphcheck.yaml_loader import load_yaml_mapping
 
 
 class UnknownCheckError(ValueError):
@@ -21,50 +20,36 @@ class SuiteValidationError(ValueError):
     """A suite file is syntactically valid YAML but invalid as a GraphCheck suite."""
 
 
-class _NoDuplicatesLoader(yaml.SafeLoader):
-    pass
-
-
-def _construct_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
-    mapping: dict = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise DuplicateKeyError(f"duplicate key {key!r} at {key_node.start_mark}")
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_NoDuplicatesLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping
-)
-
-
 def load_suite_yaml(text: str) -> dict:
-    # SAFETY: _NoDuplicatesLoader subclasses SafeLoader, so this is as safe as
-    # yaml.safe_load — it never constructs arbitrary Python (no !!python/object).
-    # safe_load can't be used directly because it silently keeps the last of
-    # duplicate keys; the only reason for the subclass is the duplicate-key check.
-    data = yaml.load(text, Loader=_NoDuplicatesLoader)  # noqa: S506 (SafeLoader subclass)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise SuiteValidationError("a suite file must be a mapping at the top level")
-    return data
+    try:
+        return load_yaml_mapping(text, description="a suite file")
+    except DuplicateKeyError:
+        raise
+    except ValueError as exc:
+        raise SuiteValidationError(str(exc)) from exc
+
+
+def _parse_severity(value: object) -> object:
+    if type(value) is str:
+        return Severity(value)
+    return value
+
+
+type SuiteSeverity = Annotated[Severity | None, BeforeValidator(_parse_severity)]
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class Defaults(_Strict):
-    severity: Severity | None = None
+    severity: SuiteSeverity = None
     tags: list[str] = []
 
 
 class _Envelope(_Strict):
     id: str
-    severity: Severity | None = None
+    severity: SuiteSeverity = None
     tags: list[str] = []
     provenance: str | None = None
     generated: bool = False
@@ -72,15 +57,14 @@ class _Envelope(_Strict):
 
 class ConformanceCheck(_Envelope):
     # No populate_by_name: the external key is the frozen `with` alias only, never `with_`.
-    model_config = ConfigDict(extra="forbid")
     check: str
     with_: dict = Field(alias="with")  # required — SPEC-02 freezes `check` + `with` for conformance
 
 
 class RowBounds(_Strict):
-    min: int | None = None
-    max: int | None = None
-    exactly: int | None = None
+    min: JsonSchemaInteger | None = None
+    max: JsonSchemaInteger | None = None
+    exactly: JsonSchemaInteger | None = None
 
 
 class Expect(_Strict):
