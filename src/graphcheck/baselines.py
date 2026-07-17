@@ -64,10 +64,7 @@ def set_current_baseline(filename: str | None = None) -> Path:
 
         # Default to the previous run.
         # If only one baseline exists, use that.
-        if len(baselines) == 1:
-            selected = baselines[0]
-        else:
-            selected = baselines[-2]
+        selected = baselines[0] if len(baselines) == 1 else baselines[-2]
 
     else:
         selected = {path.name: path for path in baselines}.get(filename)

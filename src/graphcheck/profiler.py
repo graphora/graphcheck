@@ -23,6 +23,7 @@ from graphcheck.contracts.profile import (
 )
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
+
 #test addition
 #DEFAULT_PROFILE_BUDGET_SECONDS = 2
 DEFAULT_PROFILE_BUDGET_SECONDS = 60

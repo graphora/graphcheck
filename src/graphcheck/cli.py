@@ -8,13 +8,11 @@ from graphcheck import __version__
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile
+from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.diff import diff as compare_baselines
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json
+from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
-from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
-from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import debug_trace, error_json, init_trace
 from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,
