@@ -40,6 +40,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
   missing schema-reference warnings become structured errors, per-query timeouts reach the driver,
   and target fingerprints now hash graph schema tokens plus counts rather than connection details.
 - Debug probing now reports checks blocked by missing Neo4j read access instead of aborting while loading graph counts, including scoped privileges and `HOME GRAPH` grants or denials.
+- Debug capability blockers now resolve `requires` from validated check-pack `.yml`/`.yaml`
+  metadata and name every suite/check blocked by missing APOC in human and JSON output.
 - Count-drift tolerance breaches now produce fail/warn findings with deterministic aggregate-scope
   evidence, including decreases to zero, instead of `engine.evidence_missing` errors.
 - All observable core conformance checks now load through the public SPEC-02 registry/compiler path;

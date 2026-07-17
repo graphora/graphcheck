@@ -11,10 +11,10 @@ acceptance. Those remain engine/runtime responsibilities.
 
 ## Status
 
-This is an incremental metadata/schema slice for C3. It does not complete the C3
-deliverable by itself. Query compilation, check execution, runtime PII matching,
-Luhn/Verhoeff validation, evidence construction, and fixture-graph assertions are
-deferred until the C1 engine and fixture graph are available.
+This is the metadata/schema contract for C3. C1 now compiles and evaluates the core
+conformance templates and consumes their validated `requires` declarations during
+`graphcheck debug` capability preflight. Runtime PII matching, Luhn/Verhoeff
+validation, and fixture-graph assertions remain deferred.
 
 ## Relationship To SPEC-02
 
@@ -73,9 +73,11 @@ other runtimes must reject duplicate mapping keys equivalently. This matters for
 the ID-keyed PII pattern objects: permissive YAML loaders can otherwise overwrite
 an earlier pattern before typed or JSON Schema validation sees it.
 
-This is a build/test contract, not the C1 runtime loader. C1 may load the YAML
-through its own integration boundary, but it must consume or faithfully implement
-this frozen shape rather than introduce a separate metadata definition.
+The same contract is used at build/test time and by C1's capability catalog at
+runtime. The catalog discovers packaged `.yml` and `.yaml` manifests and parses each
+through `load_pack_metadata_yaml`; it does not introduce a second, permissive
+metadata shape. Invalid manifests and missing capability declarations fail loudly
+rather than making a check appear runnable.
 
 ## Pack Invariants
 
@@ -263,7 +265,7 @@ Value-match reports must include location, exposure count, and confidence.
 
 ## C1 Consumption Plan
 
-C1 is expected to consume packs in this order:
+C1 consumes packs in this order:
 
 1. Load user suite YAML through SPEC-02.
 2. For each conformance `LoadedCheck`, read `spec.check` and normalized
@@ -279,17 +281,18 @@ C1 is expected to consume packs in this order:
 9. For sampled checks/findings, emit estimate metadata with sample size and
    confidence interval.
 
+The debug preflight performs steps 1–3 for every active conformance check and
+compares the metadata `requires` list with the live SPEC-03 capability probe. It
+reports the suite/check identity for each missing capability. Effective
+`generated:true` checks remain validated but are not reported as active blockers.
+
 ## Deferred Work
 
-The following are intentionally out of scope until C1 and the fixture graph exist:
+The following remain deferred:
 
-- Cypher/template implementation for each core check.
 - Runtime PII scanning and checksum execution.
 - Luhn and Verhoeff helper implementations.
 - Fixture graph assertions for planted defects.
-- Runtime evidence extraction and truncation behavior.
-- `errored` result emission for missing labels, broken queries, and timeouts.
-- Sample-size and confidence-interval computation.
 
 ## Verification
 
@@ -307,6 +310,10 @@ The tests assert:
   combined check schema.
 - SPEC-02 `load_suite()` accepts all 12 core conformance checks.
 - Core pack metadata matches the registry.
+- Runtime capability requirements are read from both `.yml` and `.yaml` pack metadata.
+- Missing APOC reports the affected suite/check identity and install action in human and JSON debug
+  output.
+- Invalid pack manifests fail debug loudly instead of suppressing blockers.
 - Every core check declares evidence pointer fields.
 - Sampled checks declare an estimate contract.
 - The PII pack is separate and declares heuristic limits.

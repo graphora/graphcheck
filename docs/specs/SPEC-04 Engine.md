@@ -576,8 +576,10 @@ engine budget reserves the remaining wall time for artifact serialization/report
 
 End-to-end assertions against `tests/fixtures/fraud-ring.cypher` remain deferred until that fixture
 lands on this branch. SPEC-01 reserves `skipped:unsupported` for capability preflight gaps; the
-current engine does not yet emit capability-based unsupported skips because the installed core
-plans do not declare a capability requirement.
+current engine run does not yet emit capability-based unsupported skips. SPEC-03 debug preflight
+does load `requires` from validated pack `.yml`/`.yaml` metadata and names blocked suite/checks;
+the installed core pack currently declares only `read`, so it has no live APOC-backed check until
+the corresponding pack manifest and implementation land.
 
 ## Deliverables
 

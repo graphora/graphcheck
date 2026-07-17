@@ -135,7 +135,7 @@ def debug(
         typer.echo("Blocked checks:")
         for blocked in trace.blocked_checks:
             typer.echo(
-                f"- {blocked.suite}/{blocked.check_id} requires "
+                f"- {blocked.suite}/{blocked.check_id} ({blocked.check}) requires "
                 f"{blocked.missing_capability}: {blocked.fix}"
             )
     else:

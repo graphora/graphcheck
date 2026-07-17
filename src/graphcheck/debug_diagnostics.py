@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,7 +16,8 @@ from graphcheck.contracts.check import (
 from graphcheck.contracts.results import Capabilities
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import BlockedCheck, Visibility
-from graphcheck.packs import PACK_REQUIREMENTS, CapabilityRequirement
+from graphcheck.packs import CapabilityRequirement
+from graphcheck.packs.catalog import PackCatalogError, load_pack_requirements
 from graphcheck.project import load_project_config
 
 APOC_INSTALL_FIX = (
@@ -47,12 +49,26 @@ class CapabilityContext:
         )
 
 
-def blocked_checks_for_project(root: Path, context: CapabilityContext) -> list[BlockedCheck]:
+def blocked_checks_for_project(
+    root: Path,
+    context: CapabilityContext,
+    *,
+    pack_paths: Iterable[Path] | None = None,
+) -> list[BlockedCheck]:
     """Report checks that cannot run because a probed database capability is missing."""
     config = load_project_config(root)
     checks_dir = root / config.checks
     if not checks_dir.exists():
         return []
+
+    try:
+        pack_requirements = load_pack_requirements(pack_paths)
+    except PackCatalogError as exc:
+        raise GraphCheckError(
+            "packs.invalid",
+            f"Could not load check pack capability metadata: {exc}",
+            "Fix the check pack YAML, then run `graphcheck debug` again.",
+        ) from exc
 
     blocked: list[BlockedCheck] = []
     for path in _suite_paths(checks_dir):
@@ -76,7 +92,13 @@ def blocked_checks_for_project(root: Path, context: CapabilityContext) -> list[B
                 continue
             if check.pattern.value != "conformance":
                 continue
-            requirements = PACK_REQUIREMENTS.get(check.spec.check, ())
+            requirements = pack_requirements.get(check.spec.check)
+            if requirements is None:
+                raise GraphCheckError(
+                    "packs.requirements_missing",
+                    f"Check {check.spec.check!r} has no capability declaration in pack metadata.",
+                    "Add the check to its pack YAML with a non-empty `requires` list.",
+                )
             for capability in requirements:
                 if _capability_present(context, capability):
                     continue
@@ -86,7 +108,7 @@ def blocked_checks_for_project(root: Path, context: CapabilityContext) -> list[B
                         check_id=check.id,
                         check=check.spec.check,
                         missing_capability=capability,
-                        fix=_capability_fix(capability),
+                        fix=_capability_fix(context, capability),
                     )
                 )
     return blocked
@@ -102,8 +124,14 @@ def _capability_present(context: CapabilityContext, capability: CapabilityRequir
     return bool(getattr(context, capability))
 
 
-def _capability_fix(capability: CapabilityRequirement) -> str:
+def _capability_fix(context: CapabilityContext, capability: CapabilityRequirement) -> str:
     if capability == "apoc":
+        if not context.show_procedures:
+            return (
+                "Grant procedure visibility and execution to the configured Neo4j user; "
+                "if APOC is not installed, install it and restart Neo4j, then run "
+                "`graphcheck debug` again."
+            )
         return APOC_INSTALL_FIX
     if capability == "read":
         return "Grant read access to the configured Neo4j user, then run `graphcheck debug` again."
