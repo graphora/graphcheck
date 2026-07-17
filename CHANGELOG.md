@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - SPEC-03 for the neo4j connector.
 - Neo4j connector foundation: project discovery, `graphcheck init`, strict connection profile loading, env-var password override, structured adapter errors, read-only Neo4j driver wrapper, capability probe, and `graphcheck debug` with stable JSON output.
 - Connector tests covering profile validation, debug JSON shape, count-store plan detection, and opt-in Neo4j 4.4 / 5.x testcontainers integration.
+- Core and PII pack metadata/schema slice: eleven additional core conformance `with` schemas, strictly typed `core.yml` and `pii.yml` metadata, a generated metadata JSON Schema, SPEC-09, and validation-parity tests.
 
 ### Changed
 
