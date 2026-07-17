@@ -24,6 +24,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
   the frozen CI exit-code contract.
 - SPEC-04 Engine, consolidating the C1 and run-command contracts into one detailed source for
   compilation, execution, evaluation, evidence, sampling, baselines, artifacts, and CI behavior.
+- Core and PII pack metadata/schema slice: eleven additional core conformance `with` schemas, strictly typed `core.yml` and `pii.yml` metadata, a generated metadata JSON Schema, SPEC-09, and validation-parity tests.
 
 ### Changed
 
@@ -36,6 +37,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - The connector's rich read path now preserves result columns, graph entities, and notifications;
   missing schema-reference warnings become structured errors, per-query timeouts reach the driver,
   and target fingerprints now hash graph schema tokens plus counts rather than connection details.
+- Debug probing now reports checks blocked by missing Neo4j read access instead of aborting while loading graph counts, including scoped privileges and `HOME GRAPH` grants or denials.
 
 ### Changed
 

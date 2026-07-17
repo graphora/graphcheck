@@ -18,8 +18,9 @@ Commands discover the project root by walking upward from the current working di
 It also ensures `profiles.yml` and `.graphcheck/` are present in `.gitignore`.
 
 The init command attempts to connect to `bolt://localhost:7687` using the generated local profile.
-If a local Neo4j instance is reachable, it reports the server version. If not, init still writes the
-project files and tells the user to edit `profiles.yml` and run `graphcheck debug`.
+If a local Neo4j instance is reachable, it reports the server version and performs the APOC
+capability check. If not, init still writes the project files and tells the user to edit
+`profiles.yml` and run `graphcheck debug`.
 
 ## `graphcheck.yml`
 
@@ -80,6 +81,7 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `profile.invalid` | `profiles.yml` or `graphcheck.yml` is malformed or has unknown keys. |
 | `profile.not_found` | The selected profile name does not exist. |
 | `profile.password_missing` | The selected profile has no resolved password. |
+| `checks.invalid` | A check suite could not be loaded while building the debug trace. |
 | `neo4j.unreachable` | The Bolt endpoint cannot be reached. |
 | `neo4j.auth_failed` | Credentials were rejected. |
 | `neo4j.database_not_found` | The configured database does not exist or is unavailable. |
@@ -103,22 +105,56 @@ The probe returns a `RunTarget` compatible with SPEC-01:
 }
 ```
 
-APOC is binary: `true` only when an APOC procedure can be called successfully.
+APOC is binary: `true` only when an APOC procedure can be called successfully. The CLI performs
+this APOC procedure check during both `graphcheck init` and `graphcheck debug` so setup feedback
+and the stable debug trace report the same live capability.
 
 `count_store` is `true` only when GraphCheck can verify that a simple count query is planned with
 a count-store operator. The v0 probe uses `EXPLAIN MATCH (n) RETURN count(n) AS count` and looks
 for `NodeCountFromCountStore` in the plan.
 
-The debug path also reports total node and relationship counts:
+When read visibility is available, the debug path reports total node and relationship counts:
 
 ```cypher
 MATCH (n) RETURN count(n) AS count
 MATCH ()-[r]->() RETURN count(r) AS count
 ```
 
+On Enterprise Edition, the probe checks the current user's effective graph privileges independently
+of these count queries. Full read visibility requires unrestricted access to all properties on both
+`NODE(*)` and `RELATIONSHIP(*)`; label-, relationship-type-, property-, or pattern-scoped grants do
+not satisfy it, and any applicable scoped denial makes it false. This distinguishes an empty graph
+from Neo4j's security-filtered empty view for a user without full graph read privileges. If read
+visibility is absent, or permission is denied while loading the counts, debug continues with
+`can_read: false` and both count values set to `null`.
+
+Privileges reported with `graph: "HOME"` are resolved using `SHOW HOME DATABASE`. They apply only
+when the configured database name or alias resolves to the current user's home database, so home
+grants and denials participate in the same full-visibility evaluation as named and wildcard grants.
+
+The human output also reports what the credentials can and cannot see from the successful probe:
+connectivity, read access, and procedure visibility.
+
+When a loaded check suite declares a capability requirement that the target does not satisfy, debug
+reports the blocked check id and a fix. In v0 this is a preflight report only; C1 owns turning the
+same condition into skipped or errored check results during an actual run.
+
+Capability requirements come from `graphcheck.packs.PACK_REQUIREMENTS`, not from the CLI. The
+supported requirement vocabulary is:
+
+- `read`
+- `show_procedures`
+- `apoc`
+- `count_store`
+
+Debug scans both `*.yml` and `*.yaml` files in the configured checks directory. Checks whose
+effective `generated` flag is `true` are validated by the loader but are not reported as active
+blockers.
+
 ## Stable debug JSON
 
-`graphcheck debug --json` emits the following trace.
+`graphcheck debug --json` emits the following trace. Debug verifies connectivity, server metadata,
+APOC usability, count-store usability, graph counts, and check capability blockers.
 
 Success:
 
@@ -144,7 +180,16 @@ Success:
   "counts": {
     "nodes": 0,
     "relationships": 0
-  }
+  },
+  "blocked_checks": [
+    {
+      "suite": "example",
+      "check_id": "apoc-backed-check",
+      "check": "future_apoc_check",
+      "missing_capability": "apoc",
+      "fix": "Install APOC for this Neo4j DBMS, restart Neo4j, then run `graphcheck debug` again."
+    }
+  ]
 }
 ```
 

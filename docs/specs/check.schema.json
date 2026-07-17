@@ -1,4 +1,5 @@
 {
+  "$comment": "Portable structural contract. Consumers must additionally enforce the semantic invariants in SPEC-02: globally unique check ids, distinct label_cooccurrence labels, distinct rel_direction endpoint labels, and distinct temporal_sanity properties. GraphCheck enforces them in load_suite().",
   "$defs": {
     "CompetencyCheck": {
       "additionalProperties": false,
@@ -42,14 +43,7 @@
           "type": "string"
         },
         "severity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Severity"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SuiteSeverity",
           "default": null
         },
         "tags": {
@@ -109,14 +103,7 @@
           "title": "Provenance"
         },
         "severity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Severity"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SuiteSeverity",
           "default": null
         },
         "tags": {
@@ -145,14 +132,7 @@
       "additionalProperties": false,
       "properties": {
         "severity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Severity"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SuiteSeverity",
           "default": null
         },
         "tags": {
@@ -201,14 +181,7 @@
           "title": "Provenance"
         },
         "severity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Severity"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SuiteSeverity",
           "default": null
         },
         "tags": {
@@ -373,8 +346,75 @@
       "title": "Severity",
       "type": "string"
     },
+    "SuiteSeverity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Severity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "WithByCheck": {
       "oneOf": [
+        {
+          "properties": {
+            "check": {
+              "const": "cardinality"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Direction",
+                  "type": "string"
+                },
+                "exactly": {
+                  "default": 1,
+                  "minimum": 0,
+                  "title": "Exactly",
+                  "type": "integer"
+                },
+                "from_label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "From Label",
+                  "type": "string"
+                },
+                "rel_type": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Rel Type",
+                  "type": "string"
+                },
+                "to_label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "To Label",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from_label",
+                "rel_type",
+                "to_label"
+              ],
+              "title": "CardinalityWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
         {
           "properties": {
             "check": {
@@ -384,15 +424,21 @@
               "additionalProperties": false,
               "properties": {
                 "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
                   "title": "Label",
                   "type": "string"
                 },
                 "property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
                   "title": "Property",
                   "type": "string"
                 },
                 "threshold": {
                   "default": 1.0,
+                  "exclusiveMinimum": 0.0,
+                  "maximum": 1.0,
                   "title": "Threshold",
                   "type": "number"
                 }
@@ -409,10 +455,458 @@
             "check",
             "with"
           ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "dangling_rels"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "rel_type": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Rel Type"
+                }
+              },
+              "title": "DanglingRelsWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "hub_outlier"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "direction": {
+                  "default": "any",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Direction",
+                  "type": "string"
+                },
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "rel_type": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Rel Type"
+                },
+                "sample_size": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Sample Size"
+                },
+                "z_threshold": {
+                  "default": 3.0,
+                  "exclusiveMinimum": 0.0,
+                  "title": "Z Threshold",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "label"
+              ],
+              "title": "HubOutlierWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "label_cooccurrence"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "label_a": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label A",
+                  "type": "string"
+                },
+                "label_b": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label B",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label_a",
+                "label_b"
+              ],
+              "title": "LabelCooccurrenceWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "no_orphans"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "direction": {
+                  "default": "any",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Direction",
+                  "type": "string"
+                },
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "rel_type": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Rel Type"
+                }
+              },
+              "required": [
+                "label"
+              ],
+              "title": "NoOrphansWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "property_format"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Property",
+                  "type": "string"
+                },
+                "regex": {
+                  "format": "regex",
+                  "minLength": 1,
+                  "title": "Regex",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "property",
+                "regex"
+              ],
+              "title": "PropertyFormatWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "property_type"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Property",
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "string",
+                    "integer",
+                    "float",
+                    "boolean",
+                    "date",
+                    "datetime"
+                  ],
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "property",
+                "type"
+              ],
+              "title": "PropertyTypeWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "rel_direction"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "from_label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "From Label",
+                  "type": "string"
+                },
+                "rel_type": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Rel Type",
+                  "type": "string"
+                },
+                "to_label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "To Label",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from_label",
+                "rel_type",
+                "to_label"
+              ],
+              "title": "RelDirectionWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "temporal_sanity"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "end_property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "End Property",
+                  "type": "string"
+                },
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "start_property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Start Property",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "start_property",
+                "end_property"
+              ],
+              "title": "TemporalSanityWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "uniqueness"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Property",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "property"
+              ],
+              "title": "UniquenessWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "value_in_set"
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Label",
+                  "type": "string"
+                },
+                "property": {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Property",
+                  "type": "string"
+                },
+                "values": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "title": "Values",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "label",
+                "property",
+                "values"
+              ],
+              "title": "ValueInSetWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
         }
       ]
     }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "competency": {

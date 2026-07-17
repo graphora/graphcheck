@@ -14,6 +14,7 @@ from graphcheck.neo4j_adapter import (
     _plan_has_operator,
     debug_trace,
     error_json,
+    init_trace,
     map_neo4j_error,
 )
 
@@ -74,6 +75,7 @@ def test_debug_trace_json_shape_matches_spec():
             "can_show_procedures": True,
         },
         "counts": {"nodes": 7, "relationships": 11},
+        "blocked_checks": [],
     }
 
 
@@ -178,6 +180,252 @@ def test_schema_tokens_are_canonicalized_for_fingerprinting():
         ("Account", "Customer"),
         ("CONTROLS", "OWNS"),
     )
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        (
+            [
+                {
+                    "access": "GRANTED",
+                    "action": "match",
+                    "graph": "*",
+                    "resource": "all_properties",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "match",
+                    "graph": "*",
+                    "resource": "all_properties",
+                    "segment": "RELATIONSHIP(*)",
+                },
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "access": "GRANTED",
+                    "action": "traverse",
+                    "graph": "neo4j",
+                    "resource": "graph",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "read",
+                    "graph": "neo4j",
+                    "resource": "all_properties",
+                    "segment": "NODE(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "traverse",
+                    "graph": "neo4j",
+                    "resource": "graph",
+                    "segment": "RELATIONSHIP(*)",
+                },
+                {
+                    "access": "GRANTED",
+                    "action": "read",
+                    "graph": "neo4j",
+                    "resource": "all_properties",
+                    "segment": "RELATIONSHIP(*)",
+                },
+            ],
+            True,
+        ),
+        ([{"access": "GRANTED", "action": "access", "graph": "neo4j"}], False),
+    ],
+)
+def test_enterprise_read_probe_uses_current_user_graph_privileges(rows, expected):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: rows
+
+    assert client._can_read("enterprise") is expected
+
+
+def test_enterprise_read_probe_rejects_label_and_property_scoped_grant():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "neo4j",
+            "resource": "property(name)",
+            "segment": "NODE(Customer)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "neo4j",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    assert client._can_read("enterprise") is False
+
+
+def test_enterprise_read_probe_rejects_scoped_denial():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query: [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "neo4j",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    assert client._can_read("enterprise") is False
+
+
+def test_enterprise_read_probe_resolves_full_home_graph_grant():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_reader", password="pw", database="neo4j"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "HOME",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "HOME",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is True
+
+
+def test_enterprise_read_probe_applies_scoped_home_graph_denial():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_denied", password="pw", database="neo4j"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "HOME",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is False
+
+
+def test_enterprise_read_probe_ignores_home_denial_for_non_home_database():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="home_denied", password="pw", database="analytics"
+    )
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "match",
+            "graph": "*",
+            "resource": "all_properties",
+            "segment": "RELATIONSHIP(*)",
+        },
+        {
+            "access": "DENIED",
+            "action": "read",
+            "graph": "HOME",
+            "resource": "property(ssn)",
+            "segment": "NODE(Customer)",
+        },
+    ]
+
+    def run_read(query):
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query.startswith("SHOW HOME DATABASE"):
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+
+    assert client._can_read("enterprise") is True
+
+
+def test_community_read_probe_uses_implied_admin_privileges():
+    client = object.__new__(Neo4jClient)
+    client.run_read = lambda query: pytest.fail("Community probe should not inspect RBAC")
+
+    assert client._can_read("community") is True
 
 
 def test_apoc_probe_falls_back_to_show_procedures_when_version_is_missing():
@@ -221,6 +469,7 @@ def test_probe_handles_permission_denied_apoc_probe():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
+    client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._schema_tokens = lambda: (("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
@@ -245,6 +494,7 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
+    client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._schema_tokens = lambda: (("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
@@ -263,6 +513,52 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     assert target.capabilities.apoc is False
     assert visibility.can_show_procedures is True
     assert counts == Counts(nodes=1, relationships=2)
+
+
+def test_probe_skips_counts_when_read_privilege_is_missing():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: False
+    client._counts = lambda: pytest.fail("counts must not run without read visibility")
+    client._count_store_usable = lambda: pytest.fail(
+        "count-store probe must not run without read visibility"
+    )
+
+    target, visibility, counts = client.probe()
+
+    assert visibility.can_read is False
+    assert target.capabilities.count_store is False
+    assert counts == Counts(nodes=None, relationships=None)
+
+
+def test_probe_handles_permission_denied_while_loading_counts():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="restricted", password="pw", database="neo4j"
+    )
+    client.verify = lambda: None
+    client._server_info = lambda: ("5.18.0", "enterprise")
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: True
+    client._count_store_usable = lambda: pytest.fail(
+        "count-store probe must not run after count permission denial"
+    )
+
+    def counts_denied():
+        raise GraphCheckError("neo4j.permission_denied", "denied", "fix")
+
+    client._counts = counts_denied
+
+    target, visibility, counts = client.probe()
+
+    assert visibility.can_read is False
+    assert target.capabilities.count_store is False
+    assert counts == Counts(nodes=None, relationships=None)
 
 
 def test_probe_reraises_unexpected_apoc_probe_error():
@@ -311,7 +607,7 @@ def test_debug_trace_closes_client(monkeypatch):
                     server_version="5",
                     edition="community",
                     fingerprint="fp",
-                    capabilities=Capabilities(apoc=False, count_store=False),
+                    capabilities=Capabilities(apoc=True, count_store=False),
                 ),
                 Visibility(True, True, True),
                 Counts(0, 0),
@@ -331,6 +627,44 @@ def test_debug_trace_closes_client(monkeypatch):
     )
 
     assert trace.profile == "local"
+    assert trace.target.capabilities.apoc is True
+    assert closed is True
+
+
+def test_init_trace_uses_apoc_probe(monkeypatch):
+    closed = False
+
+    class FakeClient:
+        def __init__(self, profile):
+            self.profile = profile
+
+        def probe(self):
+            return (
+                RunTarget(
+                    database="neo4j",
+                    server_version="5",
+                    edition="community",
+                    fingerprint="fp",
+                    capabilities=Capabilities(apoc=True, count_store=False),
+                ),
+                Visibility(True, True, True),
+                Counts(0, 0),
+            )
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("graphcheck.neo4j_adapter.Neo4jClient", FakeClient)
+
+    trace = init_trace(
+        "local",
+        ConnectionProfile(
+            uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+        ),
+    )
+
+    assert trace.target.capabilities.apoc is True
     assert closed is True
 
 
@@ -362,6 +696,11 @@ def test_transaction_timeout_error_has_an_actionable_timeout_fix():
     assert mapped.error.code == "neo4j.query_failed"
     assert "timed out" in mapped.error.message
     assert "sampling" in mapped.error.fix
+def test_map_neo4j_error_uses_driver_security_code_for_permission_denial():
+    exc = Exception("operation rejected")
+    exc.code = "Neo.ClientError.Security.Forbidden"
+
+    assert map_neo4j_error(exc).error.code == "neo4j.permission_denied"
 
 
 def test_run_read_uses_read_access_mode(monkeypatch):
