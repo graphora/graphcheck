@@ -28,7 +28,7 @@ def test_help_runs():
 
 def test_init_writes_project_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
 
     result = runner.invoke(app, ["init"])
 
@@ -43,7 +43,7 @@ def test_init_writes_project_files(tmp_path, monkeypatch):
 def test_init_reports_connection_error_details(tmp_path, monkeypatch):
     from graphcheck.errors import GraphCheckError
 
-    def fail_debug_trace(profile_name, profile):
+    def fail_init_trace(profile_name, profile):
         raise GraphCheckError(
             "neo4j.auth_failed",
             "Neo4j rejected the configured credentials.",
@@ -51,7 +51,7 @@ def test_init_reports_connection_error_details(tmp_path, monkeypatch):
         )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", fail_debug_trace)
+    monkeypatch.setattr("graphcheck.cli.init_trace", fail_init_trace)
 
     result = runner.invoke(app, ["init"])
 
@@ -62,7 +62,19 @@ def test_init_reports_connection_error_details(tmp_path, monkeypatch):
 
 
 def test_debug_json_reports_profile_error(tmp_path, monkeypatch):
+    from graphcheck.errors import GraphCheckError
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.find_project_root",
+        lambda: (_ for _ in ()).throw(
+            GraphCheckError(
+                "project.missing",
+                "No graphcheck.yml found.",
+                "Run `graphcheck init` first.",
+            )
+        ),
+    )
 
     result = runner.invoke(app, ["debug", "--json"])
 
@@ -86,18 +98,35 @@ def _trace():
     )
 
 
+def _trace_without_read():
+    return DebugTrace(
+        profile="local",
+        target=RunTarget(
+            database="neo4j",
+            server_version="5.18.0",
+            edition="enterprise",
+            fingerprint="abc123",
+            capabilities=Capabilities(apoc=True, count_store=True),
+        ),
+        visibility=Visibility(can_connect=True, can_read=False, can_show_procedures=True),
+        counts=Counts(nodes=None, relationships=None),
+    )
+
+
 def test_init_reports_detected_neo4j(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
 
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
     assert "Detected Neo4j at bolt://localhost:7687 (version 5.18.0)" in result.stdout
+    assert "APOC: yes" in result.stdout
 
 
 def test_debug_json_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
 
@@ -106,11 +135,14 @@ def test_debug_json_success(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
     assert '"server_version": "5.18.0"' in result.stdout
+    assert '"apoc": true' in result.stdout
+    assert '"blocked_checks": []' in result.stdout
     assert '"nodes": 3' in result.stdout
 
 
 def test_debug_human_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
 
@@ -120,6 +152,10 @@ def test_debug_human_success(tmp_path, monkeypatch):
     assert "Neo4j version: 5.18.0" in result.stdout
     assert "Edition: enterprise" in result.stdout
     assert "Database name: neo4j" in result.stdout
+    assert "APOC: yes" in result.stdout
+    assert "Credentials can see: connect, read, procedures" in result.stdout
+    assert "Credentials cannot see: none detected" in result.stdout
+    assert "Blocked checks: none" in result.stdout
     assert "Counts: 3 nodes, 4 relationships" in result.stdout
 
 
@@ -322,3 +358,36 @@ def _different_target_baselines(tmp_path):
     current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
     latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
     return current_path, latest_path
+def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
+    )
+
+    result = runner.invoke(app, ["debug"])
+
+    assert result.exit_code == 0
+    assert "Credentials cannot see: read" in result.stdout
+    assert "Blocked checks:" in result.stdout
+    assert "example/customer-name-present requires read" in result.stdout
+    assert "Grant read access" in result.stdout
+    assert "Counts: unavailable (read access denied)" in result.stdout
+
+
+def test_debug_json_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
+    )
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 0
+    assert '"blocked_checks": [' in result.stdout
+    assert '"check_id": "customer-name-present"' in result.stdout
+    assert '"missing_capability": "read"' in result.stdout
+    assert "Grant read access" in result.stdout

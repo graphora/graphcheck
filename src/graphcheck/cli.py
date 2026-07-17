@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import typer
@@ -11,6 +12,9 @@ from graphcheck.diff import diff as compare_baselines
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json
 from graphcheck.profiler import profile as build_profile
+from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
+from graphcheck.errors import GraphCheckError
+from graphcheck.neo4j_adapter import debug_trace, error_json, init_trace
 from graphcheck.project import (
     PROJECT_FILE,
     ensure_gitignore_entries,
@@ -60,13 +64,14 @@ def init() -> None:
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
     try:
-        trace = debug_trace(profile_name, profile)
+        trace = init_trace(profile_name, profile)
     except GraphCheckError as exc:
         typer.echo(f"Neo4j was not detected: {exc.error.code}")
         typer.echo(exc.error.message)
         typer.echo(f"Fix: {exc.error.fix}")
     else:
         typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
+        typer.echo(f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}")
     typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
 
 
@@ -82,6 +87,15 @@ def debug(
         profiles = load_profiles(root)
         profile_name, selected = select_profile(profiles, profile)
         trace = debug_trace(profile_name, selected)
+        trace = replace(
+            trace,
+            blocked_checks=tuple(
+                blocked_checks_for_project(
+                    root,
+                    CapabilityContext.from_probe(trace.target.capabilities, trace.visibility),
+                )
+            ),
+        )
     except GraphCheckError as exc:
         payload = error_json(profile_name, exc.error)
         if json_output:
@@ -102,8 +116,38 @@ def debug(
     typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
-    typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
-
+    can_see = []
+    if trace.visibility.can_connect:
+        can_see.append("connect")
+    if trace.visibility.can_read:
+        can_see.append("read")
+    if trace.visibility.can_show_procedures:
+        can_see.append("procedures")
+    cannot_see = []
+    if not trace.visibility.can_connect:
+        cannot_see.append("connect")
+    if not trace.visibility.can_read:
+        cannot_see.append("read")
+    if not trace.visibility.can_show_procedures:
+        cannot_see.append("procedures")
+    typer.echo(f"Credentials can see: {', '.join(can_see) if can_see else 'none detected'}")
+    cannot_see_text = ", ".join(cannot_see) if cannot_see else "none detected"
+    typer.echo(f"Credentials cannot see: {cannot_see_text}")
+    if trace.blocked_checks:
+        typer.echo("Blocked checks:")
+        for blocked in trace.blocked_checks:
+            typer.echo(
+                f"- {blocked.suite}/{blocked.check_id} requires "
+                f"{blocked.missing_capability}: {blocked.fix}"
+            )
+    else:
+        typer.echo("Blocked checks: none")
+    if trace.counts.nodes is None or trace.counts.relationships is None:
+        typer.echo("Counts: unavailable (read access denied)")
+    else:
+        typer.echo(
+            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
+        )
 
 @app.command()
 def profile(
@@ -248,3 +292,4 @@ def _print_profile_summary(
     typer.echo()
 
     typer.echo(f"Baseline written to:\n{baseline_path}")
+    
