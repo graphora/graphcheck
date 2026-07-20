@@ -102,10 +102,15 @@ def test_pii_checks_compile_from_public_suite_yaml_as_parameterized_sampled_quer
     assert compiled.population_query
     assert _parameter_names(compiled.query) == compiled.params.keys()
     assert "sample_size" in compiled.params
-    assert "sample_seed" in compiled.params
+    for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
+        assert name in compiled.params
+    assert "sample_population" not in compiled.params
     assert "completeness_notice" in compiled.expected
     assert compiled.evidence_kinds == ("node",)
     assert compiled.evidence_id_fields == ("node_id",)
+    if check == "pii_value_match":
+        assert "toStringOrNull(raw) = raw" in compiled.query
+        assert "toString(raw)" not in compiled.query
 
 
 @pytest.mark.parametrize("check", ["pii_name_match", "pii_value_match"])
@@ -127,7 +132,15 @@ def test_pii_query_sampling_order_is_seeded_and_deterministic(check):
 
     assert first.query == repeated.query == changed.query
     assert first.params == repeated.params
-    assert first.params["sample_seed"] != changed.params["sample_seed"]
+    hash_names = ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d")
+    assert tuple(first.params[name] for name in hash_names) != tuple(
+        changed.params[name] for name in hash_names
+    )
+    assert "WITH n, property, raw ORDER BY id(n), property" in first.query
+    assert "_gc_node_properties[_gc_property_index] AS occurrence" in first.query
+    assert "+ _gc_property_index) % 2147483647" in first.query
+    assert "$sample_hash_a * (_gc_occurrence_key)" in first.query
+    assert "$sample_population AS population" not in first.query
 
 
 def test_unknown_pii_pattern_fails_loudly_at_compilation():
@@ -334,8 +347,35 @@ conformance:
     assert check.estimate is not False
     assert check.estimate.sample_size == 2
     assert check.estimate.ci is not None
-    assert check.params["sample_population"] == 100
+    assert "sample_population" not in check.params
     assert len(client.calls) == 2
+
+
+def test_engine_errors_when_pii_population_changes_after_sampling_preflight():
+    candidates = [
+        {"evidence": _pointer(f"n-{index}", "Customer"), "property": "email"} for index in range(5)
+    ]
+    client = Client(
+        [
+            RichResult([{"population": 5}], ("population",)),
+            RichResult(
+                [_summary(population=10, candidates=candidates)],
+                ("schema_ok", "population", "sample_size", "candidates"),
+            ),
+        ]
+    )
+    suite = """suite: pii
+conformance:
+  - id: names
+    check: pii_name_match
+    with: {patterns: [email]}
+"""
+
+    results = Engine(client).run_yaml(suite, target=TARGET)
+
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "engine.invalid_query_result"
+    assert "population disagrees" in results.checks[0].error.message
 
 
 def test_missing_pii_label_and_population_timeout_are_errored_not_passed():

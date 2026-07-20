@@ -115,6 +115,36 @@ def test_regression_equals_is_exact_and_deterministic(actual, expected):
             raise AssertionError("a pointerless failure must be errored")
 
 
+@given(actual=st.booleans())
+def test_regression_never_treats_boolean_as_the_corresponding_integer(actual):
+    expected = int(actual)
+    data = {
+        "suite": "property-regression-types",
+        "competency": [
+            {
+                "id": "typed-regression",
+                "question": "Does the pinned typed value match?",
+                "query": "RETURN $value AS value, $node_element_id AS node_element_id",
+                "params": {"value": actual, "node_element_id": "n-1"},
+                "expect": {
+                    "columns": ["value", "node_element_id"],
+                    "equals": [{"value": expected, "node_element_id": "n-1"}],
+                },
+            }
+        ],
+    }
+    compiled = compile_check(load_suite(yaml.safe_dump(data)).checks[0])
+
+    result = evaluate_check(
+        compiled,
+        [{"value": actual, "node_element_id": "n-1"}],
+        columns=("value", "node_element_id"),
+    )
+
+    assert result.passed is False
+    assert result.evidence is not None
+
+
 @given(
     values=st.lists(st.text(min_size=1, max_size=12), min_size=1, max_size=12, unique=True),
     index=st.integers(min_value=0, max_value=30),

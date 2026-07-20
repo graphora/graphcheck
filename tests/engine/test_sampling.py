@@ -7,8 +7,12 @@ from hypothesis import strategies as st
 from graphcheck.contracts.results import Estimate
 from graphcheck.engine.sampling import (
     CONFIDENCE_95,
+    CYPHER_SAMPLE_MODULUS,
     SamplingDecision,
     SamplingPolicy,
+    cypher_hash_expression,
+    cypher_hash_parameters,
+    cypher_hash_value,
     derive_check_seed,
     deterministic_sample_indices,
     wilson_estimate,
@@ -88,7 +92,7 @@ def test_exact_at_limit_and_when_configured_sample_covers_population():
 
     for decision in (at_limit, sample_covers_all):
         assert decision.sampled is False
-        assert decision.indices is None
+        assert decision.exact is True
         assert decision.sample_size == decision.population
         assert decision.estimate(0) is False
 
@@ -100,7 +104,7 @@ def test_empty_population_is_exact():
         population=0,
         sample_size=0,
         seed=decision.seed,
-        indices=None,
+        exact=True,
     )
     assert decision.estimate(0) is False
 
@@ -114,12 +118,54 @@ def test_large_population_is_sampled_deterministically_per_check():
 
     assert first == repeat
     assert first.sampled is True
+    assert first.exact is False
     assert first.sample_size == 8
-    assert first.indices == tuple(sorted(first.indices))
-    assert len(set(first.indices)) == 8
-    assert all(0 <= index < 1_000 for index in first.indices)
     assert first.seed != other_check.seed
-    assert first.indices != other_check.indices
+
+
+def test_cypher_hash_parameters_are_deterministic_and_seed_sensitive():
+    first = cypher_hash_parameters(123)
+
+    assert first == cypher_hash_parameters(123)
+    assert first != cypher_hash_parameters(124)
+    assert set(first) == {"sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"}
+    assert all(0 <= value < CYPHER_SAMPLE_MODULUS for value in first.values())
+
+
+def test_cypher_cubic_hash_does_not_bias_positions_in_a_dense_id_range():
+    selected = dict.fromkeys(range(10), 0)
+    for seed in range(8192):
+        params = cypher_hash_parameters(seed)
+        winner = min(selected, key=lambda node_id: cypher_hash_value(node_id, params))
+        selected[winner] += 1
+
+    for count in selected.values():
+        assert count / sum(selected.values()) == pytest.approx(0.1, abs=0.02)
+
+
+def test_cypher_hash_expression_uses_only_parameterized_safe_horner_products():
+    expression = cypher_hash_expression("candidate")
+
+    assert expression.count("candidate") == 3
+    assert all(f"${name}" in expression for name in cypher_hash_parameters(1))
+    assert str(CYPHER_SAMPLE_MODULUS) in expression
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {
+            "sample_hash_a": CYPHER_SAMPLE_MODULUS,
+            "sample_hash_b": 0,
+            "sample_hash_c": 0,
+            "sample_hash_d": 0,
+        },
+    ],
+)
+def test_cypher_hash_value_rejects_missing_or_out_of_field_coefficients(params):
+    with pytest.raises((TypeError, ValueError)):
+        cypher_hash_value(1, params)
 
 
 @given(
@@ -211,11 +257,9 @@ def test_decision_rejects_positive_count_beyond_observed_rows_even_when_exact():
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"population": 10, "sample_size": 9, "seed": 1, "indices": None},
-        {"population": 10, "sample_size": 0, "seed": 1, "indices": ()},
-        {"population": 10, "sample_size": 2, "seed": 1, "indices": (1, 1)},
-        {"population": 10, "sample_size": 2, "seed": 1, "indices": (2, 1)},
-        {"population": 10, "sample_size": 2, "seed": 1, "indices": (1, 10)},
+        {"population": 10, "sample_size": 9, "seed": 1, "exact": True},
+        {"population": 10, "sample_size": 0, "seed": 1, "exact": False},
+        {"population": 10, "sample_size": 2, "seed": 1, "exact": "no"},
     ],
 )
 def test_sampling_decision_enforces_internal_invariants(kwargs):

@@ -61,7 +61,7 @@ class NoOrphansWith(_WithBase):
     direction: Literal["out", "in", "any"] = "any"
 
 
-@register("dangling_rels")
+@register("dangling_rels", requires=("read", "store_consistency"))
 class DanglingRelsWith(_WithBase):
     rel_type: Identifier | None = None
 

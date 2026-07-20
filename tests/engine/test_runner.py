@@ -74,6 +74,14 @@ drift:
     tolerance: {max_drop_pct: 10}
 """
 
+DANGLING_SUITE = """\
+suite: store-integrity
+conformance:
+  - id: dangling
+    check: dangling_rels
+    with: {rel_type: OWNS}
+"""
+
 
 @dataclass(frozen=True)
 class RichResult:
@@ -356,6 +364,19 @@ def test_generated_check_is_validated_then_skipped_without_connector_read():
     assert check.compiled_query is None
     assert check.params is None
     assert client.probe_calls == 0
+    assert client.read_calls == []
+
+
+def test_unobservable_dangling_check_is_explicit_unsupported_partial_skip():
+    client = RichClient([])
+
+    results = _engine(client).run_yaml(DANGLING_SUITE, target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.SKIPPED
+    assert check.skip_reason is SkipReason.UNSUPPORTED
+    assert results.run.status is RunStatus.PARTIAL
+    assert "requires missing capability: store_consistency" in results.run.partial_reason
     assert client.read_calls == []
 
 

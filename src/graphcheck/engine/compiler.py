@@ -278,12 +278,12 @@ class CypherCompiler:
         capabilities = getattr(target, "capabilities", None)
         missing: list[str] = []
         for requirement in definition.requires:
-            unavailable = (
-                requirement == "apoc" and not bool(getattr(capabilities, "apoc", False))
-            ) or (
-                requirement == "count_store"
-                and not bool(getattr(capabilities, "count_store", False))
-            )
+            if requirement == "read":
+                # A successful C2 target probe establishes the engine's read path. Individual
+                # permission gaps still surface as errored checks rather than optimistic skips.
+                unavailable = False
+            else:
+                unavailable = not bool(getattr(capabilities, requirement, False))
             if unavailable:
                 missing.append(requirement)
         return tuple(missing)

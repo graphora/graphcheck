@@ -14,12 +14,14 @@ def _context(
     show_procedures: bool = True,
     apoc: bool = True,
     count_store: bool = True,
+    store_consistency: bool = False,
 ) -> CapabilityContext:
     return CapabilityContext(
         read=read,
         show_procedures=show_procedures,
         apoc=apoc,
         count_store=count_store,
+        store_consistency=store_consistency,
     )
 
 
@@ -31,6 +33,18 @@ conformance:
     check: completeness
     with: {{ label: Customer, property: name }}
 {generated}""",
+        encoding="utf-8",
+    )
+
+
+def _write_dangling_suite(path: Path) -> None:
+    path.write_text(
+        """suite: store-integrity
+conformance:
+  - id: dangling
+    check: dangling_rels
+    with: {rel_type: OWNS}
+""",
         encoding="utf-8",
     )
 
@@ -112,6 +126,27 @@ def test_apoc_blocker_distinguishes_hidden_procedures_from_confirmed_absence(tmp
 
     assert len(blocked) == 1
     assert "Grant procedure visibility and execution" in blocked[0].fix
+
+
+def test_dangling_relationship_check_names_missing_store_probe(tmp_path):
+    write_default_project(tmp_path)
+    _write_dangling_suite(tmp_path / "checks" / "suite.yml")
+
+    blocked = blocked_checks_for_project(tmp_path, _context())
+
+    assert len(blocked) == 1
+    assert blocked[0].suite == "store-integrity"
+    assert blocked[0].check_id == "dangling"
+    assert blocked[0].check == "dangling_rels"
+    assert blocked[0].missing_capability == "store_consistency"
+    assert "offline consistency checker" in blocked[0].fix
+
+
+def test_dangling_relationship_check_unblocks_for_store_probe_connector(tmp_path):
+    write_default_project(tmp_path)
+    _write_dangling_suite(tmp_path / "checks" / "suite.yml")
+
+    assert blocked_checks_for_project(tmp_path, _context(store_consistency=True)) == []
 
 
 def test_pack_requirement_catalog_accepts_yaml_extension(tmp_path):

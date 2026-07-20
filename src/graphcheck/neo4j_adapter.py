@@ -115,16 +115,31 @@ class Neo4jClient:
         *,
         timeout_s: float | None = None,
     ) -> QueryResult:
-        """Run a read while preserving raw graph values, columns, and summary notifications."""
+        """Run a planner-verified read while preserving graph values and metadata.
+
+        ``READ_ACCESS`` is retained for correct cluster routing, but Neo4j documents that access
+        mode alone is not an access-control boundary.  The server therefore plans the statement
+        first and GraphCheck executes it only when Neo4j classifies it as read-only.
+        """
 
         try:
+            deadline = _timeout_deadline(timeout_s)
             with self._driver.session(
                 database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
-                driver_query = (
-                    neo4j.Query(query, timeout=timeout_s) if timeout_s is not None else query
+                values = params or {}
+                _assert_server_classified_read(
+                    session,
+                    query,
+                    values,
+                    timeout_s=_remaining_timeout(deadline),
                 )
-                result = session.run(driver_query, params or {})
+                driver_query = (
+                    neo4j.Query(query, timeout=_remaining_timeout(deadline))
+                    if timeout_s is not None
+                    else query
+                )
+                result = session.run(driver_query, values)
                 columns = _result_columns(result)
                 rows = [_raw_record(record) for record in result]
                 if not columns and rows:
@@ -464,6 +479,50 @@ def _raw_record(record: object) -> dict[str, Any]:
     if callable(items):
         return dict(items())
     raise TypeError(f"query result record does not expose mapping items: {type(record).__name__}")
+
+
+def _assert_server_classified_read(
+    session: object,
+    query: str,
+    params: dict[str, object],
+    *,
+    timeout_s: float | None,
+) -> None:
+    """Fail closed unless Neo4j's planner classifies the statement as read-only."""
+
+    run = getattr(session, "run", None)
+    if not callable(run):
+        raise GraphCheckError(
+            "neo4j.read_guard_unavailable",
+            "The Neo4j session cannot perform the server-side read-only preflight.",
+            "Use the supported Neo4j driver and a dedicated read-only database credential.",
+        )
+    text = f"EXPLAIN {query}"
+    driver_query = neo4j.Query(text, timeout=timeout_s) if timeout_s is not None else text
+    result = run(driver_query, params)
+    consume = getattr(result, "consume", None)
+    if not callable(consume):
+        raise GraphCheckError(
+            "neo4j.read_guard_unavailable",
+            "Neo4j did not return a query summary for the read-only preflight.",
+            "Use the supported Neo4j driver and a server version that reports query type.",
+        )
+    summary = consume()
+    query_type = str(getattr(summary, "query_type", "")).lower()
+    if query_type == "r":
+        return
+    if query_type in {"w", "rw", "s"}:
+        raise GraphCheckError(
+            "neo4j.write_rejected",
+            "GraphCheck rejected a query that Neo4j classified as write-capable.",
+            "Replace the query with read-only Cypher and use a credential without write "
+            "privileges.",
+        )
+    raise GraphCheckError(
+        "neo4j.read_guard_unavailable",
+        f"Neo4j returned unknown query type {query_type!r} for the read-only preflight.",
+        "Use a supported Neo4j server/driver and a dedicated read-only database credential.",
+    )
 
 
 def _summary_notifications(summary: object | None) -> tuple[dict[str, Any], ...]:

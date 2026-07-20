@@ -5,7 +5,8 @@
         "read",
         "show_procedures",
         "apoc",
-        "count_store"
+        "count_store",
+        "store_consistency"
       ],
       "type": "string"
     },

@@ -4,10 +4,14 @@ import math
 from textwrap import dedent
 
 from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.sampling import (
+    CYPHER_SAMPLE_MODULUS,
+    cypher_hash_expression,
+    cypher_hash_parameters,
+)
 from graphcheck.errors import GraphCheckError
 
 _DEFAULT_HUB_SAMPLE_SIZE = 1000
-_SAMPLE_MODULUS = 2_147_483_647
 
 _SCHEMA_CATALOG = """
 CALL {
@@ -281,23 +285,23 @@ def _compile_dangling_rels(
 _TYPE_MATCH = """
 coalesce(
   CASE $expected_type
-    WHEN 'string' THEN toString(n[$property]) = n[$property]
+    WHEN 'string' THEN toStringOrNull(n[$property]) = n[$property]
     WHEN 'integer' THEN
-      toInteger(n[$property]) = n[$property]
-      AND toString(n[$property]) =~ '^-?[0-9]+$'
+      toIntegerOrNull(n[$property]) = n[$property]
+      AND toStringOrNull(n[$property]) =~ '^-?[0-9]+$'
     WHEN 'float' THEN
-      toFloat(n[$property]) = n[$property]
+      toFloatOrNull(n[$property]) = n[$property]
       AND NOT (
-        toInteger(n[$property]) = n[$property]
-        AND toString(n[$property]) = toString(toInteger(n[$property]))
+        toIntegerOrNull(n[$property]) = n[$property]
+        AND toStringOrNull(n[$property]) = toStringOrNull(toIntegerOrNull(n[$property]))
       )
-    WHEN 'boolean' THEN toBoolean(n[$property]) = n[$property]
+    WHEN 'boolean' THEN toBooleanOrNull(n[$property]) = n[$property]
     WHEN 'date' THEN
-      NOT (toString(n[$property]) = n[$property])
-      AND toString(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}$'
+      NOT (toStringOrNull(n[$property]) = n[$property])
+      AND toStringOrNull(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}$'
     WHEN 'datetime' THEN
-      NOT (toString(n[$property]) = n[$property])
-      AND toString(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}T.*$'
+      NOT (toStringOrNull(n[$property]) = n[$property])
+      AND toStringOrNull(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}T.*$'
     ELSE false
   END,
   false
@@ -342,8 +346,8 @@ def _compile_property_format(
     query = _node_predicate_query(
         population="$label IN labels(n) AND n[$property] IS NOT NULL",
         violation=(
-            "NOT coalesce(toString(n[$property]) = n[$property] "
-            "AND toString(n[$property]) =~ $regex, false)"
+            "NOT coalesce(toStringOrNull(n[$property]) = n[$property] "
+            "AND toStringOrNull(n[$property]) =~ $regex, false)"
         ),
     )
     params = {
@@ -460,6 +464,8 @@ def _compile_hub_outlier(
         )
     pattern = _relationship_pattern(direction)
     relationship = "$rel_type IS NULL OR type(r) = $rel_type"
+    hash_params = cypher_hash_parameters(sample_seed)
+    hash_expression = cypher_hash_expression("_gc_sample_input")
     query = dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -471,9 +477,8 @@ def _compile_hub_outlier(
         CALL {{
           MATCH (n)
           WHERE $label IN labels(n)
-          WITH n,
-               ((id(n) * 1103515245 + $sample_seed) % 2147483647)
-                 AS _gc_sample_key
+          WITH n, id(n) % {CYPHER_SAMPLE_MODULUS} AS _gc_sample_input
+          WITH n, {hash_expression} AS _gc_sample_key
           ORDER BY _gc_sample_key, id(n)
           LIMIT $sample_size
           OPTIONAL MATCH {pattern}
@@ -510,8 +515,7 @@ def _compile_hub_outlier(
         "rel_type": rel_type,
         "z_threshold": z_threshold,
         "sample_size": requested_sample_size,
-        # Neo4j integers are signed 64-bit. The modular key needs only this stable residue.
-        "sample_seed": sample_seed % _SAMPLE_MODULUS,
+        **hash_params,
     }
     return ConformancePlan(
         query=query,

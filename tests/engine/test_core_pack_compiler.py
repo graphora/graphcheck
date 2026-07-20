@@ -252,9 +252,13 @@ def test_hub_sampling_is_seeded_deterministic_and_reports_actual_sample_size():
     assert first.sampled is True
     assert first.query == repeated.query == changed.query
     assert first.params == repeated.params
-    assert first.params["sample_seed"] != changed.params["sample_seed"]
+    hash_names = ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d")
+    assert tuple(first.params[name] for name in hash_names) != tuple(
+        changed.params[name] for name in hash_names
+    )
     assert first.params["sample_size"] == 1000
     assert "sample_size" in first.query
+    assert "$sample_hash_a" in first.query
     assert "ORDER BY _gc_sample_key, id(n)" in first.query
 
 
@@ -293,3 +297,8 @@ def test_property_type_query_avoids_neo4j_5_only_type_introspection():
     assert "valueType(" not in compiled.query
     assert "elementId(" not in compiled.query
     assert " IS :: " not in compiled.query
+    assert "toStringOrNull(" in compiled.query
+    assert "toIntegerOrNull(" in compiled.query
+    assert "toFloatOrNull(" in compiled.query
+    assert "toBooleanOrNull(" in compiled.query
+    assert "toString(n[$property])" not in compiled.query

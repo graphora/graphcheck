@@ -100,7 +100,8 @@ def test_large_population_uses_policy_sample_and_emits_estimate_metadata():
     assert check.estimate.confidence == pytest.approx(0.95)
     assert check.params["sample_size"] == 3
     assert check.expected["sample_size"] == 3
-    assert isinstance(check.params["sample_seed"], int)
+    for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
+        assert isinstance(check.params[name], int)
     assert len(client.calls) == 2
     assert client.calls[0][1] == {"label": "Customer"}
 
@@ -130,11 +131,43 @@ def test_check_level_sample_size_overrides_global_exhaustive_decision():
     assert check.params["sample_size"] == 2
 
 
-def test_same_graph_suite_and_seed_produce_the_same_query_seed():
+def test_check_level_sample_size_cannot_exceed_global_policy_cap():
+    client = Client(population=100, sample_size=3, violations=0)
+
+    results = _engine(client, sample_size=3).run_suite(
+        _suite(sample_size=50), source_sha="suite-sha", target=TARGET
+    )
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.PASS
+    assert check.estimate is not False
+    assert check.estimate.sample_size == 3
+    assert check.params["sample_size"] == 3
+    assert check.expected["sample_size"] == 3
+    assert client.calls[1][1]["sample_size"] == 3
+
+
+def test_pack_default_sample_size_reduces_a_larger_global_policy_decision():
+    client = Client(population=200_000, sample_size=1000, violations=0)
+
+    results = _engine(client, exhaustive_limit=100_000, sample_size=10_000).run_suite(
+        _suite(), source_sha="suite-sha", target=TARGET
+    )
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.PASS
+    assert check.estimate is not False
+    assert check.estimate.sample_size == 1000
+    assert check.params["sample_size"] == 1000
+    assert client.calls[1][1]["sample_size"] == 1000
+
+
+def test_same_graph_suite_and_seed_produce_the_same_query_hash():
     first_client = Client(population=100, sample_size=3, violations=0)
     second_client = Client(population=100, sample_size=3, violations=0)
 
     first = _engine(first_client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
     second = _engine(second_client).run_suite(_suite(), source_sha="suite-sha", target=TARGET)
 
-    assert first.checks[0].params["sample_seed"] == second.checks[0].params["sample_seed"]
+    for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
+        assert first.checks[0].params[name] == second.checks[0].params[name]

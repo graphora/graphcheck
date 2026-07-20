@@ -3,11 +3,16 @@ from __future__ import annotations
 from textwrap import dedent
 
 from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.sampling import (
+    CYPHER_SAMPLE_MODULUS,
+    cypher_hash_expression,
+    cypher_hash_parameters,
+)
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.metadata import PiiPackMetadata
 
 _DEFAULT_SAMPLE_SIZE = 1000
-_SAMPLE_MODULUS = 2_147_483_647
+_SAMPLE_NODE_MULTIPLIER = 1_103_515_245
 
 _SCHEMA_CATALOG = """
 CALL {
@@ -40,11 +45,22 @@ def _node_pointer(variable: str) -> str:
 
 
 def _candidate_query(*, strings_only: bool) -> str:
-    string_predicate = "AND toString(raw) = raw" if strings_only else ""
-    value_projection = ", value: toString(raw)" if strings_only else ""
+    string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
+    value_projection = ", value: raw" if strings_only else ""
+    hash_expression = cypher_hash_expression("_gc_occurrence_key")
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
+        CALL {{
+          MATCH (n)
+          WHERE $label IS NULL OR $label IN labels(n)
+          UNWIND keys(n) AS property
+          WITH property, n[property] AS raw
+          WHERE raw IS NOT NULL
+            AND ($properties = [] OR property IN $properties)
+            {string_predicate}
+          RETURN count(*) AS population
+        }}
         CALL {{
           MATCH (n)
           WHERE $label IS NULL OR $label IN labels(n)
@@ -53,9 +69,17 @@ def _candidate_query(*, strings_only: bool) -> str:
           WHERE raw IS NOT NULL
             AND ($properties = [] OR property IN $properties)
             {string_predicate}
+          WITH n, property, raw ORDER BY id(n), property
+          WITH n, collect({{property: property, raw: raw}}) AS _gc_node_properties
+          UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
+          WITH n, _gc_property_index,
+               _gc_node_properties[_gc_property_index] AS occurrence
+          WITH n, occurrence.property AS property, occurrence.raw AS raw,
+               _gc_property_index
           WITH n, property, raw,
-               ((id(n) * 1103515245 + $sample_seed) % 2147483647)
-                 AS _gc_sample_key
+               (((id(n) % {CYPHER_SAMPLE_MODULUS}) * {_SAMPLE_NODE_MULTIPLIER}
+                 + _gc_property_index) % {CYPHER_SAMPLE_MODULUS}) AS _gc_occurrence_key
+          WITH n, property, raw, {hash_expression} AS _gc_sample_key
           ORDER BY _gc_sample_key, id(n), property
           LIMIT $sample_size
           RETURN collect({{
@@ -64,7 +88,7 @@ def _candidate_query(*, strings_only: bool) -> str:
           }}) AS candidates
         }}
         RETURN {_SCHEMA_PROJECTION},
-               $sample_population AS population,
+               population,
                size(candidates) AS sample_size,
                candidates
         """
@@ -72,7 +96,7 @@ def _candidate_query(*, strings_only: bool) -> str:
 
 
 def _population_query(*, strings_only: bool) -> str:
-    string_predicate = "AND toString(raw) = raw" if strings_only else ""
+    string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     return dedent(
         f"""
         MATCH (n)
@@ -111,12 +135,12 @@ def _common_config(
         raise _invalid("PII sample_size must be a positive integer.")
     if isinstance(sample_seed, bool) or not isinstance(sample_seed, int) or sample_seed < 0:
         raise _invalid("PII sample_seed must be a non-negative integer.")
+    hash_params = cypher_hash_parameters(sample_seed)
     params = {
         "label": label,
         "properties": properties,
         "sample_size": requested_sample_size,
-        "sample_seed": sample_seed % _SAMPLE_MODULUS,
-        "sample_population": 0,
+        **hash_params,
         "required_labels": [label] if label is not None else [],
         "required_relationship_types": [],
         "required_properties": required_properties or [],

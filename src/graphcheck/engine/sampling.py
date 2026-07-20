@@ -1,14 +1,15 @@
 """Deterministic sampling primitives for the C1 engine.
 
-Selections are indices into a caller-provided, canonically ordered population.  The
-database query is responsible for supplying that stable order; sampling an unordered
-result cannot be reproducible regardless of the random-number generator used here.
+In-memory callers can select indices from a canonically ordered population with Floyd's
+algorithm. Neo4j-backed plans use the compatible seeded cubic hash parameters below; their
+candidate identifier and tie-break order must also be stable for a sample to be reproducible.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -18,6 +19,14 @@ CONFIDENCE_95 = 0.95
 _Z_95 = 1.959963984540054
 _SEED_DOMAIN = b"graphcheck:c1:sampling-seed:v1"
 _RNG_DOMAIN = b"graphcheck:c1:sampling-rng:v1"
+_CYPHER_HASH_DOMAIN = b"graphcheck:c1:cypher-hash:v1"
+CYPHER_SAMPLE_MODULUS = 2_147_483_647
+CYPHER_HASH_PARAMETER_NAMES = (
+    "sample_hash_a",
+    "sample_hash_b",
+    "sample_hash_c",
+    "sample_hash_d",
+)
 
 
 def _integer(value: object, name: str, *, minimum: int = 0) -> int:
@@ -135,6 +144,50 @@ def deterministic_sample_indices(
     return tuple(sorted(selected))
 
 
+def cypher_hash_parameters(seed: int) -> dict[str, int]:
+    """Return coefficients for a seeded cubic hash that is portable to Neo4j 4.4.
+
+    A seed-derived affine ordering is deterministic but not a statistically fair bottom-k sample:
+    for dense IDs it over-selects values at the ends of the range. A random cubic polynomial over
+    a prime field provides a four-wise-independent ranking family and removes that positional bias.
+    Horner evaluation keeps every intermediate below ``p**2``, inside Neo4j's signed 64-bit range.
+    """
+
+    seed = _integer(seed, "seed")
+    material = _length_prefix(str(seed).encode("ascii"))
+    digest = hashlib.sha256(_CYPHER_HASH_DOMAIN + material).digest()
+    return {
+        name: int.from_bytes(digest[offset : offset + 8], "big") % CYPHER_SAMPLE_MODULUS
+        for name, offset in zip(CYPHER_HASH_PARAMETER_NAMES, range(0, 32, 8), strict=True)
+    }
+
+
+def cypher_hash_expression(value: str) -> str:
+    """Render the fixed parameterized Horner expression for an integer Cypher value."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Cypher hash value expression must be a non-blank string")
+    modulus = CYPHER_SAMPLE_MODULUS
+    return (
+        f"((((($sample_hash_a * ({value}) + $sample_hash_b) % {modulus}) "
+        f"* ({value}) + $sample_hash_c) % {modulus}) * ({value}) "
+        f"+ $sample_hash_d) % {modulus}"
+    )
+
+
+def cypher_hash_value(value: int, params: Mapping[str, object]) -> int:
+    """Evaluate the same cubic hash in Python for parity and distribution verification."""
+
+    hashed = _integer(value, "value") % CYPHER_SAMPLE_MODULUS
+    coefficients = [_integer(params.get(name), name) for name in CYPHER_HASH_PARAMETER_NAMES]
+    if any(coefficient >= CYPHER_SAMPLE_MODULUS for coefficient in coefficients):
+        raise ValueError("Cypher hash coefficients must be below the sampling modulus")
+    result = coefficients[0]
+    for coefficient in coefficients[1:]:
+        result = (result * hashed + coefficient) % CYPHER_SAMPLE_MODULUS
+    return result
+
+
 def wilson_estimate(
     positive_count: int,
     sample_size: int,
@@ -177,7 +230,7 @@ class SamplingDecision:
     population: int
     sample_size: int
     seed: int
-    indices: tuple[int, ...] | None
+    exact: bool
 
     def __post_init__(self) -> None:
         population = _integer(self.population, "population")
@@ -185,30 +238,16 @@ class SamplingDecision:
         _integer(self.seed, "seed")
         if sample_size > population:
             raise ValueError("sample_size must not exceed population")
-        if self.indices is None:
-            if sample_size != population:
-                raise ValueError("an exact decision must cover the full population")
-            return
-        if not isinstance(self.indices, tuple):
-            raise TypeError("indices must be a tuple or None")
-        if not 0 < sample_size < population:
+        if not isinstance(self.exact, bool):
+            raise TypeError("exact must be boolean")
+        if self.exact and sample_size != population:
+            raise ValueError("an exact decision must cover the full population")
+        if not self.exact and not 0 < sample_size < population:
             raise ValueError("a sampled decision must be a non-empty strict subset")
-        if len(self.indices) != sample_size:
-            raise ValueError("indices length must equal sample_size")
-        if tuple(sorted(set(self.indices))) != self.indices:
-            raise ValueError("indices must be unique and sorted")
-        if any(
-            isinstance(index, bool)
-            or not isinstance(index, int)
-            or index < 0
-            or index >= population
-            for index in self.indices
-        ):
-            raise ValueError("every sampled index must be inside the population")
 
     @property
     def sampled(self) -> bool:
-        return self.indices is not None
+        return not self.exact
 
     def estimate(self, positive_count: int) -> Estimate | Literal[False]:
         """Return estimate metadata, or ``False`` for an exhaustive decision."""
@@ -267,12 +306,11 @@ class SamplingPolicy:
                 population=population,
                 sample_size=population,
                 seed=seed,
-                indices=None,
+                exact=True,
             )
-        indices = deterministic_sample_indices(population, self.sample_size, seed=seed)
         return SamplingDecision(
             population=population,
             sample_size=self.sample_size,
             seed=seed,
-            indices=indices,
+            exact=False,
         )

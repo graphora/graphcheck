@@ -29,6 +29,7 @@ SUPPORTED_REQUIREMENTS: tuple[CapabilityRequirement, ...] = (
     "show_procedures",
     "apoc",
     "count_store",
+    "store_consistency",
 )
 
 
@@ -38,6 +39,7 @@ class CapabilityContext:
     show_procedures: bool
     apoc: bool
     count_store: bool
+    store_consistency: bool = False
 
     @classmethod
     def from_probe(cls, capabilities: Capabilities, visibility: Visibility) -> CapabilityContext:
@@ -46,6 +48,9 @@ class CapabilityContext:
             show_procedures=visibility.can_show_procedures,
             apoc=capabilities.apoc,
             count_store=capabilities.count_store,
+            # Cypher cannot observe corrupt relationship endpoint records. A future C2 store
+            # consistency adapter can set this explicitly without changing SPEC-01 capabilities.
+            store_consistency=False,
         )
 
 
@@ -142,4 +147,9 @@ def _capability_fix(context: CapabilityContext, capability: CapabilityRequiremen
         )
     if capability == "count_store":
         return "Enable count-store support for this check, then run `graphcheck debug` again."
+    if capability == "store_consistency":
+        return (
+            "Run Neo4j's offline consistency checker or install a connector that exposes a "
+            "read-only relationship-store consistency probe."
+        )
     return f"Enable the `{capability}` capability, then run `graphcheck debug` again."

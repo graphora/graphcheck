@@ -25,6 +25,19 @@ class Plan:
         self.children = children or []
 
 
+class _ReadPlanSummary:
+    query_type = "r"
+
+
+class _ReadPlanResult:
+    def consume(self):
+        return _ReadPlanSummary()
+
+
+def _is_explain(query):
+    return str(getattr(query, "text", query)).startswith("EXPLAIN ")
+
+
 def test_plan_operator_searches_nested_driver_plan_objects():
     plan = Plan("ProduceResults", [Plan("NodeCountFromCountStore")])
 
@@ -761,6 +774,8 @@ def test_run_read_uses_read_access_mode(monkeypatch):
             return False
 
         def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
             return iter([])
 
     class _FakeDriver:
@@ -779,6 +794,51 @@ def test_run_read_uses_read_access_mode(monkeypatch):
     assert client.run_read("RETURN 1") == []
     assert captured["default_access_mode"] == neo4j.READ_ACCESS
     assert captured["database"] == "neo4j"
+
+
+def test_run_read_rejects_server_classified_write_before_execution(monkeypatch):
+    import neo4j
+
+    executed: list[str] = []
+
+    class _WriteSummary:
+        query_type = "w"
+
+    class _WritePlanResult:
+        def consume(self):
+            return _WriteSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            text = str(getattr(query, "text", query))
+            if text.startswith("EXPLAIN "):
+                return _WritePlanResult()
+            executed.append(text)
+            return iter([])
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read("CREATE (:Forbidden)")
+
+    assert caught.value.error.code == "neo4j.write_rejected"
+    assert executed == []
 
 
 def test_run_read_result_preserves_graph_values_columns_and_notifications(monkeypatch):
@@ -813,6 +873,8 @@ def test_run_read_result_preserves_graph_values_columns_and_notifications(monkey
             return False
 
         def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
             return _FakeResult()
 
     class _FakeDriver:
@@ -843,7 +905,7 @@ def test_run_read_result_preserves_graph_values_columns_and_notifications(monkey
 def test_run_read_result_uses_driver_query_timeout(monkeypatch):
     import neo4j
 
-    captured: dict = {}
+    captured: dict = {"queries": []}
 
     class _FakeResult:
         def keys(self):
@@ -863,6 +925,9 @@ def test_run_read_result_uses_driver_query_timeout(monkeypatch):
             return False
 
         def run(self, query, params):
+            captured["queries"].append(query)
+            if _is_explain(query):
+                return _ReadPlanResult()
             captured["query"] = query
             captured["params"] = params
             return _FakeResult()
@@ -883,9 +948,11 @@ def test_run_read_result_uses_driver_query_timeout(monkeypatch):
     result = client.run_read_result("RETURN $n AS n", {"n": 1}, timeout_s=2.5)
 
     assert result.columns == ("n",)
+    assert len(captured["queries"]) == 2
+    assert captured["queries"][0].text == "EXPLAIN RETURN $n AS n"
     assert isinstance(captured["query"], neo4j.Query)
     assert captured["query"].text == "RETURN $n AS n"
-    assert captured["query"].timeout == 2.5
+    assert 0 < captured["query"].timeout <= 2.5
     assert captured["params"] == {"n": 1}
     assert captured["default_access_mode"] == neo4j.READ_ACCESS
 
@@ -952,6 +1019,8 @@ def test_run_read_result_turns_missing_label_notification_into_error(monkeypatch
             return False
 
         def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
             return _FakeResult()
 
     class _FakeDriver:

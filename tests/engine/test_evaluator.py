@@ -1,9 +1,14 @@
 import copy
 from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta, timezone
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from neo4j.time import Date as Neo4jDate
+from neo4j.time import DateTime as Neo4jDateTime
+from neo4j.time import Duration as Neo4jDuration
+from neo4j.time import Time as Neo4jTime
 
 from graphcheck.contracts.check import (
     CompetencyCheck,
@@ -11,6 +16,7 @@ from graphcheck.contracts.check import (
     DriftCheck,
     Expect,
     LoadedCheck,
+    load_suite,
 )
 from graphcheck.contracts.results import EvidenceElement, Pattern, Severity
 from graphcheck.engine.baseline import BaselineValue
@@ -499,6 +505,137 @@ def test_regression_equals_is_order_independent_but_preserves_duplicates():
 
     assert reordered.passed is True
     assert wrong_multiplicity.passed is False
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected"),
+    [
+        (Neo4jDate(2026, 1, 1), date(2026, 1, 1)),
+        (
+            Neo4jDateTime(2026, 1, 1, 2, 3, 4, 500_000_000, tzinfo=UTC),
+            datetime(2026, 1, 1, 2, 3, 4, 500_000, tzinfo=UTC),
+        ),
+        (Neo4jTime(2, 3, 4, 500_000_000), time(2, 3, 4, 500_000)),
+        (
+            Neo4jDuration(days=1, seconds=2, nanoseconds=3_000),
+            timedelta(days=1, seconds=2, microseconds=3),
+        ),
+    ],
+)
+def test_regression_equals_normalizes_equivalent_driver_and_python_temporals(actual, expected):
+    compiled = _competency({"equals": [expected]})
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"node_element_id": actual}],
+        columns=["node_element_id"],
+    )
+
+    assert evaluation.passed is True
+    assert evaluation.measured["equals"] is True
+
+
+def test_regression_equals_normalizes_neo4j_date_against_unquoted_yaml_date():
+    loaded = load_suite(
+        """
+suite: temporal-regression
+competency:
+  - id: date-equality
+    question: Does the graph date match the pinned YAML date?
+    query: RETURN date('2026-01-01') AS as_of
+    expect: {columns: [as_of], equals: [2026-01-01]}
+"""
+    ).checks[0]
+    compiled = CypherCompiler().compile(loaded)
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"as_of": Neo4jDate(2026, 1, 1)}],
+        columns=["as_of"],
+    )
+
+    assert evaluation.passed is True
+    assert evaluation.measured["equals"] is True
+
+
+@pytest.mark.parametrize("assertion", ["equals", "contains"])
+def test_regression_does_not_conflate_boolean_and_integer_values(assertion):
+    compiled = _competency(
+        {
+            assertion: [
+                {
+                    "value": 1,
+                    "node_element_id": "n-1",
+                }
+            ],
+            "columns": ["value", "node_element_id"],
+        }
+    )
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"value": True, "node_element_id": "n-1"}],
+        columns=["value", "node_element_id"],
+    )
+
+    assert evaluation.passed is False
+    assert evaluation.measured[assertion] is False
+    assert evaluation.evidence is not None
+
+
+def test_regression_equals_preserves_mapping_key_types():
+    compiled = _competency(
+        {
+            "columns": ["value", "node_element_id"],
+            "equals": [{"value": {1: "x"}, "node_element_id": "n-1"}],
+        }
+    )
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"value": {"1": "x"}, "node_element_id": "n-1"}],
+        columns=["value", "node_element_id"],
+    )
+
+    assert evaluation.passed is False
+    assert evaluation.measured["equals"] is False
+
+
+def test_regression_contains_uses_the_same_temporal_normalization_as_equals():
+    compiled = _competency({"contains": [timedelta(days=1, microseconds=3)]})
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"node_element_id": Neo4jDuration(days=1, nanoseconds=3_000)}],
+        columns=["node_element_id"],
+    )
+
+    assert evaluation.passed is True
+    assert evaluation.measured["contains"] is True
+
+
+def test_regression_equals_preserves_nanoseconds_across_equivalent_timezones():
+    actual = Neo4jDateTime(2026, 1, 1, 12, 0, 0, 1, tzinfo=UTC)
+    expected = Neo4jDateTime(
+        2026,
+        1,
+        1,
+        13,
+        0,
+        0,
+        1,
+        tzinfo=timezone(timedelta(hours=1)),
+    )
+    compiled = _competency({"equals": [expected]})
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"node_element_id": actual}],
+        columns=["node_element_id"],
+    )
+
+    assert evaluation.passed is True
+    assert evaluation.measured["equals"] is True
 
 
 @pytest.mark.parametrize(

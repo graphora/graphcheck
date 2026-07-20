@@ -53,3 +53,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
   `results.json`, including YAML dates, datetimes, binary values, and deterministic set ordering.
 - Missing pack-declared capabilities now produce explicit unsupported partial skips during engine
   runs, and missing property-key notifications are errored instead of becoming empty passes.
+- Check-level sample sizes can only reduce the global sampling decision, PII sampling keys operate
+  on individual node/property occurrences, and competency bag equality canonicalizes equivalent
+  Neo4j/Python temporal values before hashing.
+- Read execution now fails closed unless Neo4j's planner classifies the statement as read-only;
+  array-valued properties no longer crash type, format, or PII scans; live PII population drift is
+  rejected; and `dangling_rels` is an explicit store-consistency capability blocker.

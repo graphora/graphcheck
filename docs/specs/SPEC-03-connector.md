@@ -67,9 +67,15 @@ and exposes:
 
 ```python
 run_read(query: str, params: dict | None = None) -> list[dict]
+run_read_result(query: str, params: dict | None = None, *, timeout_s: float | None = None)
 ```
 
-All sessions use Neo4j read access mode. GraphCheck does not parse Cypher to detect writes.
+All sessions use Neo4j read access mode for routing. Driver access mode is not an access-control
+boundary, so `run_read_result` first asks the server to plan `EXPLAIN <query>` and executes the
+original statement only when the returned query type is read-only. Write, read/write, schema,
+missing, or unknown classifications fail closed. GraphCheck does not parse Cypher or use a keyword
+blocklist. Deployments should additionally use a dedicated Neo4j credential without write
+privileges as defense in depth.
 
 ## Error taxonomy
 
@@ -87,6 +93,8 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `neo4j.database_not_found` | The configured database does not exist or is unavailable. |
 | `neo4j.permission_denied` | Credentials do not permit the requested read/probe. |
 | `neo4j.query_failed` | A read query failed after connection succeeded. |
+| `neo4j.write_rejected` | Neo4j's planner classified the submitted query as write-capable. |
+| `neo4j.read_guard_unavailable` | The server/driver did not provide a usable query-type classification. |
 
 ## Capability probe
 
@@ -138,9 +146,8 @@ connectivity, read access, and procedure visibility.
 When a loaded check suite references a check whose pack declares a capability requirement that the
 target does not satisfy, debug reports the suite id, check id, check type, missing capability, and a
 fix. Each missing capability produces a separate blocker. The run path consumes the same catalog
-and turns a missing declared `apoc` or `count_store` capability into `skipped:unsupported`, marks
-the run partial, and does not submit the blocked query. Failures after a query is attempted remain
-`errored`.
+and turns any missing declared capability into `skipped:unsupported`, marks the run partial, and
+does not submit the blocked query. Failures after a query is attempted remain `errored`.
 
 Capability requirements come from the validated `requires` entries in packaged check-pack `.yml`
 and `.yaml` metadata, not from a CLI-maintained table. The catalog is loaded through SPEC-09's
@@ -153,6 +160,7 @@ supported requirement vocabulary is:
 - `show_procedures`
 - `apoc`
 - `count_store`
+- `store_consistency` (reserved for a connector/store integrity probe; unavailable through Cypher)
 
 Debug scans both `*.yml` and `*.yaml` files in the configured checks directory and in the packaged
 pack-metadata catalog. Checks whose effective `generated` flag is `true` are validated by the

@@ -541,12 +541,13 @@ class Engine:
             if isinstance(check.spec, ConformanceCheck)
             else None
         )
-        sample_size = decision.sample_size if requested is None else min(population, int(requested))
+        if requested is None:
+            requested = compiled.params.get("sample_size")
+        sample_size = (
+            decision.sample_size if requested is None else min(decision.sample_size, int(requested))
+        )
         resolved = {**params, "sample_size": sample_size}
         compiled_params = {**compiled.params, "sample_size": sample_size}
-        if "sample_population" in params:
-            resolved["sample_population"] = population
-            compiled_params["sample_population"] = population
         return (
             replace(
                 compiled,

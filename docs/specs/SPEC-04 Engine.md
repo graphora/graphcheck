@@ -27,7 +27,7 @@ The implementation is split by responsibility:
 
 SPEC-01 remains the authority for result shape, scoring, verdict field presence, and exit-code
 precedence. SPEC-02 remains the authority for suite/check YAML. SPEC-03 remains the authority for
-profiles, target probing, error mapping, and driver-enforced read access.
+profiles, target probing, error mapping, and planner-verified read execution.
 
 ## Responsibilities and boundaries
 
@@ -268,14 +268,15 @@ frozen YAML envelope. Loading a check requires its C3 model, manifest definition
 callback. Any missing layer fails loudly, and a manifest/plan sampling disagreement is
 `packs.runtime_mismatch`.
 
-The engine provides callbacks for twelve core and two PII C3 identifiers:
+The public loader validates twelve core and two PII C3 identifiers. Eleven core checks and both PII
+checks have executable Cypher callbacks; `dangling_rels` is a declared capability-blocked rule:
 
 | Check | Evaluated rule |
 | --- | --- |
 | `completeness` | Property coverage ratio is at least `threshold` (`0..1`) |
 | `cardinality` | Each source node has exactly the configured directed relationship count to the target label |
 | `no_orphans` | Selected nodes have at least one configured/any relationship in the selected direction |
-| `dangling_rels` | Fails closed as unobservable; no optimistic Cypher result is produced |
+| `dangling_rels` | Requires the reserved `store_consistency` connector capability and is skipped unsupported/partial before compilation |
 | `property_type` | Non-null property values match the configured portable type |
 | `property_format` | Non-null property values satisfy the configured regular expression |
 | `value_in_set` | Non-null property values belong to the configured allowed values |
@@ -293,13 +294,19 @@ All observable conformance templates return exactly one summary row with a non-n
 summary arithmetic is `engine.invalid_query_result`, never a finding or pass.
 
 Neo4j Cypher cannot expose a relationship whose backing-store endpoint cannot be resolved: such a
-relationship is absent before a `MATCH` row exists. For that reason `dangling_rels` raises
-`engine.check_unobservable` rather than returning a misleading zero violations.
+relationship is absent before a `MATCH` row exists. The pack therefore declares
+`requires: [read, store_consistency]`. Current SPEC-03 targets do not expose that reserved
+capability, so normal runs record `skipped:unsupported`, mark the run partial, and execute no query.
+Directly invoking the compiler callback fails closed with `engine.check_unobservable` rather than
+returning a misleading zero violations.
 
-PII checks return a population, sample size, and candidate rows with node pointers. The evaluator
-groups findings by installed pattern, node labels, and property key. It never serializes raw
-matched values. Empty/malformed samples, missing pointers, population disagreement, or invalid
-pattern metadata are query-result errors, not passes.
+PII checks return a population, sample size, and candidate rows with node pointers. The main query
+recomputes its eligible population in the same Neo4j snapshot as selection; disagreement with the
+preflight is an error rather than stale confidence metadata. Value matching admits only string
+properties through null-safe conversion predicates, so arrays and other supported Neo4j property
+types cannot crash the query. The evaluator groups findings by installed pattern, node labels, and
+property key. It never serializes raw matched values. Empty/malformed samples, missing pointers,
+population disagreement, or invalid pattern metadata are query-result errors, not passes.
 
 ### Competency compilation
 
@@ -332,9 +339,11 @@ to SPEC-03 `run_read` for compatible connectors. Missing both APIs produces
 `engine.connector_invalid` for the attempted check.
 
 C1 does not attempt to parse or block write keywords. C2 creates every session with
-`neo4j.READ_ACCESS`, so Neo4j rejects a customer-authored `CREATE`, `MERGE`, `DELETE`, `SET`, or other
-write at the driver/database level. The resulting query error is an errored check and no write is
-committed.
+`neo4j.READ_ACCESS` for routing, then submits `EXPLAIN <query>` and executes the original statement
+only if Neo4j classifies the plan as read-only. Write/read-write/schema or unknown classifications
+fail closed as `neo4j.write_rejected` or `neo4j.read_guard_unavailable`; no customer write statement
+is submitted. A dedicated Neo4j credential without write privileges remains required deployment
+defense in depth because driver access mode by itself is not an authorization boundary.
 
 Every target probe, token lookup, population preflight, and check query receives the current
 remaining run budget when the connector method accepts `timeout_s`. Timeout, broken Cypher, auth,
@@ -382,8 +391,11 @@ regression value is a complete `{column: value}` mapping.
 
 `contains` requires every pinned value to occur. `equals` compares the complete result as an
 order-independent, duplicate-preserving bag because Neo4j does not guarantee row order without
-`ORDER BY`. Shape assertions and regression assertions apply together; a regression overlay does
-not replace row/column/uniqueness constraints.
+`ORDER BY`. `contains`, `equals`, and uniqueness use the same type-aware canonicalizer. It keeps
+Cypher booleans distinct from integers, preserves mapping key types and container kinds, and
+canonicalizes equivalent Neo4j-driver and Python/YAML date, datetime, time, and duration values so
+equal temporal values obey the same hash contract. Shape assertions and regression assertions
+apply together; a regression overlay does not replace row/column/uniqueness constraints.
 
 ### Drift
 
@@ -459,11 +471,18 @@ check id
 The same graph, exact suite bytes, check id, and configured seed therefore produce the same sample.
 Changing any component changes the derived seed. The policy is exact when population is at or below
 the exhaustive limit or configured sample size; otherwise it selects the configured sample size.
-A check-level sample size may request a smaller sample and is capped at population.
+A check-level sample size may only reduce that decision. The effective sample is capped by both the
+global policy decision and population; a check can never raise the global safety ceiling.
 
-The sampled core and PII queries order candidates by a stable seed-derived Cypher key plus node id
-(and property key for PII). The sampling module also exposes a deterministic uniform Floyd selector
-using `O(sample_size)` memory for callers with a canonical indexed population.
+The sampled core and PII queries order candidates by a stable seed-derived cubic hash over a prime
+integer field. The four SHA-derived coefficients form a four-wise-independent ranking family;
+unlike an affine rotation, it does not systematically over-select the edges of dense ID ranges.
+PII first filters eligible properties, sorts the keys on each node, assigns a stable
+property-occurrence index, and combines that index with the node id before hashing. Properties on
+the same node therefore receive distinct, seed-dependent positions instead of sharing one
+node-level key. The sampling module also exposes a deterministic uniform Floyd selector using
+`O(sample_size)` memory for callers with a canonical indexed population; the database-backed plans
+do not pretend to consume unused Floyd indices.
 
 Exhaustive outcomes serialize `estimate:false`. A strict subset serializes
 `{sample_size,population,confidence:0.95,ci:[lo,hi]}` using a two-sided 95% Wilson proportion
@@ -551,6 +570,8 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.check_unobservable` | Requested rule cannot be observed accurately in Cypher |
 | `engine.timeout` | Shared run deadline is exhausted |
 | `engine.internal_error` | Unexpected component exception was isolated |
+| `neo4j.write_rejected` | Server planner classified a submitted statement as write-capable |
+| `neo4j.read_guard_unavailable` | Server/driver could not prove that a statement is read-only |
 | `neo4j.*` | SPEC-03 connection, auth, permission, database, or query error |
 
 An errored check always retains its declared severity for scoring/exit gating, but it never becomes
@@ -563,7 +584,7 @@ Automated coverage includes:
 - strict SPEC-02 parsing and normalized pack defaults;
 - deterministic parameterized compilation and every C3 callback registration;
 - executable PII name/value scans, checksums, redaction, evidence, and estimate behavior;
-- driver-enforced read-only execution and write rejection;
+- server-planner-verified read execution, driver read routing, and write rejection;
 - missing-schema, broken-query, timeout, and one-bad-check isolation paths;
 - every competency shape/regression predicate;
 - every supported drift tolerance and C4 unit rule;
@@ -583,16 +604,19 @@ through a real C2 session on supported server versions.
 
 The opt-in performance test requires a preloaded target of at least 10 million nodes through
 `GRAPHCHECK_PERFORMANCE_URI` and `GRAPHCHECK_PERFORMANCE_PASSWORD`. It runs 30 representative
-competency/drift checks and requires a complete result in under five minutes. The default 295-second
-engine budget reserves the remaining wall time for artifact serialization/reporting.
+competency, drift, core conformance, hub sampling, and PII sampling checks; it requires no errors or
+skips and a complete result in under five minutes. Findings are allowed because the target is a
+customer-scale graph, not a synthetic all-pass fixture. The default 295-second engine budget
+reserves the remaining wall time for artifact serialization/reporting.
 
 ## Deferred v0 integration
 
 End-to-end assertions against `tests/fixtures/fraud-ring.cypher` remain deferred until that fixture
-lands on this branch. Capability preflight is implemented in both debug and run: a missing declared
-`apoc` or `count_store` capability produces `skipped:unsupported`, marks the run partial, and does
-not submit that check's query. The built-in manifests currently require `read`; changing an
-installed declaration changes both preflight paths without a CLI-maintained requirement table.
+lands on this branch. Capability preflight is implemented in both debug and run: any missing
+declared capability produces `skipped:unsupported`, marks the run partial, and does not submit that
+check's query. The built-in `dangling_rels` rule requires the reserved `store_consistency`
+capability; other built-ins currently require `read`. Changing an installed declaration changes
+both preflight paths without a CLI-maintained requirement table.
 
 ## Deliverables
 

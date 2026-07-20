@@ -31,7 +31,7 @@ checks:
   dangling_rels:
     catches: Relationship records whose endpoints cannot be resolved by the backing store.
     does_not_catch: Semantically wrong relationships whose endpoints exist.
-    requires: [read]
+    requires: [read, store_consistency]
     sampled: false
     evidence:
       elements: [rel]

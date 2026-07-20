@@ -49,8 +49,8 @@ discriminated `PackMetadata` union and stamped with `x-pack-version`.
 The contract validates the complete nested shape of both built-in packs. Every
 model rejects unknown fields, all required fields are explicit, pack and
 confidence values are literals, core capabilities are limited to `read`,
-`show_procedures`, `apoc`, and `count_store`, and PII checksum values are limited
-to `luhn` and `verhoeff`.
+`show_procedures`, `apoc`, `count_store`, and the reserved `store_consistency`
+connector probe, and PII checksum values are limited to `luhn` and `verhoeff`.
 Check metadata uses distinct sampled and unsampled variants: `sampled: true`
 requires `estimate.required_when_sampled: true`, while unsampled entries reject
 `estimate` metadata. These boolean literals require actual JSON/YAML booleans;
@@ -148,6 +148,12 @@ estimate:
 ```
 
 Currently `hub_outlier` is the only sampled core check.
+
+`dangling_rels` is the only current core entry requiring
+`[read, store_consistency]`. Neo4j's Cypher surface cannot observe a stored relationship with an
+unresolvable endpoint, so current connectors report that capability missing and the run records an
+explicit unsupported partial skip. The declaration remains loadable without advertising a false
+zero-violation implementation.
 
 ## Core `with` Schemas
 
@@ -294,8 +300,10 @@ Value-match reports must include location, exposure count, and confidence.
 ### Runtime and privacy contract
 
 Both PII checks first execute a population query, derive the per-check seed defined by SPEC-04,
-and select property occurrences in a stable seed-derived order. The engine runs the exact
-population when policy/configuration permits; a strict subset carries
+and select property occurrences in a stable seed-derived order. A stable sorted property index is
+part of the sampling key, so multiple properties on one node are independent occurrences rather
+than tied candidates. The engine runs the exact population when policy/configuration permits; a
+strict subset carries
 `estimate:{sample_size,population,confidence,ci}` using the 95% Wilson interval. Even a sampled
 zero-match pass retains estimate metadata and the completeness notice.
 
@@ -304,6 +312,12 @@ matches and applies a declared Luhn or Verhoeff checksum after the regex succeed
 the pattern, node labels, and property key and reports projected `exposure_count` plus the declared
 categorical confidence. Raw matched property values must not appear in `measured`, `expected`,
 evidence, console output, JSON, or HTML artifacts.
+
+The value matcher filters to actual string properties with null-safe conversion predicates before
+population counting and sampling. Lists and other valid Neo4j property types are excluded rather
+than causing a conversion error. The main candidate query recomputes the eligible population in its
+own graph snapshot; if it differs from the preflight population, evaluation is errored so the
+sample size and confidence interval never describe stale data.
 
 Every failing PII result contains node evidence pointers. Missing/malformed candidates, a broken
 query, timeout, schema warning, population/result disagreement, invalid checksum metadata, or
@@ -332,16 +346,18 @@ compares the metadata `requires` list with the live SPEC-03 capability probe. It
 reports the suite/check identity for each missing capability. Effective
 `generated:true` checks remain validated but are not reported as active blockers.
 
-The run path performs the same lookup before compilation. Missing `apoc` or `count_store`
-capabilities produce `skipped` / `skip_reason: unsupported`, name the affected suite/check in the
-partial reason, and do not submit the query. Once a query is attempted, connector/compiler/timeout
-failures are `errored` under SPEC-04.
+The run path performs the same lookup before compilation. Any missing declared capability produces
+`skipped` / `skip_reason: unsupported`, names the affected suite/check in the partial reason, and
+does not submit the query. Once a query is attempted, connector/compiler/timeout failures are
+`errored` under SPEC-04.
 
 ## Deferred Work
 
-Only fixture-graph assertions for planted defects remain deferred because the fixture has not
-landed on this branch. No built-in C3 loader, compiler binding, PII evaluator, checksum, sampling,
-capability, or evidence path is deferred.
+Fixture-graph assertions for planted defects remain deferred because the fixture has not landed on
+this branch. `dangling_rels` execution also remains capability-blocked pending a C2 store-consistency
+probe; its loader, manifest, diagnostics, and unsupported-partial runtime path are complete. No
+other built-in C3 loader, compiler binding, PII evaluator, checksum, sampling, capability, or
+evidence path is deferred.
 
 ## Verification
 
@@ -354,7 +370,9 @@ The tests assert:
 - Both metadata files pass the complete typed and generated JSON Schema contracts.
 - Unknown or missing metadata fields and invalid capability/confidence values fail.
 - Sampled metadata requires an estimate contract and unsampled metadata rejects it.
-- All 12 core and both PII conformance checks are registered and declared by the executable catalog.
+- All 12 core and both PII conformance checks are registered and declared by the validated catalog;
+  eleven core and both PII checks are executable, while `dangling_rels` is explicitly capability
+  blocked before compilation.
 - Registered `with` models are strict.
 - Whitespace-only identifiers fail through both `load_suite()` and the generated
   combined check schema.
@@ -363,6 +381,8 @@ The tests assert:
 - Runtime capability requirements are read from both `.yml` and `.yaml` pack metadata.
 - Missing APOC reports the affected suite/check identity and install action in human and JSON debug
   output.
+- Missing store-consistency support names each blocked `dangling_rels` suite/check and the offline
+  consistency-checker alternative.
 - Invalid pack manifests fail debug loudly instead of suppressing blockers.
 - Every core check declares evidence pointer fields.
 - Sampled checks declare an estimate contract.

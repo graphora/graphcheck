@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from graphcheck.connection_profiles import ConnectionProfile
+from graphcheck.contracts.results import RunStatus
 from graphcheck.engine.runner import Engine, EngineConfig
 from graphcheck.neo4j_adapter import Neo4jClient
 
@@ -39,6 +40,12 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
             "count"
         ]
         assert node_count >= 10_000_000, "performance target must contain at least 10M nodes"
+        label_rows = client.run_read(
+            "MATCH (n) UNWIND labels(n) AS label "
+            "RETURN label, count(*) AS count ORDER BY count DESC LIMIT 1"
+        )
+        assert label_rows, "performance target must contain at least one labeled node"
+        busiest_label = label_rows[0]["label"]
         suite = {
             "suite": "ten-million-budget",
             "competency": [
@@ -52,7 +59,7 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
                         "unique": True,
                     },
                 }
-                for index in range(10)
+                for index in range(6)
             ]
             + [
                 {
@@ -65,7 +72,7 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
                         "unique": True,
                     },
                 }
-                for index in range(10)
+                for index in range(4)
             ],
             "drift": [
                 {
@@ -75,7 +82,7 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
                     "baseline": "performance",
                     "tolerance": {"max_delta": 0},
                 }
-                for index in range(5)
+                for index in range(4)
             ]
             + [
                 {
@@ -85,7 +92,39 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
                     "baseline": "performance",
                     "tolerance": {"max_delta": 0},
                 }
-                for index in range(5)
+                for index in range(4)
+            ],
+            "conformance": [
+                {
+                    "id": f"hub-outlier-{index:02d}",
+                    "check": "hub_outlier",
+                    "with": {"label": busiest_label, "sample_size": 1000},
+                }
+                for index in range(3)
+            ]
+            + [
+                {
+                    "id": f"pii-name-{index:02d}",
+                    "check": "pii_name_match",
+                    "with": {"sample_size": 1000},
+                }
+                for index in range(3)
+            ]
+            + [
+                {
+                    "id": f"pii-value-{index:02d}",
+                    "check": "pii_value_match",
+                    "with": {"sample_size": 1000},
+                }
+                for index in range(3)
+            ]
+            + [
+                {
+                    "id": f"orphan-{index:02d}",
+                    "check": "no_orphans",
+                    "with": {"label": busiest_label},
+                }
+                for index in range(3)
             ],
         }
 
@@ -106,5 +145,7 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
 
     assert elapsed < 300
     assert results.totals.checks == 30
-    assert results.totals.passed == 30
+    assert results.totals.errored == 0
+    assert results.totals.skipped == 0
+    assert results.run.status is RunStatus.COMPLETE
     assert results.run.partial_reason is None

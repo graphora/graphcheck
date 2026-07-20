@@ -62,7 +62,13 @@ CORE_CHECK_NAMES: tuple[CoreCheckName, ...] = (
     "temporal_sanity",
 )
 
-type CapabilityRequirement = Literal["read", "show_procedures", "apoc", "count_store"]
+type CapabilityRequirement = Literal[
+    "read",
+    "show_procedures",
+    "apoc",
+    "count_store",
+    "store_consistency",
+]
 type EvidenceKind = Literal["node", "rel"]
 type PiiCheckName = Literal["pii_name_match", "pii_value_match"]
 

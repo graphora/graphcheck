@@ -5,7 +5,13 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
+
+from neo4j.time import Date as Neo4jDate
+from neo4j.time import DateTime as Neo4jDateTime
+from neo4j.time import Duration as Neo4jDuration
+from neo4j.time import Time as Neo4jTime
 
 from graphcheck.contracts.check import CompetencyCheck, ConformanceCheck, DriftCheck
 from graphcheck.contracts.results import Estimate, Evidence, EvidenceElement, Pattern
@@ -554,24 +560,72 @@ def _freeze(value: object) -> object:
     pointer = _pointer_from_value(value)
     if pointer is not None:
         return (pointer.kind, pointer.id)
+    temporal = _freeze_temporal(value)
+    if temporal is not None:
+        return temporal
+    # Python deliberately makes bool a numeric subtype (True == 1). Cypher does not, so retain a
+    # type tag before values become Counter keys for equals/unique/contains evaluation.
+    if isinstance(value, bool):
+        return ("boolean", value)
     if isinstance(value, Mapping):
         # Cypher rows/maps are value objects: insertion order is not part of row equality.
         # Sorting also keeps uniqueness deterministic for lightweight connector doubles.
-        return tuple(
-            sorted(
-                ((str(key), _freeze(item)) for key, item in value.items()),
-                key=lambda item: item[0],
-            )
+        items = tuple(
+            sorted(((_freeze(key), _freeze(item)) for key, item in value.items()), key=repr)
         )
+        return ("mapping", items)
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+        return ("sequence", tuple(_freeze(item) for item in value))
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted((_freeze(item) for item in value), key=repr))
+        return ("set", tuple(sorted((_freeze(item) for item in value), key=repr)))
     try:
         hash(value)
     except TypeError:
         return repr(value)
     return value
+
+
+def _freeze_temporal(value: object) -> tuple[object, ...] | None:
+    """Return a hash-consistent representation for equal driver/native temporal values."""
+    if isinstance(value, Neo4jDateTime):
+        if value.nanosecond % 1000:
+            # The driver value already implements instant-aware equality and hashing without
+            # discarding nanoseconds. ISO spelling would incorrectly distinguish equal instants
+            # represented with different UTC offsets.
+            return ("datetime-nanosecond", value)
+        value = value.to_native()
+    if isinstance(value, datetime):
+        return ("datetime", value)
+
+    if isinstance(value, Neo4jDate):
+        return ("date", value.year, value.month, value.day)
+    if isinstance(value, date):
+        return ("date", value.year, value.month, value.day)
+
+    if isinstance(value, Neo4jTime):
+        if value.nanosecond % 1000:
+            return ("time-nanosecond", value)
+        value = value.to_native()
+    if isinstance(value, time):
+        return ("time", value)
+
+    if isinstance(value, Neo4jDuration):
+        return (
+            "duration",
+            value.months,
+            value.days,
+            value.seconds,
+            value.nanoseconds,
+        )
+    if isinstance(value, timedelta):
+        return (
+            "duration",
+            0,
+            value.days,
+            value.seconds,
+            value.microseconds * 1000,
+        )
+    return None
 
 
 def _regression_values(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]) -> list[object]:
@@ -582,7 +636,8 @@ def _regression_values(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]
 
 
 def _contains(values: Sequence[object], expected: object) -> bool:
-    return any(value == expected for value in values)
+    frozen_expected = _freeze(expected)
+    return any(_freeze(value) == frozen_expected for value in values)
 
 
 def _bag(values: Sequence[object]) -> Counter:
