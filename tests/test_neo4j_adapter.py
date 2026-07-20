@@ -835,10 +835,47 @@ def test_run_read_rejects_server_classified_write_before_execution(monkeypatch):
     )
 
     with pytest.raises(GraphCheckError) as caught:
-        client.run_read("CREATE (:Forbidden)")
+        client.run_read_result("CREATE (:Forbidden)")
 
     assert caught.value.error.code == "neo4j.write_rejected"
     assert executed == []
+
+
+def test_plain_read_compatibility_path_does_not_reclassify_trusted_dbms_procedure(monkeypatch):
+    import neo4j
+
+    queries: list[str] = []
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            text = str(getattr(query, "text", query))
+            queries.append(text)
+            if text.startswith("EXPLAIN "):
+                raise AssertionError("trusted compatibility reads must not be planner-reclassified")
+            return iter([neo4j.Record([("version", "5.18.0")])])
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    rows = client.run_read("CALL dbms.components() YIELD versions RETURN versions[0] AS version")
+
+    assert rows == [{"version": "5.18.0"}]
+    assert queries == ["CALL dbms.components() YIELD versions RETURN versions[0] AS version"]
 
 
 def test_run_read_result_preserves_graph_values_columns_and_notifications(monkeypatch):
@@ -1042,6 +1079,71 @@ def test_run_read_result_turns_missing_label_notification_into_error(monkeypatch
     assert "label" in caught.value.error.message.lower()
     assert "CustomerTypo" in caught.value.error.message
     assert caught.value.error.fix.startswith("Correct the label")
+
+
+def test_gql_status_object_reports_missing_schema_without_deprecated_notification_api(
+    monkeypatch,
+):
+    import neo4j
+
+    class _Status:
+        is_notification = True
+        gql_status = "01N50"
+        status_description = "warn: the label is not in the database: CustomerTypo"
+        raw_severity = "WARNING"
+        raw_classification = "UNRECOGNIZED"
+        position = None
+
+    class _FakeSummary:
+        gql_status_objects = (_Status(),)
+
+        @property
+        def notifications(self):
+            raise AssertionError("deprecated notification API must not be accessed")
+
+        @property
+        def summary_notifications(self):
+            raise AssertionError("deprecated notification API must not be accessed")
+
+    class _FakeResult:
+        def keys(self):
+            return ("n",)
+
+        def __iter__(self):
+            return iter([])
+
+        def consume(self):
+            return _FakeSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
+            return _FakeResult()
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read_result("MATCH (n:CustomerTypo) RETURN n")
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "label" in caught.value.error.message.lower()
 
 
 def test_unknown_relationship_type_notification_is_a_query_error():

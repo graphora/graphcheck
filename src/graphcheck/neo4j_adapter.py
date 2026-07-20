@@ -102,7 +102,11 @@ class Neo4jClient:
     ) -> list[dict[str, Any]]:
         """Run a read and return the frozen SPEC-03 plain-row shape."""
 
-        result = self.run_read_result(query, params, timeout_s=timeout_s)
+        # This compatibility API is also used by C2's fixed metadata/probe statements. Neo4j
+        # classifies some read-only DBMS procedures as query type ``s``, so planner classification
+        # would reject the connector's own probes. Customer-authored C1 execution uses the rich,
+        # planner-verified ``run_read_result`` path below.
+        result = self._run_read_result(query, params, timeout_s=timeout_s, verify_read=False)
         # Record.data() is the legacy, opinionated conversion promised by SPEC-03. Rebuilding a
         # Record from each raw row preserves that behavior while the rich path keeps Node and
         # Relationship objects intact for C1 evidence extraction.
@@ -122,18 +126,29 @@ class Neo4jClient:
         first and GraphCheck executes it only when Neo4j classifies it as read-only.
         """
 
+        return self._run_read_result(query, params, timeout_s=timeout_s, verify_read=True)
+
+    def _run_read_result(
+        self,
+        query: str,
+        params: dict[str, object] | None,
+        *,
+        timeout_s: float | None,
+        verify_read: bool,
+    ) -> QueryResult:
         try:
             deadline = _timeout_deadline(timeout_s)
             with self._driver.session(
                 database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
                 values = params or {}
-                _assert_server_classified_read(
-                    session,
-                    query,
-                    values,
-                    timeout_s=_remaining_timeout(deadline),
-                )
+                if verify_read:
+                    _assert_server_classified_read(
+                        session,
+                        query,
+                        values,
+                        timeout_s=_remaining_timeout(deadline),
+                    )
                 driver_query = (
                     neo4j.Query(query, timeout=_remaining_timeout(deadline))
                     if timeout_s is not None
@@ -541,7 +556,14 @@ def _summary_notifications(summary: object | None) -> tuple[dict[str, Any], ...]
                 if (notification := _notification_from_status(status)) is not None
             )
     if not raw:
-        # Compatibility with Neo4j 5.x summaries and the deliberately small fakes used by tests.
+        # Driver 5.22+ exposes non-deprecated GQL status objects for both GQL-aware servers and
+        # older servers whose notifications it polyfills. Only notification statuses belong in
+        # this result field; success/no-data statuses are deliberately omitted.
+        statuses = getattr(summary, "gql_status_objects", ())
+        if isinstance(statuses, (list, tuple)):
+            raw.extend(status for status in statuses if getattr(status, "is_notification", False))
+    if not raw:
+        # Compatibility with older drivers and the deliberately small fakes used by tests.
         for attribute in ("notifications", "summary_notifications"):
             value = getattr(summary, attribute, ())
             if isinstance(value, (list, tuple)):
@@ -572,18 +594,20 @@ def _notification_from_status(status: object) -> dict[str, Any] | None:
 def _notification_dict(notification: object) -> dict[str, Any] | None:
     if isinstance(notification, Mapping):
         return dict(notification)
-    values = {
-        key: value
-        for key in (
-            "code",
-            "title",
-            "description",
-            "severity_level",
-            "category",
-            "position",
-        )
-        if (value := getattr(notification, key, None)) is not None
-    }
+    values: dict[str, Any] = {}
+    for key, attributes in {
+        "code": ("code", "gql_status"),
+        "title": ("title",),
+        "description": ("description", "status_description"),
+        "severity": ("raw_severity", "severity_level"),
+        "category": ("raw_classification", "category"),
+        "position": ("position",),
+    }.items():
+        for attribute in attributes:
+            value = getattr(notification, attribute, None)
+            if value is not None:
+                values[key] = value
+                break
     return values or None
 
 
