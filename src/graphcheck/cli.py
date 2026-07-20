@@ -3,13 +3,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from graphcheck import __version__
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile
 from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
-from graphcheck.diff import diff as compare_baselines
+from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
@@ -20,6 +21,9 @@ from graphcheck.project import (
     write_default_project,
     write_example_suite,
 )
+
+# Kept as an injection point for integrations that patched the original comparator.
+compare_baselines = compare
 
 app = typer.Typer(
     name="graphcheck",
@@ -208,6 +212,7 @@ def diff_command(
         None,
         help="Latest Baseline filename or path.",
     ),
+    json_output: bool = typer.Option(False, "--json", help="Emit the structured diff as JSON."),
 ) -> None:
     """Compare two stored baseline snapshots."""
     try:
@@ -215,16 +220,28 @@ def diff_command(
             current_baseline_name,
             latest_baseline_name,
         )
-        current_baseline = BaselineProfile.model_validate_json(
-            current_baseline_path.read_text(encoding="utf-8")
-        )
-        latest_baseline = BaselineProfile.model_validate_json(
-            latest_baseline_path.read_text(encoding="utf-8")
-        )
+        current_raw = current_baseline_path.read_text(encoding="utf-8")
+        latest_raw = latest_baseline_path.read_text(encoding="utf-8")
+        current_data = json.loads(current_raw)
+        latest_data = json.loads(latest_raw)
+        if current_data.get("schema_version") != latest_data.get("schema_version"):
+            raise SchemaVersionMismatch(
+                "cannot diff baselines with different schema_version "
+                f"(a={current_data.get('schema_version')}, "
+                f"b={latest_data.get('schema_version')})"
+            )
+        current_baseline = BaselineProfile.model_validate_json(current_raw)
+        latest_baseline = BaselineProfile.model_validate_json(latest_raw)
     except GraphCheckError as exc:
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
-        raise typer.Exit(1) from exc
+        raise typer.Exit(2) from exc
+    except SchemaVersionMismatch as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    except (OSError, ValidationError, json.JSONDecodeError) as exc:
+        typer.echo(f"error: unable to read baseline: {exc}", err=True)
+        raise typer.Exit(2) from exc
 
     if current_baseline.target != latest_baseline.target:
         _print_target_identity_warning(current_baseline, latest_baseline)
@@ -232,15 +249,27 @@ def diff_command(
             typer.echo("Diff cancelled by user.")
             return
 
-    messages = compare_baselines(current_baseline, latest_baseline)
-    if not messages:
-        typer.echo("No drift detected.")
+    try:
+        report = compare_baselines(current_baseline, latest_baseline)
+    except SchemaVersionMismatch as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if isinstance(report, list):  # Compatibility with the original line-oriented hook.
+        if not report:
+            typer.echo("No drift detected.")
+            return
+        typer.echo("Graph drift detected.\n")
+        for message in report:
+            typer.echo(message)
         return
-
-    typer.echo("Graph drift detected.")
-    typer.echo()
-    for message in messages:
-        typer.echo(message)
+    report = replace(
+        report,
+        baseline_a=current_baseline_path.name,
+        baseline_b=latest_baseline_path.name,
+    )
+    typer.echo(render_json(report) if json_output else render_human(report))
+    if report.fingerprint_changed:
+        raise typer.Exit(1)
 
 
 def _print_target_identity_warning(

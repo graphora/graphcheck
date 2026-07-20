@@ -281,7 +281,9 @@ def test_diff_identical_targets_do_not_prompt_and_print_no_drift(monkeypatch):
     result = runner.invoke(app, ["diff"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "No drift detected."
+    assert result.stdout.strip() == (
+        "diff  baseline.json → baseline.json\nfingerprint: MATCH\n\nNo drift detected."
+    )
     assert "Do you want to continue?" not in result.stdout
 
 
