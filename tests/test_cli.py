@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -7,6 +8,7 @@ from graphcheck.cli import app
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
 from graphcheck.project import write_default_project
+from graphcheck.packs.catalog import PACKS_DIRECTORY
 
 runner = CliRunner()
 
@@ -28,7 +30,7 @@ def test_help_runs():
 
 def test_init_writes_project_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
 
     result = runner.invoke(app, ["init"])
 
@@ -43,7 +45,7 @@ def test_init_writes_project_files(tmp_path, monkeypatch):
 def test_init_reports_connection_error_details(tmp_path, monkeypatch):
     from graphcheck.errors import GraphCheckError
 
-    def fail_debug_trace(profile_name, profile):
+    def fail_init_trace(profile_name, profile):
         raise GraphCheckError(
             "neo4j.auth_failed",
             "Neo4j rejected the configured credentials.",
@@ -51,7 +53,7 @@ def test_init_reports_connection_error_details(tmp_path, monkeypatch):
         )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", fail_debug_trace)
+    monkeypatch.setattr("graphcheck.cli.init_trace", fail_init_trace)
 
     result = runner.invoke(app, ["init"])
 
@@ -62,7 +64,19 @@ def test_init_reports_connection_error_details(tmp_path, monkeypatch):
 
 
 def test_debug_json_reports_profile_error(tmp_path, monkeypatch):
+    from graphcheck.errors import GraphCheckError
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.find_project_root",
+        lambda: (_ for _ in ()).throw(
+            GraphCheckError(
+                "project.missing",
+                "No graphcheck.yml found.",
+                "Run `graphcheck init` first.",
+            )
+        ),
+    )
 
     result = runner.invoke(app, ["debug", "--json"])
 
@@ -86,18 +100,59 @@ def _trace():
     )
 
 
+def _trace_without_read():
+    return DebugTrace(
+        profile="local",
+        target=RunTarget(
+            database="neo4j",
+            server_version="5.18.0",
+            edition="enterprise",
+            fingerprint="abc123",
+            capabilities=Capabilities(apoc=True, count_store=True),
+        ),
+        visibility=Visibility(can_connect=True, can_read=False, can_show_procedures=True),
+        counts=Counts(nodes=None, relationships=None),
+    )
+
+
+def _trace_without_apoc():
+    return DebugTrace(
+        profile="local",
+        target=RunTarget(
+            database="neo4j",
+            server_version="5.18.0",
+            edition="enterprise",
+            fingerprint="abc123",
+            capabilities=Capabilities(apoc=False, count_store=True),
+        ),
+        visibility=Visibility(can_connect=True, can_read=True, can_show_procedures=True),
+        counts=Counts(nodes=3, relationships=4),
+    )
+
+
+def _write_apoc_pack(path: Path) -> Path:
+    source = (PACKS_DIRECTORY / "core.yml").read_text(encoding="utf-8")
+    updated = source.replace("    requires: [read]", "    requires: [read, apoc]", 1)
+    assert updated != source
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    return path
+
+
 def test_init_reports_detected_neo4j(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
 
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
     assert "Detected Neo4j at bolt://localhost:7687 (version 5.18.0)" in result.stdout
+    assert "APOC: yes" in result.stdout
 
 
 def test_debug_json_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
 
@@ -106,11 +161,14 @@ def test_debug_json_success(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
     assert '"server_version": "5.18.0"' in result.stdout
+    assert '"apoc": true' in result.stdout
+    assert '"blocked_checks": []' in result.stdout
     assert '"nodes": 3' in result.stdout
 
 
 def test_debug_human_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
     runner.invoke(app, ["init"])
     monkeypatch.setattr("graphcheck.cli.debug_trace", lambda profile_name, profile: _trace())
 
@@ -120,6 +178,10 @@ def test_debug_human_success(tmp_path, monkeypatch):
     assert "Neo4j version: 5.18.0" in result.stdout
     assert "Edition: enterprise" in result.stdout
     assert "Database name: neo4j" in result.stdout
+    assert "APOC: yes" in result.stdout
+    assert "Credentials can see: connect, read, procedures" in result.stdout
+    assert "Credentials cannot see: none detected" in result.stdout
+    assert "Blocked checks: none" in result.stdout
     assert "Counts: 3 nodes, 4 relationships" in result.stdout
 
 
@@ -195,3 +257,73 @@ def test_report_without_open_explains_usage():
 
     assert result.exit_code == 0
     assert "graphcheck report --open" in result.stdout
+def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
+    )
+
+    result = runner.invoke(app, ["debug"])
+
+    assert result.exit_code == 0
+    assert "Credentials cannot see: read" in result.stdout
+    assert "Blocked checks:" in result.stdout
+    assert "example/customer-name-present (completeness) requires read" in result.stdout
+    assert "Grant read access" in result.stdout
+    assert "Counts: unavailable (read access denied)" in result.stdout
+
+
+def test_debug_json_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_read()
+    )
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 0
+    assert '"blocked_checks": [' in result.stdout
+    assert '"check_id": "customer-name-present"' in result.stdout
+    assert '"missing_capability": "read"' in result.stdout
+    assert "Grant read access" in result.stdout
+
+
+def test_debug_human_names_apoc_blocked_check_from_pack_yaml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    pack_path = _write_apoc_pack(tmp_path / "pack-metadata" / "core.yaml")
+    monkeypatch.setattr("graphcheck.packs.catalog.PACKS_DIRECTORY", pack_path.parent)
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_apoc()
+    )
+
+    result = runner.invoke(app, ["debug"])
+
+    assert result.exit_code == 0
+    assert "APOC: no" in result.stdout
+    assert "example/customer-name-present (completeness) requires apoc" in result.stdout
+    assert "Install APOC" in result.stdout
+
+
+def test_debug_json_names_apoc_blocked_check_from_pack_yaml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())
+    runner.invoke(app, ["init"])
+    pack_path = _write_apoc_pack(tmp_path / "pack-metadata" / "core.yaml")
+    monkeypatch.setattr("graphcheck.packs.catalog.PACKS_DIRECTORY", pack_path.parent)
+    monkeypatch.setattr(
+        "graphcheck.cli.debug_trace", lambda profile_name, profile: _trace_without_apoc()
+    )
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 0
+    assert '"check_id": "customer-name-present"' in result.stdout
+    assert '"check": "completeness"' in result.stdout
+    assert '"missing_capability": "apoc"' in result.stdout
+    assert "Install APOC" in result.stdout

@@ -1,0 +1,77 @@
+pack: pii
+version: 0.1.0
+completeness_notice: Findings are heuristic and sampled; this pack never claims complete PII discovery.
+checks:
+  pii_name_match:
+    catches: Sampled property occurrences whose keys match known personal-data aliases.
+    does_not_catch: Personal data stored under unknown or ambiguous property names.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: pii_name_match
+  pii_value_match:
+    catches: Sampled string property values matching known PII formats and required checksums.
+    does_not_catch: Encoded, encrypted, unrecognized, or unsampled personal-data values.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: pii_value_match
+name_match:
+  confidence: name-match
+  patterns:
+    ssn:
+      keys: [ssn, social_security_number, social_security]
+    dob:
+      keys: [dob, date_of_birth, birth_date, birthday]
+    email:
+      keys: [email, email_address, e_mail]
+    phone:
+      keys: [phone, phone_number, mobile, mobile_number, msisdn]
+    nric:
+      keys: [nric, national_registration_identity_card]
+    aadhaar:
+      keys: [aadhaar, aadhar, aadhaar_number, uidai]
+    address:
+      keys: [address, street_address, mailing_address, residential_address]
+    passport:
+      keys: [passport, passport_number]
+    credit_card:
+      keys: [credit_card, card_number, pan, payment_card]
+    tax_id:
+      keys: [tax_id, tin, taxpayer_id]
+    driver_license:
+      keys: [driver_license, driving_license, licence_number]
+    bank_account:
+      keys: [bank_account, account_number, iban]
+    ip_address:
+      keys: [ip, ip_address, ipv4, ipv6]
+    geolocation:
+      keys: [latitude, longitude, lat, lon, gps]
+    biometric:
+      keys: [biometric, fingerprint, faceprint, voiceprint]
+value_match:
+  confidence: value-match
+  sample_required: true
+  report:
+    fields: [location, exposure_count, confidence]
+  patterns:
+    email:
+      regex: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    e164_phone:
+      regex: "^\\+[1-9]\\d{1,14}$"
+    nric:
+      regex: "^[STFGM]\\d{7}[A-Z]$"
+    aadhaar:
+      regex: "^\\d{12}$"
+      checksum: verhoeff
+    credit_card:
+      regex: "^(?:\\d[ -]*?){13,19}$"
+      checksum: luhn

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, Verdict
-from graphcheck.reporting.writer import load_results
+from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
     Verdict.FAIL: 0,
@@ -27,12 +27,6 @@ def render_html_report(
     model = load_results(results)
     checks = sorted(
         (check for check in model.checks if verdicts is None or check.verdict in verdicts),
-        key=lambda check: (
-            _VERDICT_ORDER[check.verdict],
-            _SEVERITY_ORDER[check.severity.value],
-            check.suite_id,
-            check.id,
-        ),
     )
     return "\n".join(
         [
@@ -220,7 +214,7 @@ def _details_open(check: CheckResult) -> str:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True)
+    return json.dumps(json_compatible(value), sort_keys=True)
 
 
 def _escape(value: object) -> str:

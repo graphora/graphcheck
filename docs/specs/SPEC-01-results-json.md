@@ -1,6 +1,6 @@
 # SPEC-01 — `results.json`
 
-*Frozen for v0.* `results.json` is the machine-readable output of a GraphCheck run and the contract every other artifact (HTML report, MCP responses, future cloud) renders from. Its `schema_version` is `"1.0"`, versioned independently of `graphcheck_version`.
+*Frozen for v0.* `results.json` is the machine-readable output of a GraphCheck run and the contract every other artifact (HTML report, MCP responses, future cloud) renders from. Its `schema_version` is `"1.1"`, versioned independently of `graphcheck_version`. Version 1.1 adds aggregate measurement-scope evidence for drift findings that cannot honestly identify removed graph elements.
 
 **Source of truth:** the Pydantic model at `src/graphcheck/contracts/results.py`. `docs/specs/results.schema.json` is generated from it and is **structural only** — the derived invariants below live in the model's validators, so schema-valid ≠ fully-valid; external consumers must not rely on the schema alone.
 
@@ -61,7 +61,13 @@ Every model forbids unknown keys (`extra="forbid"`).
 4. **Estimates are labeled** (`estimate:false` = exact, else `{sample_size, population, confidence, ci}`). `errored`/`skipped` are never estimates.
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
 6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. `round` is **half-to-even** (Python's `round()`); re-implementations must match. Weights are locked. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
-7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry IDs + labels only; `compiled_query` keeps placeholders.
+7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry graph element IDs or aggregate measurement-scope IDs plus labels/types only; `compiled_query` keeps placeholders.
+
+Evidence pointer `kind` is `node`, `rel`, or `aggregate`. An `aggregate` pointer identifies a
+canonical metric/target scope such as `node_count:label=Customer`; it is not a Neo4j element ID.
+This is required for aggregate count-drift decreases because deleted elements cannot be selected
+from the current graph. Aggregate pointers must never be substituted for row-level
+node/relationship or property-coverage evidence.
 8. **Coverage-status invariant:** any `skip_reason ∈ {unsupported, not_run}` ⇒ `run.status:partial` (a `partial` run never exits 0). `generated` skips do not force partial.
 
 ## Deliverables

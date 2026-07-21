@@ -1,13 +1,40 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import jsonschema
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from graphcheck.contracts.results import Results
 from graphcheck.contracts.schemas import results_schema
+
+_JSON_VALUE = TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
+
+
+def json_compatible(value: object) -> Any:
+    """Return the same JSON-compatible value shape used by results.json."""
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump(by_alias=True, exclude_none=False)
+    if isinstance(value, Mapping):
+        return {str(key): json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (set, frozenset)):
+        items = [json_compatible(item) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(
+                item,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ),
+        )
+    if isinstance(value, (list, tuple)):
+        return [json_compatible(item) for item in value]
+    return _JSON_VALUE.dump_python(value, mode="json")
 
 
 def load_results(data: Results | dict[str, Any] | str | Path) -> Results:

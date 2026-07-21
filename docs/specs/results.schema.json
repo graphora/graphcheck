@@ -299,7 +299,8 @@
         "kind": {
           "enum": [
             "node",
-            "rel"
+            "rel",
+            "aggregate"
           ],
           "title": "Kind",
           "type": "string"
@@ -677,7 +678,7 @@
       "$ref": "#/$defs/Run"
     },
     "schema_version": {
-      "const": "1.0",
+      "const": "1.1",
       "title": "Schema Version",
       "type": "string"
     },
