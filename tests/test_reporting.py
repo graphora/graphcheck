@@ -70,57 +70,47 @@ def test_html_renderer_outputs_self_contained_interactive_report(name: str):
 def test_html_renderer_orders_failures_before_passes():
     html = render_html_report(_fixture("complete"))
 
-    fail_pos = html.index("Which accounts does a customer control")
-    warn_pos = html.index("Accounts are connected to a Customer")
-    pass_pos = html.index("Customer.tax_id is present")
+    fail_pos = html.index('data-check-key="customer-360::cq-001"')
+    warn_pos = html.index('data-check-key="customer-360::account-no-orphans"')
+    pass_pos = html.index('data-check-key="customer-360::cust-tax-id-present"')
 
     assert fail_pos < warn_pos < pass_pos
 
 
-def test_html_renderer_shows_one_score_and_outcome_breakdown():
+def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
-    assert 'style="--score-value: 43"' in html
-    assert 'aria-label="Overall score: 43 out of 100"' in html
-    assert "<span>43</span><small>Score</small>" in html
-    assert "3/3 checks" in html
-    assert "Exit: <strong>1: Run complete. Errors found.</strong>" in html
-    assert "<h2>Graph Health Summary</h2>" in html
-    assert "<th>Issue</th><th>Verdict</th>" in html
-    assert '5000 rows exceeds max 200</td><td><strong class="text-danger">-43</strong>' in html
-    assert (
-        '2 Account nodes have no controlling Customer</td><td><strong class="text-danger">'
-        "-14</strong>" in html
-    )
-    assert "Total Points Docked:" in html
-    assert '<span class="points-deducted-total">57</span>' in html
-    assert "<h3>Check Suite Overview</h3>" in html
-    assert "<th>Suite</th><th>Pass</th><th>Fail</th><th>Warn</th>" in html
+    assert "<h2>Graph Health Overview</h2>" in html
+    assert '<span class="exit-1">Run complete. 2 issues found</span>' in html
+    assert "<strong>neo4j</strong> (Neo4j version: 5.18.0, community)" in html
     assert "<code>customer-360</code>" in html
-    assert '<span class="badge badge-pass">1</span>' in html
-    assert '<span class="badge badge-fail">1</span>' in html
-    assert '<span class="badge badge-warn">1</span>' in html
-    assert "passed weight" not in html.lower()
-    assert "weighted score" not in html.lower()
-    assert "<th>Score</th>" not in html
-    assert html.count('class="score-ring"') == 1
+    assert '<span class="suite-check-stats">3/3 checks run</span>' in html
+    assert '<span class="badge badge-fail">1 FAILED</span>' in html
+    assert '<span class="badge badge-warn">1 WARNINGS</span>' in html
+    assert 'data-tooltip="Which accounts does a customer control — fail"' in html
+    assert 'data-tooltip="Accounts are connected to a Customer — warn"' in html
+    assert 'data-tooltip="Customer.tax_id is present — pass"' in html
+    assert "Show Issue Summary" in html
+    assert "5000 rows exceeds max 200" in html
+    assert "2 Account nodes have no controlling Customer" in html
 
 
-def test_html_renderer_keeps_score_separate_from_partial_coverage():
+def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
-    assert "<span>100</span><small>Score</small>" in html
-    assert 'style="--score-value: 100"' in html
-    assert "1/2 checks" in html
+    assert "<strong>Partial run:</strong>" in html
+    assert '<span class="suite-check-stats">1/2 checks run (1 skipped)</span>' in html
+    assert '<span class="badge badge-pass">OPERATIONAL</span>' in html
+    assert 'class="status-box status-box-skipped"' in html
+    assert 'class="status-box status-box-pass"' in html
 
 
-def test_html_renderer_uses_null_score_when_every_check_is_skipped():
+def test_html_renderer_reports_all_checks_skipped():
     html = render_html_report(_fixture("generated-only"))
 
-    assert 'class="score-ring score-ring-empty"' in html
-    assert 'aria-label="Overall score unavailable"' in html
-    assert "<span>n/a</span><small>Score</small>" in html
-    assert "0/1 checks" in html
+    assert '<span class="suite-check-stats">0/1 checks run (1 skipped)</span>' in html
+    assert '<span class="badge badge-skipped">SKIPPED</span>' in html
+    assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
 
 
 def test_html_renderer_exposes_cypher_and_evidence_ids():

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import html
 import json
-from datetime import datetime
 from collections.abc import Collection
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +66,7 @@ def render_html_report(
             '<main class="dashboard-body">',
             _banners(model),
             '<div class="dashboard-grid">',
-            _status_overview(model),
+            _status_overview(model, checks),
             _checks(checks),
             "</div>",
             "</main>",
@@ -128,9 +128,9 @@ def _banners(results: Results) -> str:
     return f"{error_html}{partial_html}"
 
 
-def _status_overview(results: Results) -> str:
+def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
     exit_code = results.run.exit_code
-    details_rows, total_issues = _details_rows(results)
+    details_rows, total_issues = _details_rows(checks)
 
     target = results.run.target
     if target is None:
@@ -147,7 +147,7 @@ def _status_overview(results: Results) -> str:
 
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
-    for check in results.checks:
+    for check in checks:
         checks_by_suite.setdefault(check.suite_id, []).append(check)
 
     suite_blocks = []
@@ -191,25 +191,31 @@ def _status_overview(results: Results) -> str:
             box_htmls.append(
                 f'<div class="status-box status-box-{v_class}" '
                 f'data-tooltip="{tooltip_text}" '
-                f'onclick="navigateToCheck(\'{_escape(check.suite_id)}\', \'{_escape(check.id)}\')"></div>'
+                f"onclick=\"navigateToCheck('{_escape(check.suite_id)}', '{_escape(check.id)}')\"></div>"
             )
 
-        bars_content = "".join(box_htmls) if box_htmls else '<span class="text-muted">No checks executed</span>'
+        bars_content = (
+            "".join(box_htmls)
+            if box_htmls
+            else '<span class="text-muted">No checks executed</span>'
+        )
 
         suite_blocks.append(
             '<div class="suite-status-card">'
             '  <div class="suite-status-header">'
             '    <div class="suite-title-group">'
             f'      <span class="suite-title"><code>{_escape(suite.id)}</code></span>'
-            f'      {suite_stats_html}'
-            '    </div>'
+            f"      {suite_stats_html}"
+            "    </div>"
             f"    {right_badges_html}"
             "  </div>"
             f'  <div class="status-bar-wrapper">{bars_content}</div>'
             "</div>"
         )
 
-    suite_body = "".join(suite_blocks) if suite_blocks else '<p class="text-muted">No suites found.</p>'
+    suite_body = (
+        "".join(suite_blocks) if suite_blocks else '<p class="text-muted">No suites found.</p>'
+    )
 
     details_body = (
         "".join(details_rows)
@@ -225,7 +231,7 @@ def _status_overview(results: Results) -> str:
         '      <div class="summary-meta-grid">'
         '        <div class="meta-item">'
         '          <span class="meta-label">Run Info</span>'
-        f'          <div>{run_info_html}</div>'
+        f"          <div>{run_info_html}</div>"
         "        </div>"
         '        <div class="meta-item">'
         '          <span class="meta-label">Target Graph</span>'
@@ -239,8 +245,8 @@ def _status_overview(results: Results) -> str:
         '    <div class="summary-toggle-wrapper">'
         '      <button id="toggle-summary-btn" class="btn-summary-toggle" onclick="toggleSummaryTable()">'
         '        Show Issue Summary <span class="toggle-arrow">▼</span>'
-        '      </button>'
-        '    </div>'
+        "      </button>"
+        "    </div>"
         '    <div id="summary-table-container" class="table-container hidden-summary">'
         '      <table class="styled-table" id="summary-table"><thead><tr>'
         '        <th onclick="sortTable(0)">Test <span class="sort-icon">↕</span></th>'
@@ -259,8 +265,8 @@ def _status_overview(results: Results) -> str:
     )
 
 
-def _details_rows(results: Results) -> tuple[list[str], int]:
-    issues = [check for check in results.checks if check.verdict != Verdict.PASS]
+def _details_rows(checks: Collection[CheckResult]) -> tuple[list[str], int]:
+    issues = [check for check in checks if check.verdict != Verdict.PASS]
     issues.sort(
         key=lambda check: (
             _VERDICT_ORDER[check.verdict],
