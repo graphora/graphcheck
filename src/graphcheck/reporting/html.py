@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import datetime
 from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, Verdict
 from graphcheck.reporting.writer import json_compatible, load_results
-from graphcheck.scoring import (
-    ScoreCalculation,
-    calculate_score,
-    calculate_score_deductions,
-    calculate_suite_scores,
-)
 
 _VERDICT_ORDER = {
     Verdict.FAIL: 0,
@@ -25,10 +20,17 @@ _VERDICT_ORDER = {
 _SEVERITY_ORDER = {"error": 0, "warn": 1}
 
 _EXIT_CODES = {
-    0: "0: Run complete. No errors found.",
-    1: "1: Run complete. Errors found.",
-    2: "2: Run interrupted. Please try again.",
-    3: "3: Run incomplete. Please check configured connections.",
+    0: "Run complete. No issues found.",
+    1: "Run complete. Errors found.",
+    2: "Run interrupted. Please try again.",
+    3: "Run incomplete. Please check configured connections.",
+}
+
+_EXIT_COLORS = {
+    0: "var(--pass-color)",
+    1: "var(--fail-color)",
+    2: "var(--warn-color)",
+    3: "var(--skipped-color)",
 }
 
 
@@ -64,11 +66,10 @@ def render_html_report(
             '<main class="dashboard-body">',
             _banners(model),
             '<div class="dashboard-grid">',
-            _score_breakdown(model),
+            _status_overview(model),
             _checks(checks),
             "</div>",
             "</main>",
-            '<button id="theme-toggle" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle Theme">🌙 <span>Dark</span></button>',
             "<script>",
             _JS,
             "</script>",
@@ -90,28 +91,6 @@ def write_html_report(
 
 
 def _header(results: Results) -> str:
-    if results.score is None:
-        score = "n/a"
-        score_value = 0
-        score_class = " score-ring-empty"
-        score_label = "Overall score unavailable"
-    else:
-        score = str(results.score.value)
-        score_value = results.score.value
-        score_class = ""
-        score_label = f"Overall score: {results.score.value} out of 100"
-
-    status_val = results.run.status.value.lower()
-    target = results.run.target
-
-    target_html = (
-        '<span class="text-muted">Target unavailable</span>'
-        if target is None
-        else f"<strong>{_escape(target.database)}</strong> ({_escape(target.edition)}, {_escape(target.server_version)})"
-    )
-
-    times_html = _format_run_times(results.run.started_at, results.run.finished_at)
-    exit_desc = _exit_code_desc(results.run.exit_code)
     version_info = (
         f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
     )
@@ -119,26 +98,10 @@ def _header(results: Results) -> str:
     return (
         '<header class="navbar">'
         '  <div class="brand-container">'
-        f'   <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
-        f"   <h1>Run: <code>{_escape(results.run.id)}</code> "
-        f'   <span class="status-pill status-{_escape(status_val)}">{_escape(results.run.status.value)}</span></h1>'
+        f'    <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
+        f"    <h1>Run: <code>{_escape(results.run.id)}</code></h1>"
         "  </div>"
-        '  <div class="header-meta-inline">'
-        '    <div class="meta-item">'
-        '      <span class="meta-label">Target</span>'
-        f"     <div>{target_html}</div>"
-        "    </div>"
-        '    <div class="meta-item">'
-        '      <span class="meta-label">Run Info</span>'
-        f"     <div>{times_html} | Exit: <strong>{_escape(exit_desc)}</strong></div>"
-        "    </div>"
-        "  </div>"
-        f' <div class="score-ring{score_class}" style="--score-value: {score_value}" '
-        f' role="img" aria-label="{_escape(score_label)}">'
-        '   <div class="score-ring-inner">'
-        f"     <span>{_escape(score)}</span><small>Score</small>"
-        "   </div>"
-        " </div>"
+        '  <button id="theme-toggle" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle Theme" title="Toggle Theme">🌙</button>'
         "</header>"
     )
 
@@ -165,89 +128,149 @@ def _banners(results: Results) -> str:
     return f"{error_html}{partial_html}"
 
 
-def _score_breakdown(results: Results) -> str:
-    deduction_rows, total_deducted = _deduction_rows(results)
-    scores = calculate_suite_scores(results.checks)
-    suite_rows = []
+def _status_overview(results: Results) -> str:
+    exit_code = results.run.exit_code
+    details_rows, total_issues = _details_rows(results)
 
-    for suite in results.suites:
-        calculation = scores.get(suite.id, calculate_score(()))
-        totals = suite.totals
-        suite_rows.append(
-            "<tr>"
-            f"<td><code>{_escape(suite.id)}</code></td>"
-            f'<td><span class="badge badge-pass">{totals.passed}</span></td>'
-            f'<td><span class="badge badge-fail">{totals.fail}</span></td>'
-            f'<td><span class="badge badge-warn">{totals.warn}</span></td>'
-            f'<td><span class="badge badge-errored">{totals.errored}</span></td>'
-            f'<td><span class="badge badge-skipped">{totals.skipped}</span></td>'
-            f"<td>{_escape(_coverage(calculation))}</td>"
-            f"<td><code>{_escape(suite.source_sha)}</code></td>"
-            "</tr>"
+    target = results.run.target
+    if target is None:
+        target_html = '<span class="text-muted">Target unavailable</span>'
+    else:
+        target_html = (
+            f"<strong>{_escape(target.database)}</strong> "
+            f"(Neo4j version: {_escape(target.server_version)}, {_escape(target.edition)})"
         )
 
-    suite_body = (
-        "".join(suite_rows)
-        if suite_rows
-        else '<tr><td colspan="8" class="text-center">No suites</td></tr>'
+    run_info_html = _format_run_info(
+        results.run.started_at, results.run.finished_at, exit_code, total_issues
     )
-    deduction_body = (
-        "".join(deduction_rows)
-        if deduction_rows
-        else '<tr><td colspan="5" class="text-center text-muted">No points docked. All clear! 🎉</td></tr>'
+
+    # Group checks by suite
+    checks_by_suite: dict[str, list[CheckResult]] = {}
+    for check in results.checks:
+        checks_by_suite.setdefault(check.suite_id, []).append(check)
+
+    suite_blocks = []
+    for suite in results.suites:
+        suite_checks = checks_by_suite.get(suite.id, [])
+        totals = suite.totals
+
+        total_checks = totals.passed + totals.fail + totals.warn + totals.errored + totals.skipped
+        run_checks = total_checks - totals.skipped
+
+        # Right side status badges
+        right_badges = []
+        failed_count = totals.fail + totals.errored
+        if failed_count > 0:
+            right_badges.append(f'<span class="badge badge-fail">{failed_count} FAILED</span>')
+        if totals.warn > 0:
+            right_badges.append(f'<span class="badge badge-warn">{totals.warn} WARNINGS</span>')
+
+        if not right_badges:
+            if totals.passed > 0:
+                right_badges.append('<span class="badge badge-pass">OPERATIONAL</span>')
+            else:
+                right_badges.append('<span class="badge badge-skipped">SKIPPED</span>')
+
+        right_badges_html = f'<div class="suite-badges-row">{"".join(right_badges)}</div>'
+
+        # Left side stats description
+        stats_notes = []
+        if totals.skipped > 0:
+            stats_notes.append(f"{totals.skipped} skipped")
+        if totals.errored > 0:
+            stats_notes.append(f"{totals.errored} errored")
+
+        notes_str = f" ({', '.join(stats_notes)})" if stats_notes else ""
+        suite_stats_html = f'<span class="suite-check-stats">{run_checks}/{total_checks} checks run{notes_str}</span>'
+
+        box_htmls = []
+        for check in suite_checks:
+            v_class = check.verdict.value.lower()
+            tooltip_text = f"{_escape(check.name)} — {_escape(check.verdict.value)}"
+            box_htmls.append(
+                f'<div class="status-box status-box-{v_class}" '
+                f'data-tooltip="{tooltip_text}" '
+                f'onclick="navigateToCheck(\'{_escape(check.suite_id)}\', \'{_escape(check.id)}\')"></div>'
+            )
+
+        bars_content = "".join(box_htmls) if box_htmls else '<span class="text-muted">No checks executed</span>'
+
+        suite_blocks.append(
+            '<div class="suite-status-card">'
+            '  <div class="suite-status-header">'
+            '    <div class="suite-title-group">'
+            f'      <span class="suite-title"><code>{_escape(suite.id)}</code></span>'
+            f'      {suite_stats_html}'
+            '    </div>'
+            f"    {right_badges_html}"
+            "  </div>"
+            f'  <div class="status-bar-wrapper">{bars_content}</div>'
+            "</div>"
+        )
+
+    suite_body = "".join(suite_blocks) if suite_blocks else '<p class="text-muted">No suites found.</p>'
+
+    details_body = (
+        "".join(details_rows)
+        if details_rows
+        else '<tr><td colspan="4" class="text-center text-muted">All clear! No issues found. 🎉</td></tr>'
     )
-    deducted = "n/a" if total_deducted is None else str(total_deducted)
 
     return (
         '<section class="card panel-section">'
-        ' <div class="panel-header">'
-        "   <h2>Graph Health Summary</h2>"
-        '   <p class="text-muted">Each row shows points docked by a test. Open matching checks for evidence.</p>'
-        " </div>"
-        ' <div class="scrollable-content">'
-        "   <h3>Check Suite Overview</h3>"
-        '   <div class="table-container">'
-        '     <table class="styled-table"><thead><tr><th>Suite</th><th>Pass</th><th>Fail</th><th>Warn</th>'
-        "     <th>Errored</th><th>Skipped</th><th>Coverage</th><th>Source SHA</th></tr></thead>"
-        f"     <tbody>{suite_body}</tbody>"
-        "     </table>"
-        "   </div>"
-        '   <h3 style="margin-top: 20px;">Details</h3>'
-        '   <div class="table-container">'
-        '     <table class="styled-table"><thead><tr><th>Test</th><th>Suite</th><th>Result</th>'
-        "     <th>Issue</th><th>Verdict</th></tr></thead>"
-        f"     <tbody>{deduction_body}</tbody>"
-        f'     <tfoot><tr><th colspan="4" style="text-align:right">Total Points Docked:</th>'
-        f'     <th><span class="points-deducted-total">{deducted}</span></th></tr></tfoot>'
-        "     </table>"
-        "   </div>"
-        " </div>"
-        ' <div class="panel-footer">'
-        '   <button id="explore-checks-btn" class="btn-primary" onclick="showChecksExplorer()">Explore Checks &rarr;</button>'
-        " </div>"
+        '  <div class="summary-top-bar">'
+        '    <div class="summary-meta-col">'
+        "      <h2>Graph Health Overview</h2>"
+        '      <div class="summary-meta-grid">'
+        '        <div class="meta-item">'
+        '          <span class="meta-label">Run Info</span>'
+        f'          <div>{run_info_html}</div>'
+        "        </div>"
+        '        <div class="meta-item">'
+        '          <span class="meta-label">Target Graph</span>'
+        f"          <div>{target_html}</div>"
+        "        </div>"
+        "      </div>"
+        "    </div>"
+        "  </div>"
+        '  <div class="scrollable-content">'
+        f'    <div class="suite-status-list">{suite_body}</div>'
+        '    <div class="summary-toggle-wrapper">'
+        '      <button id="toggle-summary-btn" class="btn-summary-toggle" onclick="toggleSummaryTable()">'
+        '        Show Issue Summary <span class="toggle-arrow">▼</span>'
+        '      </button>'
+        '    </div>'
+        '    <div id="summary-table-container" class="table-container hidden-summary">'
+        '      <table class="styled-table" id="summary-table"><thead><tr>'
+        '        <th onclick="sortTable(0)">Test <span class="sort-icon">↕</span></th>'
+        '        <th onclick="sortTable(1)">Suite <span class="sort-icon">↕</span></th>'
+        '        <th onclick="sortTable(2)">Result <span class="sort-icon">↕</span></th>'
+        '        <th onclick="sortTable(3)">Issue <span class="sort-icon">↕</span></th>'
+        "      </tr></thead>"
+        f"      <tbody>{details_body}</tbody>"
+        "      </table>"
+        "    </div>"
+        "  </div>"
+        '  <div class="panel-footer">'
+        '    <button id="explore-checks-btn" class="btn-primary" onclick="showChecksExplorer()">Explore Checks &rarr;</button>'
+        "  </div>"
         "</section>"
     )
 
 
-def _deduction_rows(results: Results) -> tuple[list[str], int | None]:
-    if results.score is None:
-        return [], None
-    points = {
-        (deduction.suite_id, deduction.check_id): deduction.points
-        for deduction in calculate_score_deductions(results.checks)
-    }
-    checks = sorted(
-        (check for check in results.checks if (check.suite_id, check.id) in points),
+def _details_rows(results: Results) -> tuple[list[str], int]:
+    issues = [check for check in results.checks if check.verdict != Verdict.PASS]
+    issues.sort(
         key=lambda check: (
-            -points[(check.suite_id, check.id)],
             _VERDICT_ORDER[check.verdict],
+            _SEVERITY_ORDER[check.severity.value],
             check.suite_id,
             check.id,
-        ),
+        )
     )
     rows = []
-    for check in checks:
-        deducted = points[(check.suite_id, check.id)]
+    for check in issues:
         v_class = check.verdict.value.lower()
         rows.append(
             "<tr>"
@@ -255,10 +278,9 @@ def _deduction_rows(results: Results) -> tuple[list[str], int | None]:
             f"<td><code>{_escape(check.suite_id)}</code></td>"
             f'<td><span class="badge badge-{v_class}">{_escape(check.verdict.value)}</span></td>'
             f"<td>{_escape(_issue(check))}</td>"
-            f'<td><strong class="text-danger">-{deducted}</strong></td>'
             "</tr>"
         )
-    return rows, sum(points.values())
+    return rows, len(issues)
 
 
 def _issue(check: CheckResult) -> str:
@@ -273,22 +295,22 @@ def _checks(checks: list[CheckResult]) -> str:
     items = "".join(_check(check) for check in checks)
     return (
         '<section id="checks-panel" class="card panel-section hidden-panel">'
-        ' <div class="checks-header">'
-        "   <h2>Checks Explorer</h2>"
-        '   <div class="checks-controls">'
-        '     <input type="text" id="search-input" placeholder="🔍 Search checks..." onkeyup="filterChecks()">'
-        '     <div class="filter-group">'
-        '       <button class="filter-btn active" data-filter="all" onclick="setVerdictFilter(\'all\', this)">All</button>'
-        '       <button class="filter-btn" data-filter="fail" onclick="setVerdictFilter(\'fail\', this)">Fail</button>'
-        '       <button class="filter-btn" data-filter="warn" onclick="setVerdictFilter(\'warn\', this)">Warn</button>'
-        '       <button class="filter-btn" data-filter="errored" onclick="setVerdictFilter(\'errored\', this)">Errored</button>'
-        '       <button class="filter-btn" data-filter="pass" onclick="setVerdictFilter(\'pass\', this)">Pass</button>'
-        '       <button class="filter-btn" data-filter="skipped" onclick="setVerdictFilter(\'skipped\', this)">Skipped</button>'
-        "     </div>"
-        '     <button class="btn-secondary" onclick="toggleAllDetails()">Toggle Details</button>'
-        "   </div>"
-        " </div>"
-        f' <div id="checks-container" class="scrollable-content">{items}</div>'
+        '  <div class="checks-header">'
+        "    <h2>Checks Explorer</h2>"
+        '    <div class="checks-controls">'
+        '      <input type="text" id="search-input" placeholder="🔍 Search checks..." onkeyup="filterChecks()">'
+        '      <div class="filter-group">'
+        '        <button class="filter-btn active" data-filter="all" onclick="setVerdictFilter(\'all\', this)">All</button>'
+        '        <button class="filter-btn" data-filter="fail" onclick="setVerdictFilter(\'fail\', this)">Fail</button>'
+        '        <button class="filter-btn" data-filter="warn" onclick="setVerdictFilter(\'warn\', this)">Warn</button>'
+        '        <button class="filter-btn" data-filter="errored" onclick="setVerdictFilter(\'errored\', this)">Errored</button>'
+        '        <button class="filter-btn" data-filter="pass" onclick="setVerdictFilter(\'pass\', this)">Pass</button>'
+        '        <button class="filter-btn" data-filter="skipped" onclick="setVerdictFilter(\'skipped\', this)">Skipped</button>'
+        "      </div>"
+        '      <button class="btn-secondary" onclick="toggleAllDetails()">Toggle Details</button>'
+        "    </div>"
+        "  </div>"
+        f'  <div id="checks-container" class="scrollable-content">{items}</div>'
         "</section>"
     )
 
@@ -296,6 +318,10 @@ def _checks(checks: list[CheckResult]) -> str:
 def _check(check: CheckResult) -> str:
     verdict_str = check.verdict.value.lower()
     classes = f"check-card check-{verdict_str}"
+    suite_id_esc = _escape(check.suite_id)
+    check_id_esc = _escape(check.id)
+    key_esc = f"{suite_id_esc}::{check_id_esc}"
+
     details = [
         f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code> | Severity: <code>{_escape(check.severity.value)}</code></p>',
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
@@ -324,11 +350,11 @@ def _check(check: CheckResult) -> str:
         details.append(_evidence(check))
 
     return (
-        f'<article class="{classes}" data-verdict="{verdict_str}">'
+        f'<article class="{classes}" data-verdict="{verdict_str}" data-check-key="{key_esc}">'
         '<div class="check-title-row">'
         f'<span class="badge badge-{verdict_str}">{_escape(check.verdict.value)}</span>'
         f"<h3>{_escape(check.name)}</h3>"
-        f'<code class="check-id">{_escape(check.suite_id)}::{_escape(check.id)}</code>'
+        f'<code class="check-id">{key_esc}</code>'
         "</div>"
         f'<details {_details_open(check)} class="check-details">'
         "<summary>View Details & Evidence</summary>"
@@ -368,38 +394,54 @@ def _exit_code_desc(code: int) -> str:
     return _EXIT_CODES.get(code, f"{code}: Unknown exit code")
 
 
-def _coverage(score: ScoreCalculation) -> str:
-    if score.coverage_percent is None:
-        return "n/a (no checks selected)"
-    return f"{score.executed}/{score.selected} checks"
-
-
 def _details_open(check: CheckResult) -> str:
     return ""
 
 
-def _format_run_times(started: Any, finished: Any) -> str:
-    s_str = _format_datetime(started)
-    f_str = _format_datetime(finished)
+def _format_run_info(started: Any, finished: Any, exit_code: int, total_issues: int) -> str:
+    s_dt = _parse_datetime(started)
+    f_dt = _parse_datetime(finished)
 
-    if s_str == "n/a" or f_str == "n/a":
-        return f"{s_str} &rarr; {f_str}"
+    if exit_code in (0, 1):
+        if total_issues == 0:
+            status_text = "Run complete. No issues found"
+        else:
+            issue_str = "issue" if total_issues == 1 else "issues"
+            status_text = f"Run complete. {total_issues} {issue_str} found"
+    else:
+        status_text = _exit_code_desc(exit_code)
 
-    s_parts = s_str.split(" ")
-    f_parts = f_str.split(" ")
+    exit_class = f"exit-{exit_code}" if exit_code in _EXIT_COLORS else ""
 
-    if len(s_parts) == 2 and len(f_parts) == 2 and s_parts[0] == f_parts[0]:
-        return f"{s_parts[0]} {s_parts[1]} &rarr; {f_parts[1]}"
+    if s_dt is None:
+        time_str = "n/a"
+    else:
+        formatted_date = s_dt.strftime("%d-%m-%Y at %H:%M:%S")
+        if f_dt is not None:
+            duration = max(0, int((f_dt - s_dt).total_seconds()))
+            unit = "second" if duration == 1 else "seconds"
+            time_str = f"on {formatted_date} (ran in {duration} {unit})"
+        else:
+            time_str = f"on {formatted_date}"
 
-    return f"{s_str} &rarr; {f_str}"
+    exit_html = (
+        f'<span class="{exit_class}">{_escape(status_text)}</span>'
+        if exit_class
+        else _escape(status_text)
+    )
+    return f"{exit_html} {_escape(time_str)}"
 
 
-def _format_datetime(val: Any) -> str:
+def _parse_datetime(val: Any) -> datetime | None:
     if not val:
-        return "n/a"
-    s = str(val).replace("T", " ")
-    s = s.split(".")[0].split("+")[0].replace("Z", "").replace("z", "").strip()
-    return _escape(s)
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).replace("Z", "").replace("z", "").strip()
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
 
 
 def _json(value: object) -> str:
@@ -459,7 +501,6 @@ _CSS = """
   --skipped-bg: #1e293b;
 }
 
-/* Dark mode scrollbars fix */
 [data-theme="dark"] ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -480,6 +521,7 @@ html, body {
   height: 100vh;
   margin: 0;
   overflow: hidden;
+  font-size: 15px;
 }
 body {
   display: flex;
@@ -495,7 +537,7 @@ body {
   flex-shrink: 0;
   background: var(--bg-header);
   color: #fff;
-  padding: 12px 24px;
+  padding: 14px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -506,62 +548,211 @@ body {
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 10px;
+  font-size: 11px;
   color: #94a3b8;
   font-weight: 600;
 }
-.navbar h1 { margin: 0; font-size: 16px; font-weight: 600; }
-.navbar code { background: #1e293b; color: #f8fafc; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.navbar h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.navbar code { background: #1e293b; color: #f8fafc; padding: 2px 8px; border-radius: 4px; font-size: 14px; }
 
-.header-meta-inline {
+.theme-toggle-btn {
+  background: transparent;
+  color: #fff;
+  border: none;
+  outline: none;
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+.theme-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.05);
+}
+
+.exit-0 { color: var(--pass-color); font-weight: 600; }
+.exit-1 { color: var(--fail-color); font-weight: 600; }
+.exit-2 { color: var(--warn-color); font-weight: 600; }
+.exit-3 { color: var(--skipped-color); font-weight: 600; }
+
+.summary-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+.summary-meta-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.summary-meta-grid {
+  display: flex;
+  align-items: flex-start;
   gap: 24px;
-  font-size: 11px;
-  color: #cbd5e1;
+  font-size: 13px;
+  margin-top: 6px;
   flex-wrap: wrap;
 }
 .meta-item { display: flex; flex-direction: column; }
 .meta-item .meta-label {
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-weight: 700;
   letter-spacing: 0.05em;
-  margin-bottom: 1px;
+  margin-bottom: 2px;
 }
 
-.status-pill {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 12px;
-  text-transform: uppercase;
-  font-weight: 700;
-  vertical-align: middle;
+/* Status Graph / Suite Status Layout */
+.suite-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.status-success, .status-passed { background: var(--pass-bg); color: var(--pass-color); }
-.status-failed, .status-error { background: var(--fail-bg); color: var(--fail-color); }
 
-.score-ring {
+.suite-status-card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.suite-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.suite-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.suite-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.suite-check-stats {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.suite-badges-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: conic-gradient(var(--pass-color) calc(var(--score-value) * 1%), #334155 0);
 }
-.score-ring-inner {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: grid;
-  place-content: center;
-  text-align: center;
-  background: var(--bg-header);
+
+.status-bar-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
 }
-.score-ring span { font-size: 14px; font-weight: 700; line-height: 1; color: #fff; }
-.score-ring small { font-size: 7px; text-transform: uppercase; color: #94a3b8; }
+
+.status-box {
+  width: 14px;
+  height: 30px;
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.15s ease, filter 0.15s ease;
+  flex-shrink: 0;
+}
+
+.status-box:hover {
+  transform: scaleY(1.15) scaleX(1.1);
+  filter: brightness(1.1);
+  z-index: 10;
+}
+
+.status-box-pass { background-color: var(--pass-color); }
+.status-box-fail { background-color: var(--fail-color); }
+.status-box-warn { background-color: var(--warn-color); }
+.status-box-errored { background-color: var(--errored-color); }
+.status-box-skipped { background-color: var(--skipped-color); }
+
+/* Toggleable Issue Summary */
+.summary-toggle-wrapper {
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.btn-summary-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.btn-summary-toggle:hover {
+  background: var(--bg-subtle);
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.toggle-arrow {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.hidden-summary {
+  display: none !important;
+}
+
+/* Global Floating Tooltip */
+.floating-tooltip {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  background: #0f172a;
+  color: #ffffff;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .floating-tooltip {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.floating-tooltip.visible {
+  opacity: 1;
+}
 
 .dashboard-body {
   flex: 1;
@@ -570,7 +761,7 @@ body {
   max-width: 1600px;
   width: 100%;
   margin: 0 auto;
-  padding: 14px 20px;
+  padding: 16px 20px;
   gap: 12px;
   overflow: hidden;
 }
@@ -594,7 +785,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 18px;
   box-shadow: var(--shadow);
 }
 
@@ -607,8 +798,8 @@ body {
   overflow: hidden;
 }
 .panel-header, .checks-header { flex-shrink: 0; }
-.panel-section h2 { margin: 0 0 4px 0; font-size: 17px; }
-.panel-section h3 { margin: 12px 0 6px 0; font-size: 13px; }
+.panel-section h2 { margin: 0 0 4px 0; font-size: 18px; }
+.panel-section h3 { margin: 14px 0 8px 0; font-size: 14px; }
 
 .scrollable-content {
   flex: 1;
@@ -631,7 +822,7 @@ body {
   border: none;
   padding: 8px 16px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.2s ease, transform 0.1s ease;
@@ -659,7 +850,7 @@ body {
 
 .badge {
   display: inline-block;
-  padding: 2px 6px;
+  padding: 3px 7px;
   border-radius: 4px;
   font-size: 11px;
   font-weight: 700;
@@ -671,27 +862,43 @@ body {
 .badge-errored { background: var(--errored-bg); color: var(--errored-color); border: 1px solid rgba(139, 92, 246, 0.3); }
 .badge-skipped { background: var(--skipped-bg); color: var(--skipped-color); border: 1px solid var(--border); }
 
-.banner { padding: 8px 12px; border-radius: var(--radius); font-size: 12px; flex-shrink: 0; }
+.banner { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
 .banner-error { background: var(--fail-bg); border-left: 4px solid var(--fail-color); color: var(--fail-color); }
 .banner-partial { background: var(--warn-bg); border-left: 4px solid var(--warn-color); color: var(--warn-color); }
 
-.table-container { overflow-x: auto; }
-.styled-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
-.styled-table th { background: var(--bg-subtle); padding: 8px 10px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-weight: 600; }
-.styled-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.table-container { overflow-x: auto; margin-top: 8px; }
+.styled-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.styled-table th {
+  background: var(--bg-subtle);
+  padding: 10px 12px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+.styled-table th:hover { background: var(--border); }
+.styled-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+
+.sort-icon {
+  font-size: 11px;
+  opacity: 0.5;
+  margin-left: 4px;
+}
 
 .checks-header {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 .checks-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #search-input {
-  padding: 5px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   outline: none;
   background: var(--bg-card);
   color: var(--text-main);
@@ -701,8 +908,8 @@ body {
   background: var(--bg-card);
   color: var(--text-muted);
   border: none;
-  padding: 5px 10px;
-  font-size: 11px;
+  padding: 6px 12px;
+  font-size: 12px;
   cursor: pointer;
   border-right: 1px solid var(--border);
 }
@@ -713,18 +920,19 @@ body {
   background: var(--bg-subtle);
   color: var(--text-main);
   border: 1px solid var(--border);
-  padding: 5px 10px;
+  padding: 6px 12px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
 .check-card {
   border: 1px solid var(--border);
   border-radius: 6px;
-  margin-bottom: 10px;
-  padding: 12px;
+  margin-bottom: 12px;
+  padding: 14px;
   background: var(--bg-card);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 .check-card.check-fail { border-left: 4px solid var(--fail-color); }
 .check-card.check-warn { border-left: 4px solid var(--warn-color); }
@@ -732,57 +940,45 @@ body {
 .check-card.check-pass { border-left: 4px solid var(--pass-color); }
 .check-card.check-skipped { border-left: 4px solid var(--skipped-color); }
 
-.check-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.check-title-row h3 { margin: 0; font-size: 14px; font-weight: 600; }
-.check-id { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+.check-card.card-highlight {
+  animation: highlightPulse 1.5s ease;
+}
 
-.check-details { margin-top: 8px; font-size: 12px; }
-.check-details summary { cursor: pointer; font-weight: 600; color: #3b82f6; font-size: 12px; }
+@keyframes highlightPulse {
+  0% { outline: 2px solid #2563eb; box-shadow: 0 0 12px rgba(37, 99, 235, 0.5); }
+  100% { outline: 0px solid transparent; box-shadow: var(--shadow); }
+}
+
+.check-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.check-title-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.check-id { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+
+.check-details { margin-top: 8px; font-size: 13px; }
+.check-details summary { cursor: pointer; font-weight: 600; color: #000000; font-size: 13px; }
+[data-theme="dark"] .check-details summary { color: #ffffff; }
+
 .details-content { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 
 code, pre { font-family: 'ui-monospace', SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-code { background: var(--code-bg); color: var(--code-text); padding: 2px 4px; border-radius: 4px; font-size: 85%; }
+code { background: var(--code-bg); color: var(--code-text); padding: 2px 5px; border-radius: 4px; font-size: 88%; }
 
-pre.code-block { background: #020617; color: #f8fafc; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 11px; margin: 6px 0; }
+pre.code-block { background: #020617; color: #f8fafc; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 8px 0; }
 pre.code-block code { background: transparent; color: inherit; padding: 0; border-radius: 0; font-size: 100%; }
 
 .text-muted { color: var(--text-muted); }
 .text-danger { color: var(--fail-color); }
 .text-center { text-align: center; }
-.meta-sub { font-size: 11px; color: var(--text-muted); }
-.callout { padding: 8px; border-radius: 6px; margin: 8px 0; font-size: 12px; }
+.meta-sub { font-size: 12px; color: var(--text-muted); }
+.callout { padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
 .callout-error { background: var(--fail-bg); border: 1px solid rgba(239, 68, 68, 0.3); }
-.kind-tag { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
-
-/* Dark mode toggle button */
-.theme-toggle-btn {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 1000;
-  background: var(--bg-card);
-  color: var(--text-main);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.2s ease;
-}
-.theme-toggle-btn:hover {
-  transform: translateY(-2px);
-}
+.kind-tag { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; font-size: 11px; }
 
 @media (max-width: 1024px) {
   html, body { height: auto; overflow: auto; }
   .dashboard-body { overflow: visible; }
-  .navbar { flex-direction: column; align-items: flex-start; }
-  .header-meta-inline { flex-direction: column; gap: 8px; align-items: flex-start; }
+  .navbar { flex-direction: row; justify-content: space-between; }
+  .summary-top-bar { flex-direction: column; align-items: flex-start; }
+  .summary-meta-grid { flex-direction: column; gap: 8px; }
   .dashboard-grid, .dashboard-grid.has-checks { grid-template-columns: 1fr; }
   .panel-section { max-height: 500px; }
 }
@@ -791,6 +987,43 @@ pre.code-block code { background: transparent; color: inherit; padding: 0; borde
 
 _JS = """
 let activeVerdictFilter = 'all';
+let globalTooltip = null;
+let sortDirections = {};
+
+function initTooltips() {
+  globalTooltip = document.createElement('div');
+  globalTooltip.id = 'floating-tooltip';
+  globalTooltip.className = 'floating-tooltip';
+  document.body.appendChild(globalTooltip);
+
+  document.addEventListener('mouseover', function(e) {
+    const box = e.target.closest('.status-box');
+    if (box && box.dataset.tooltip) {
+      globalTooltip.textContent = box.dataset.tooltip;
+      globalTooltip.classList.add('visible');
+      updateTooltipPos(e);
+    }
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (globalTooltip && globalTooltip.classList.contains('visible')) {
+      updateTooltipPos(e);
+    }
+  });
+
+  document.addEventListener('mouseout', function(e) {
+    const box = e.target.closest('.status-box');
+    if (box && globalTooltip) {
+      globalTooltip.classList.remove('visible');
+    }
+  });
+}
+
+function updateTooltipPos(e) {
+  if (!globalTooltip) return;
+  globalTooltip.style.left = e.clientX + 'px';
+  globalTooltip.style.top = (e.clientY - 12) + 'px';
+}
 
 function setVerdictFilter(verdict, btn) {
   activeVerdictFilter = verdict;
@@ -827,7 +1060,41 @@ function toggleTheme() {
   body.setAttribute('data-theme', newTheme);
   
   const btn = document.getElementById('theme-toggle');
-  btn.innerHTML = newTheme === 'dark' ? '☀️ <span>Light</span>' : '🌙 <span>Dark</span>';
+  btn.innerHTML = newTheme === 'dark' ? '☀️' : '🌙';
+}
+
+function toggleSummaryTable() {
+  const container = document.getElementById('summary-table-container');
+  const btn = document.getElementById('toggle-summary-btn');
+  if (container.classList.contains('hidden-summary')) {
+    container.classList.remove('hidden-summary');
+    btn.innerHTML = 'Hide Issue Summary <span class="toggle-arrow">▲</span>';
+  } else {
+    container.classList.add('hidden-summary');
+    btn.innerHTML = 'Show Issue Summary <span class="toggle-arrow">▼</span>';
+  }
+}
+
+function sortTable(columnIndex) {
+  const table = document.getElementById('summary-table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+
+  if (rows.length === 1 && rows[0].cells.length === 1) return;
+
+  const currentDir = sortDirections[columnIndex] === 'asc' ? 'desc' : 'asc';
+  sortDirections[columnIndex] = currentDir;
+
+  rows.sort((a, b) => {
+    const cellA = a.cells[columnIndex]?.textContent.trim().toLowerCase() || '';
+    const cellB = b.cells[columnIndex]?.textContent.trim().toLowerCase() || '';
+    return currentDir === 'asc'
+      ? cellA.localeCompare(cellB)
+      : cellB.localeCompare(cellA);
+  });
+
+  rows.forEach(row => tbody.appendChild(row));
 }
 
 function showChecksExplorer() {
@@ -842,4 +1109,28 @@ function showChecksExplorer() {
     if (btn) btn.style.display = 'none';
   }
 }
+
+function navigateToCheck(suiteId, checkId) {
+  showChecksExplorer();
+
+  const key = `${suiteId}::${checkId}`;
+  const targetCard = document.querySelector(`[data-check-key="${key}"]`);
+
+  if (targetCard) {
+    targetCard.style.display = 'block';
+
+    const details = targetCard.querySelector('.check-details');
+    if (details) {
+      details.open = true;
+    }
+
+    targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    targetCard.classList.remove('card-highlight');
+    void targetCard.offsetWidth;
+    targetCard.classList.add('card-highlight');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', initTooltips);
 """.strip()
