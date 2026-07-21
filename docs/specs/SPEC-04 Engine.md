@@ -131,12 +131,14 @@ trailing newline. The JSON and HTML writers share one JSON-compatible value norm
 dates and datetimes use Pydantic's ISO representation, binary values use URL-safe base64, and sets
 are ordered by their canonical JSON representation before becoming arrays.
 
-The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and no
-JavaScript, CDN, external font, image, stylesheet, or link dependency. It opens offline and shows
-run metadata, one normalized score, execution coverage, target fingerprint/version, partial/failed
-banners, per-suite coverage/totals and source SHAs, compiled Cypher, expected/measured values,
-estimates, errors, and evidence pointers. Checks are ordered `fail`, `warn`, `errored`, `skipped`,
-`pass`, then by severity, suite id, and check id.
+The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and
+JavaScript but no CDN, external font, image, stylesheet, link dependency, or runtime network call.
+It opens offline and shows run metadata, one normalized score, execution coverage, target
+fingerprint/version, partial/failed banners, per-suite coverage/totals and source SHAs, compiled
+Cypher, expected/measured values, estimates, errors, and evidence pointers. Its embedded script
+supports local filtering, detail expansion, panel reveal, and theme switching without loading or
+transmitting data. Checks are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then by severity,
+suite id, and check id.
 
 Configuration and connection failures also produce failed-run artifacts when the project artifact
 path can be resolved. A missing project root cannot produce an artifact because no authoritative

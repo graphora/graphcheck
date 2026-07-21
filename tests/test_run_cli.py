@@ -120,7 +120,8 @@ competency:
     html = report.read_text(encoding="utf-8")
     assert "<!doctype html>" in html
     assert "http://" not in html and "https://" not in html
-    assert "<script" not in html
+    assert html.count("<script>") == 1
+    assert "function filterChecks()" in html
     assert ' src="' not in html and ' href="' not in html
     assert "Checks: 1 | passed 1" in result.stdout
     assert "exit code: 0" in result.stdout

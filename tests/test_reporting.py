@@ -48,17 +48,23 @@ def test_writer_rejects_invalid_results():
 
 
 @pytest.mark.parametrize("name", ["complete", "partial", "generated-only", "failed"])
-def test_html_renderer_outputs_self_contained_report(name: str):
+def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     html = render_html_report(_fixture(name))
 
     assert "<!doctype html>" in html
     assert "<style>" in html
+    assert html.count("<script>") == 1
+    assert "function filterChecks()" in html
+    assert "function toggleTheme()" in html
     assert "GraphCheck" in html
     assert "http://" not in html
     assert "https://" not in html
-    assert "<script" not in html
     assert ' src="' not in html
     assert ' href="' not in html
+    assert "fetch(" not in html
+    assert "XMLHttpRequest" not in html
+    assert "WebSocket(" not in html
+    assert "EventSource(" not in html
 
 
 def test_html_renderer_orders_failures_before_passes():
@@ -74,21 +80,26 @@ def test_html_renderer_orders_failures_before_passes():
 def test_html_renderer_shows_one_score_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
+    assert 'style="--score-value: 43"' in html
+    assert 'aria-label="Overall score: 43 out of 100"' in html
+    assert "<span>43</span><small>Score</small>" in html
+    assert "3/3 checks" in html
+    assert "Exit: <strong>1: Run complete. Errors found.</strong>" in html
+    assert "<h2>Graph Health Summary</h2>" in html
+    assert "<th>Issue</th><th>Verdict</th>" in html
+    assert '5000 rows exceeds max 200</td><td><strong class="text-danger">-43</strong>' in html
     assert (
-        '<div class="score-ring" style="--score-value: 43" role="img" '
-        'aria-label="Overall score: 43 out of 100">'
-        '<div class="score-ring-inner"><span>43</span><small>overall score</small>' in html
+        '2 Account nodes have no controlling Customer</td><td><strong class="text-danger">'
+        "-14</strong>" in html
     )
-    assert "Execution coverage: 3 of 3 selected checks executed (100%)" in html
-    assert "CI exit code: <strong>1</strong>" in html
-    assert "<h2>Score Breakdown</h2>" in html
-    assert "<th>Issue</th><th>Points docked</th>" in html
-    assert "5000 rows exceeds max 200</td><td><strong>43</strong>" in html
-    assert "2 Account nodes have no controlling Customer</td><td><strong>14</strong>" in html
-    assert '<th colspan="5">Total points docked</th><th>57</th>' in html
-    assert "<h3>Suite Results</h3>" in html
+    assert "Total Points Docked:" in html
+    assert '<span class="points-deducted-total">57</span>' in html
+    assert "<h3>Check Suite Overview</h3>" in html
     assert "<th>Suite</th><th>Pass</th><th>Fail</th><th>Warn</th>" in html
-    assert "<td>customer-360</td><td>1</td><td>1</td><td>1</td>" in html
+    assert "<code>customer-360</code>" in html
+    assert '<span class="badge badge-pass">1</span>' in html
+    assert '<span class="badge badge-fail">1</span>' in html
+    assert '<span class="badge badge-warn">1</span>' in html
     assert "passed weight" not in html.lower()
     assert "weighted score" not in html.lower()
     assert "<th>Score</th>" not in html
@@ -98,9 +109,9 @@ def test_html_renderer_shows_one_score_and_outcome_breakdown():
 def test_html_renderer_keeps_score_separate_from_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
-    assert "<span>100</span><small>overall score</small>" in html
+    assert "<span>100</span><small>Score</small>" in html
     assert 'style="--score-value: 100"' in html
-    assert "Execution coverage: 1 of 2 selected checks executed (50%)" in html
+    assert "1/2 checks" in html
 
 
 def test_html_renderer_uses_null_score_when_every_check_is_skipped():
@@ -108,8 +119,8 @@ def test_html_renderer_uses_null_score_when_every_check_is_skipped():
 
     assert 'class="score-ring score-ring-empty"' in html
     assert 'aria-label="Overall score unavailable"' in html
-    assert "<span>n/a</span><small>overall score</small>" in html
-    assert "Execution coverage: 0 of 1 selected checks executed (0%)" in html
+    assert "<span>n/a</span><small>Score</small>" in html
+    assert "0/1 checks" in html
 
 
 def test_html_renderer_exposes_cypher_and_evidence_ids():
@@ -132,7 +143,7 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 
     html = render_html_report(raw)
 
-    assert "Labels/Type/Scope" in html
+    assert "Labels / Type / Scope" in html
     assert "aggregate measurement scope" in html
 
 

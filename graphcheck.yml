@@ -1,0 +1,3 @@
+project: graphcheck
+checks: checks
+artifacts: .graphcheck

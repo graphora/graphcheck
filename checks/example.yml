@@ -1,0 +1,116 @@
+suite: example_onboarding
+defaults: { severity: error, tags: [example, startup-investments] }
+
+conformance:
+  - id: startup-name-present
+    check: completeness
+    with: { label: Startup, property: name }
+
+  - id: investor-name-present
+    check: completeness
+    with: { label: Investor, property: name }
+
+  - id: funding-round-id-present
+    check: completeness
+    with: { label: FundingRound, property: roundId }
+
+  - id: city-name-present
+    check: completeness
+    with: { label: City, property: name }
+
+  - id: industry-name-present
+    check: completeness
+    with: { label: Industry, property: name }
+
+  # Intentional failures for exercising findings, evidence, and CI exit codes.
+  - id: demo-investor-onboarding-id-required
+    check: completeness
+    with: { label: Investor, property: onboardingId }
+    tags: [intentional-failure]
+
+  - id: demo-startup-onboarding-owner-required
+    check: completeness
+    with: { label: Startup, property: onboardingOwner }
+    severity: warn
+    tags: [intentional-failure]
+
+competency:
+  - id: graph-can-be-summarized
+    question: "Can the startup investment graph be summarized by label?"
+    query: |
+      CALL { MATCH (s:Startup) RETURN count(s) AS startups }
+      CALL { MATCH (i:Investor) RETURN count(i) AS investors }
+      CALL { MATCH (r:FundingRound) RETURN count(r) AS funding_rounds }
+      CALL { MATCH (c:City) RETURN count(c) AS cities }
+      CALL { MATCH (i:Industry) RETURN count(i) AS industries }
+      RETURN startups, investors, funding_rounds, cities, industries
+    expect:
+      rows: { exactly: 1 }
+      columns: [startups, investors, funding_rounds, cities, industries]
+      unique: true
+
+  - id: relationship-endpoints-are-valid
+    question: "Do the investment relationships connect the expected node labels?"
+    query: |
+      MATCH (source)-[relationship]->(target)
+      WHERE
+        (type(relationship) = 'OPERATES_IN'
+          AND NOT (source:Startup AND target:Industry))
+        OR (type(relationship) = 'LOCATED_IN'
+          AND NOT (source:Startup AND target:City))
+        OR (type(relationship) = 'RAISED'
+          AND NOT (source:Startup AND target:FundingRound))
+        OR (type(relationship) = 'FUNDED_BY'
+          AND NOT (source:FundingRound AND target:Investor))
+        OR (type(relationship) = 'INVESTED_IN'
+          AND NOT (source:Investor AND target:Startup))
+        OR (type(relationship) = 'CO_INVESTED_WITH'
+          AND NOT (source:Investor AND target:Investor))
+      RETURN source, relationship, target
+    expect: { empty: true }
+
+  - id: relationship-types-can-be-counted
+    question: "Can every expected relationship type be counted?"
+    query: |
+      MATCH ()-[relationship]->()
+      WITH collect(type(relationship)) AS relationship_types
+      RETURN
+        size([value IN relationship_types WHERE value = 'OPERATES_IN']) AS operates_in,
+        size([value IN relationship_types WHERE value = 'LOCATED_IN']) AS located_in,
+        size([value IN relationship_types WHERE value = 'RAISED']) AS raised,
+        size([value IN relationship_types WHERE value = 'FUNDED_BY']) AS funded_by,
+        size([value IN relationship_types WHERE value = 'INVESTED_IN']) AS invested_in,
+        size([value IN relationship_types WHERE value = 'CO_INVESTED_WITH']) AS co_invested_with
+    expect:
+      rows: { exactly: 1 }
+      columns: [operates_in, located_in, raised, funded_by, invested_in, co_invested_with]
+      unique: true
+
+  - id: investor-startup-path-can-be-traversed
+    question: "Can an investor be traversed to a startup and its funding rounds?"
+    query: |
+      MATCH (investor:Investor)-[:INVESTED_IN]->(startup:Startup)
+      OPTIONAL MATCH (startup)-[:RAISED]->(round:FundingRound)-[:FUNDED_BY]->(funder:Investor)
+      RETURN investor, startup, count(round) AS funding_rounds, count(funder) AS funders
+    expect:
+      rows: { min: 1 }
+      columns: [investor, startup, funding_rounds, funders]
+      unique: true
+
+  - id: demo-investments-must-not-exist
+    question: "Demo failure: are there no Investor-to-Startup investments?"
+    query: |
+      MATCH (investor:Investor)-[investment:INVESTED_IN]->(startup:Startup)
+      RETURN investor, investment, startup
+    expect: { empty: true }
+    tags: [intentional-failure]
+
+  - id: demo-self-co-investment-forbidden
+    question: "Demo warning: are there no self-referencing co-investments?"
+    query: |
+      MATCH (left:Investor)-[co_investment:CO_INVESTED_WITH]->(right:Investor)
+      WHERE left = right
+      RETURN left, co_investment, right
+    expect: { empty: true }
+    severity: warn
+    tags: [intentional-failure]

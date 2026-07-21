@@ -171,8 +171,9 @@ Every prepared run writes:
 .graphcheck/runs/latest/report.html
 ```
 
-`results.json` follows the versioned SPEC-01 contract. `report.html` has inline styling and no
-external assets, so it can be opened and shared offline.
+`results.json` follows the versioned SPEC-01 contract. `report.html` embeds its styling and
+interaction script and has no external assets or network calls, so it can be opened and shared
+offline.
 
 ## Exit codes
 

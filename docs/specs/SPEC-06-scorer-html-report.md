@@ -100,15 +100,18 @@ only.
 The renderer emits one self-contained HTML document:
 
 - inline CSS,
-- no JavaScript,
+- inline JavaScript for report-local interactions,
 - no CDN,
 - no external fonts,
 - no external images,
-- no external links or asset references.
+- no external links or asset references, and
+- no runtime network API usage.
 
 The current automated offline check is static: tests assert the rendered HTML
-contains no `http://`, `https://`, `<script`, `src="`, or `href="` references.
-A browser-level network-disabled test is deferred.
+contains exactly one inline script, contains the expected interaction functions,
+contains no `http://`, `https://`, `src="`, or `href="` references, and does not
+use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
+`EventSource`. A browser-level network-disabled test is deferred.
 
 ### Report Contents
 
@@ -135,6 +138,11 @@ The report shows:
 - estimate details when present,
 - check errors when present,
 - evidence message and node/relationship or aggregate-scope IDs.
+
+The embedded script reveals the checks explorer, filters checks by verdict or
+search text, toggles check details, and switches the inline CSS theme. These
+interactions operate only on the already-rendered document and do not load or
+transmit data.
 
 ### Ordering
 

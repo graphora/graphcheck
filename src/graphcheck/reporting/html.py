@@ -112,13 +112,15 @@ def _header(results: Results) -> str:
 
     times_html = _format_run_times(results.run.started_at, results.run.finished_at)
     exit_desc = _exit_code_desc(results.run.exit_code)
-    version_info = f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
+    version_info = (
+        f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
+    )
 
     return (
         '<header class="navbar">'
         '  <div class="brand-container">'
         f'   <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
-        f'   <h1>Run: <code>{_escape(results.run.id)}</code> '
+        f"   <h1>Run: <code>{_escape(results.run.id)}</code> "
         f'   <span class="status-pill status-{_escape(status_val)}">{_escape(results.run.status.value)}</span></h1>'
         "  </div>"
         '  <div class="header-meta-inline">'
@@ -128,7 +130,7 @@ def _header(results: Results) -> str:
         "    </div>"
         '    <div class="meta-item">'
         '      <span class="meta-label">Run Info</span>'
-        f'     <div>{times_html} | Exit: <strong>{_escape(exit_desc)}</strong></div>'
+        f"     <div>{times_html} | Exit: <strong>{_escape(exit_desc)}</strong></div>"
         "    </div>"
         "  </div>"
         f' <div class="score-ring{score_class}" style="--score-value: {score_value}" '
@@ -184,7 +186,11 @@ def _score_breakdown(results: Results) -> str:
             "</tr>"
         )
 
-    suite_body = "".join(suite_rows) if suite_rows else '<tr><td colspan="8" class="text-center">No suites</td></tr>'
+    suite_body = (
+        "".join(suite_rows)
+        if suite_rows
+        else '<tr><td colspan="8" class="text-center">No suites</td></tr>'
+    )
     deduction_body = (
         "".join(deduction_rows)
         if deduction_rows
@@ -199,7 +205,7 @@ def _score_breakdown(results: Results) -> str:
         '   <p class="text-muted">Each row shows points docked by a test. Open matching checks for evidence.</p>'
         " </div>"
         ' <div class="scrollable-content">'
-        '   <h3>Check Suite Overview</h3>'
+        "   <h3>Check Suite Overview</h3>"
         '   <div class="table-container">'
         '     <table class="styled-table"><thead><tr><th>Suite</th><th>Pass</th><th>Fail</th><th>Warn</th>'
         "     <th>Errored</th><th>Skipped</th><th>Coverage</th><th>Source SHA</th></tr></thead>"
@@ -295,7 +301,9 @@ def _check(check: CheckResult) -> str:
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
     ]
     if check.measured is not None:
-        details.append(f"<p><strong>Measured:</strong> <code>{_escape(_json(check.measured))}</code></p>")
+        details.append(
+            f"<p><strong>Measured:</strong> <code>{_escape(_json(check.measured))}</code></p>"
+        )
     if check.estimate is not False:
         details.append(
             f"<p><strong>Estimate:</strong> <code>{_escape(_json(check.estimate.model_dump()))}</code></p>"
@@ -309,7 +317,9 @@ def _check(check: CheckResult) -> str:
             "</div>"
         )
     if check.compiled_query is not None:
-        details.append(f'<h4>Compiled Cypher</h4><pre class="code-block"><code>{_escape(check.compiled_query)}</code></pre>')
+        details.append(
+            f'<h4>Compiled Cypher</h4><pre class="code-block"><code>{_escape(check.compiled_query)}</code></pre>'
+        )
     if check.evidence is not None:
         details.append(_evidence(check))
 
@@ -348,7 +358,7 @@ def _evidence(check: CheckResult) -> str:
     return (
         "<h4>Evidence</h4>"
         f'<p class="text-muted">{_escape(check.evidence.message)} '
-        f'({check.evidence.total_count} total, cap {check.evidence.cap})</p>'
+        f"({check.evidence.total_count} total, cap {check.evidence.cap})</p>"
         '<table class="styled-table compact"><thead><tr><th>Kind</th><th>ID</th><th>Labels / Type / Scope</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
