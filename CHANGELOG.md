@@ -40,6 +40,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Corrected the C1/C5 merge resolution so human-readable visibility and blocker diagnostics remain
+  in `graphcheck debug`, report opening no longer references an undefined debug trace, HTML reports
+  retain deterministic check ordering and aggregate-scope labels, and results/HTML artifacts share
+  temporal- and binary-safe JSON normalization.
 - Contract validators now reject shapes the frozen specs disallow: severity/verdict mismatches (which could downgrade the CI exit code), the `passed`/`with_` field-name aliases, and check-result / run records that omit a frozen present-but-nullable key.
 - Count-store detection now inspects the Neo4j `EXPLAIN` summary plan instead of stringifying result rows.
 - The connector's rich read path now preserves result columns, graph entities, and notifications;

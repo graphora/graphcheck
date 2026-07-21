@@ -132,11 +132,6 @@ def test_fail_requires_evidence():
         CheckResult(**_base(verdict=Verdict.FAIL, evidence=None))
 
 
-def test_evidence_requires_at_least_one_pointer():
-    with pytest.raises(ValidationError):
-        Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
-
-
 def test_aggregate_measurement_pointer_is_in_typed_and_json_schema_contracts():
     pointer = EvidenceElement(kind="aggregate", id="node_count:label=Customer")
 

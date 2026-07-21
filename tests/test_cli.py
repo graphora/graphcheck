@@ -7,8 +7,8 @@ from graphcheck import __version__
 from graphcheck.cli import app
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
-from graphcheck.project import write_default_project
 from graphcheck.packs.catalog import PACKS_DIRECTORY
+from graphcheck.project import write_default_project
 
 runner = CliRunner()
 
@@ -257,6 +257,8 @@ def test_report_without_open_explains_usage():
 
     assert result.exit_code == 0
     assert "graphcheck report --open" in result.stdout
+
+
 def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())

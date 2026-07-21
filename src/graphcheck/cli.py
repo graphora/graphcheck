@@ -30,11 +30,10 @@ from graphcheck.reporting import (
     format_report_history,
     prune_report_runs,
     write_html_report,
+    write_results,
 )
 
 _DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
-
-from graphcheck.reporting.writer import write_results
 
 app = typer.Typer(
     name="graphcheck",
@@ -127,7 +126,38 @@ def debug(
     typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
     typer.echo(f"Count store: {'yes' if caps.count_store else 'no'}")
-    typer.echo(f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships")
+    can_see = []
+    if trace.visibility.can_connect:
+        can_see.append("connect")
+    if trace.visibility.can_read:
+        can_see.append("read")
+    if trace.visibility.can_show_procedures:
+        can_see.append("procedures")
+    cannot_see = []
+    if not trace.visibility.can_connect:
+        cannot_see.append("connect")
+    if not trace.visibility.can_read:
+        cannot_see.append("read")
+    if not trace.visibility.can_show_procedures:
+        cannot_see.append("procedures")
+    typer.echo(f"Credentials can see: {', '.join(can_see) if can_see else 'none detected'}")
+    cannot_see_text = ", ".join(cannot_see) if cannot_see else "none detected"
+    typer.echo(f"Credentials cannot see: {cannot_see_text}")
+    if trace.blocked_checks:
+        typer.echo("Blocked checks:")
+        for blocked in trace.blocked_checks:
+            typer.echo(
+                f"- {blocked.suite}/{blocked.check_id} ({blocked.check}) requires "
+                f"{blocked.missing_capability}: {blocked.fix}"
+            )
+    else:
+        typer.echo("Blocked checks: none")
+    if trace.counts.nodes is None or trace.counts.relationships is None:
+        typer.echo("Counts: unavailable (read access denied)")
+    else:
+        typer.echo(
+            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
+        )
 
 
 @app.command()
@@ -299,38 +329,6 @@ def _open_html_report(path: Path) -> None:
     if not opened:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
     typer.echo(f"Opened {path}")
-    can_see = []
-    if trace.visibility.can_connect:
-        can_see.append("connect")
-    if trace.visibility.can_read:
-        can_see.append("read")
-    if trace.visibility.can_show_procedures:
-        can_see.append("procedures")
-    cannot_see = []
-    if not trace.visibility.can_connect:
-        cannot_see.append("connect")
-    if not trace.visibility.can_read:
-        cannot_see.append("read")
-    if not trace.visibility.can_show_procedures:
-        cannot_see.append("procedures")
-    typer.echo(f"Credentials can see: {', '.join(can_see) if can_see else 'none detected'}")
-    cannot_see_text = ", ".join(cannot_see) if cannot_see else "none detected"
-    typer.echo(f"Credentials cannot see: {cannot_see_text}")
-    if trace.blocked_checks:
-        typer.echo("Blocked checks:")
-        for blocked in trace.blocked_checks:
-            typer.echo(
-                f"- {blocked.suite}/{blocked.check_id} ({blocked.check}) requires "
-                f"{blocked.missing_capability}: {blocked.fix}"
-            )
-    else:
-        typer.echo("Blocked checks: none")
-    if trace.counts.nodes is None or trace.counts.relationships is None:
-        typer.echo("Counts: unavailable (read access denied)")
-    else:
-        typer.echo(
-            f"Counts: {trace.counts.nodes} nodes, {trace.counts.relationships} relationships"
-        )
 
 
 @app.command("run")

@@ -27,6 +27,12 @@ def render_html_report(
     model = load_results(results)
     checks = sorted(
         (check for check in model.checks if verdicts is None or check.verdict in verdicts),
+        key=lambda check: (
+            _VERDICT_ORDER[check.verdict],
+            _SEVERITY_ORDER[check.severity.value],
+            check.suite_id,
+            check.id,
+        ),
     )
     return "\n".join(
         [
@@ -188,7 +194,12 @@ def _evidence(check: CheckResult) -> str:
     assert check.evidence is not None
     rows = []
     for element in check.evidence.elements:
-        descriptor = element.type if element.kind == "rel" else ", ".join(element.labels or [])
+        if element.kind == "rel":
+            descriptor = element.type
+        elif element.kind == "node":
+            descriptor = ", ".join(element.labels or [])
+        else:
+            descriptor = "aggregate measurement scope"
         rows.append(
             "<tr>"
             f"<td>{_escape(element.kind)}</td>"
@@ -200,7 +211,7 @@ def _evidence(check: CheckResult) -> str:
         "<h4>Evidence</h4>"
         f"<p>{_escape(check.evidence.message)} "
         f"({check.evidence.total_count} total, cap {check.evidence.cap})</p>"
-        "<table><thead><tr><th>Kind</th><th>ID</th><th>Labels/Type</th></tr></thead>"
+        "<table><thead><tr><th>Kind</th><th>ID</th><th>Labels/Type/Scope</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 

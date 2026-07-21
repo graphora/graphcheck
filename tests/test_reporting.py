@@ -71,6 +71,21 @@ def test_html_renderer_exposes_cypher_and_evidence_ids():
     assert "5000 rows exceeds max 200" in html
 
 
+def test_html_renderer_labels_aggregate_measurement_scope():
+    raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
+    raw["checks"][0]["evidence"]["elements"][0] = {
+        "kind": "aggregate",
+        "id": "node_count:label=Customer",
+        "labels": None,
+        "type": None,
+    }
+
+    html = render_html_report(raw)
+
+    assert "Labels/Type/Scope" in html
+    assert "aggregate measurement scope" in html
+
+
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 

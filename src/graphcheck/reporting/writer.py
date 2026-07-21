@@ -49,7 +49,7 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
 
 def results_json(results: Results | dict[str, Any]) -> str:
     model = load_results(results)
-    payload = json.loads(model.model_dump_json(by_alias=True, exclude_none=False))
+    payload = json_compatible(model)
     jsonschema.validate(payload, results_schema())
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
