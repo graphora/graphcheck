@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -11,6 +12,11 @@ from graphcheck.packs.catalog import PACKS_DIRECTORY
 from graphcheck.project import write_default_project
 
 runner = CliRunner()
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _plain_terminal_text(value: str) -> str:
+    return _ANSI_ESCAPE.sub("", value)
 
 
 def test_version_flag_prints_version():
@@ -264,18 +270,19 @@ def test_report_without_open_explains_usage():
 
 
 def test_report_help_describes_optional_open_id():
-    result = runner.invoke(app, ["report", "--help"])
+    result = runner.invoke(app, ["report", "--help"], color=True)
 
     assert result.exit_code == 0
-    assert "Usage: graphcheck report [OPTIONS] [ID]" in result.stdout
-    assert "Historical run ID to open; valid only with --open" in result.stdout
+    output = _plain_terminal_text(result.stdout)
+    assert "Usage: graphcheck report [OPTIONS] [ID]" in output
+    assert "Historical run ID to open; valid only with --open" in output
 
 
 def test_report_run_option_has_been_replaced():
-    result = runner.invoke(app, ["report", "--run", "run-one"])
+    result = runner.invoke(app, ["report", "--run", "run-one"], color=True)
 
     assert result.exit_code == 2
-    assert "No such option: --run" in result.stderr
+    assert "No such option: --run" in _plain_terminal_text(result.stderr)
 
 
 def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
