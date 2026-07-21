@@ -399,16 +399,13 @@ def _relationship_property_count(
 
 
 def _property_type(client: Neo4jClient, label_ref: str, property_name: str) -> str:
-    try:
-        rows = client.run_read(
-            f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL "
-            "WITH n "
-            "ORDER BY id(n) "
-            "RETURN n[$property] AS value LIMIT 1",
-            {"property": property_name},
-        )
-    except GraphCheckError:
-        return "unknown"
+    rows = client.run_read(
+        f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL "
+        "WITH n "
+        "ORDER BY id(n) "
+        "RETURN n[$property] AS value LIMIT 1",
+        {"property": property_name},
+    )
     if not rows:
         return "unknown"
     return _python_value_type(rows[0].get("value"))

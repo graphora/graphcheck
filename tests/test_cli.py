@@ -192,9 +192,43 @@ def test_profile_writes_baseline_and_prints_summary(tmp_path, monkeypatch):
         "Relationship Types:",
         "Constraints:",
         "Indexes:",
+        "Degree Distribution:",
+        "Account: median=1.0, p95=3.0, p99=4.0, maximum=4",
+        "Customer: median=1.0, p95=3.0, p99=4.0, maximum=4",
+        "Property Coverage:",
+        "Account.id (node): 100.0%",
+        "Customer.id (node): 100.0%",
+        "Customer.name (node): 66.67%",
         "Baseline written to:",
     ):
         assert content in result.stdout
+
+
+def test_profile_json_prints_complete_baseline_without_human_summary(tmp_path, monkeypatch):
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    baseline = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+
+    class FakeClient:
+        def close(self):
+            pass
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: object())
+    monkeypatch.setattr(
+        "graphcheck.cli.select_profile",
+        lambda profiles, name: ("local", object()),
+    )
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: FakeClient())
+    monkeypatch.setattr("graphcheck.cli.build_profile", lambda client: baseline)
+
+    result = runner.invoke(app, ["profile", "--json"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == baseline.model_dump_json(indent=2, by_alias=True)
+    assert "Profile completed." not in result.stdout
+    assert "Baseline written to:" not in result.stdout
 
 
 def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
@@ -287,6 +321,71 @@ def test_diff_identical_targets_do_not_prompt_and_print_no_drift(monkeypatch):
     assert "Do you want to continue?" not in result.stdout
 
 
+def test_diff_mutable_target_fields_do_not_trigger_identity_warning(tmp_path, monkeypatch):
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    current = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+    latest = current.model_copy(
+        update={
+            "target": current.target.model_copy(
+                update={
+                    "fingerprint": "different-fingerprint",
+                    "capabilities": current.target.capabilities.model_copy(
+                        update={"apoc": not current.target.capabilities.apoc}
+                    ),
+                }
+            )
+        }
+    )
+    current_path = tmp_path / "current.json"
+    latest_path = tmp_path / "latest.json"
+    current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
+    latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
+    monkeypatch.setattr(
+        "graphcheck.cli.resolve_diff_baselines",
+        lambda current_name, latest_name: (current_path, latest_path),
+    )
+    monkeypatch.setattr("graphcheck.cli.compare_baselines", lambda current, latest: [])
+
+    result = runner.invoke(app, ["diff"])
+
+    assert result.exit_code == 0
+    assert "WARNING" not in result.stdout
+    assert "Do you want to continue?" not in result.stdout
+
+
+def test_diff_coverage_only_change_reports_drift_and_exits_one(tmp_path, monkeypatch):
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    current = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+    coverage = current.statistics.property_coverage
+    latest = current.model_copy(
+        update={
+            "statistics": current.statistics.model_copy(
+                update={
+                    "property_coverage": [
+                        coverage[0].model_copy(update={"coverage": 92.0}),
+                        *coverage[1:],
+                    ]
+                }
+            )
+        }
+    )
+    current_path = tmp_path / "current.json"
+    latest_path = tmp_path / "latest.json"
+    current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
+    latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
+    monkeypatch.setattr(
+        "graphcheck.cli.resolve_diff_baselines",
+        lambda current_name, latest_name: (current_path, latest_path),
+    )
+
+    result = runner.invoke(app, ["diff"])
+
+    assert result.exit_code == 1
+    assert "fingerprint: MATCH" in result.stdout
+    assert "Account.id cover    100.0% → 92.0% (-8.0 pp)" in result.stdout
+    assert "No drift detected." not in result.stdout
+
+
 def test_diff_explicit_snapshots_print_all_drift_messages(monkeypatch):
     fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
     resolved_arguments = []
@@ -326,6 +425,11 @@ def test_diff_different_targets_yes_continues(tmp_path, monkeypatch):
         assert result.exit_code == 0
         assert "WARNING" in result.stdout
         assert "Do you want to continue? [y/N]" in result.stdout
+        assert '"database"' in result.stdout
+        assert '"server_version"' in result.stdout
+        assert '"edition"' in result.stdout
+        assert '"fingerprint"' not in result.stdout
+        assert '"capabilities"' not in result.stdout
         assert "No drift detected." in result.stdout
         assert len(calls) == 1
 

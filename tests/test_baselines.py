@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -30,13 +31,44 @@ def test_write_baseline_creates_timestamped_canonical_profile(tmp_path, monkeypa
     path = write_baseline(profile)
 
     assert path.parent == tmp_path / ".graphcheck" / "baselines"
-    assert re.fullmatch(r"\d{8}T\d{6}\.json", path.name)
+    assert re.fullmatch(r"\d{8}T\d{6}\.\d{6}\.json", path.name)
     assert path.exists()
     assert path.read_text(encoding="utf-8") == profile.model_dump_json(
         by_alias=True,
         indent=2,
     )
     assert json.loads(path.read_text(encoding="utf-8"))["schema"]
+
+
+def test_write_baseline_does_not_overwrite_snapshot_from_same_instant(
+    tmp_path, monkeypatch
+) -> None:
+    fixed = datetime(2026, 7, 21, 12, 34, 56, 123456, tzinfo=UTC)
+
+    class FixedDateTime:
+        @classmethod
+        def now(cls, timezone):
+            assert timezone is UTC
+            return fixed
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.datetime", FixedDateTime)
+    profile = _profile()
+
+    first = write_baseline(profile)
+    second = write_baseline(profile)
+
+    assert first.name == "20260721T123456.123456.json"
+    assert second.name == "20260721T123456.123457.json"
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+    assert len(list_baselines()) == 2
+    assert first.read_text(encoding="utf-8") == profile.model_dump_json(
+        by_alias=True,
+        indent=2,
+    )
 
 
 def _snapshot(directory: Path, filename: str) -> Path:

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from graphcheck.contracts.profile import BaselineProfile
 from graphcheck.errors import GraphCheckError
 from graphcheck.project import find_project_root
 
-_BASELINE_NAME = re.compile(r"\d{8}T\d{6}\.json")
+_BASELINE_NAME = re.compile(r"\d{8}T\d{6}(?:\.\d{6})?\.json")
 
 
 def _baselines_dir() -> Path:
@@ -23,15 +23,19 @@ def _current_baseline_file() -> Path:
 def write_baseline(profile: BaselineProfile) -> Path:
     baselines_dir = _baselines_dir()
     baselines_dir.mkdir(parents=True, exist_ok=True)
-    path = baselines_dir / f"{datetime.now(UTC):%Y%m%dT%H%M%S}.json"
-    path.write_text(
-        profile.model_dump_json(
-            by_alias=True,
-            indent=2,
-        ),
-        encoding="utf-8",
+    timestamp = datetime.now(UTC)
+    content = profile.model_dump_json(
+        by_alias=True,
+        indent=2,
     )
-    return path
+    while True:
+        path = baselines_dir / f"{timestamp:%Y%m%dT%H%M%S.%f}.json"
+        try:
+            with path.open("x", encoding="utf-8") as snapshot:
+                snapshot.write(content)
+            return path
+        except FileExistsError:
+            timestamp += timedelta(microseconds=1)
 
 
 def list_baselines() -> list[Path]:

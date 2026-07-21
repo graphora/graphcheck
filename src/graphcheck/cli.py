@@ -9,6 +9,7 @@ from graphcheck import __version__
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile
+from graphcheck.contracts.results import RunTarget
 from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.errors import GraphCheckError
@@ -159,6 +160,11 @@ def profile(
         "--profile",
         help="Connection profile to use.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the complete baseline profile as JSON.",
+    ),
 ) -> None:
     """Generate a baseline profile for the connected Neo4j graph."""
 
@@ -174,10 +180,13 @@ def profile(
             client.close()
 
         path = write_baseline(baseline)
-        _print_profile_summary(
-            baseline,
-            path,
-        )
+        if json_output:
+            typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
+        else:
+            _print_profile_summary(
+                baseline,
+                path,
+            )
 
     except GraphCheckError as exc:
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
@@ -243,7 +252,7 @@ def diff_command(
         typer.echo(f"error: unable to read baseline: {exc}", err=True)
         raise typer.Exit(2) from exc
 
-    if current_baseline.target != latest_baseline.target:
+    if _target_identity(current_baseline.target) != _target_identity(latest_baseline.target):
         _print_target_identity_warning(current_baseline, latest_baseline)
         if not typer.confirm("Do you want to continue?", default=False):
             typer.echo("Diff cancelled by user.")
@@ -268,8 +277,25 @@ def diff_command(
         baseline_b=latest_baseline_path.name,
     )
     typer.echo(render_json(report) if json_output else render_human(report))
-    if report.fingerprint_changed:
+    if report.drift_detected:
         raise typer.Exit(1)
+
+
+def _target_identity(target: RunTarget) -> tuple[str, str, str]:
+    return (
+        target.database,
+        target.server_version,
+        target.edition,
+    )
+
+
+def _target_identity_json(target: RunTarget) -> dict[str, str]:
+    database, server_version, edition = _target_identity(target)
+    return {
+        "database": database,
+        "server_version": server_version,
+        "edition": edition,
+    }
 
 
 def _print_target_identity_warning(
@@ -281,10 +307,10 @@ def _print_target_identity_warning(
     typer.echo("The selected baseline snapshots belong to different database / target identities.")
     typer.echo()
     typer.echo("Current Baseline")
-    typer.echo(json.dumps(current_baseline.target.model_dump(), indent=2, sort_keys=True))
+    typer.echo(json.dumps(_target_identity_json(current_baseline.target), indent=2, sort_keys=True))
     typer.echo()
     typer.echo("Latest Baseline")
-    typer.echo(json.dumps(latest_baseline.target.model_dump(), indent=2, sort_keys=True))
+    typer.echo(json.dumps(_target_identity_json(latest_baseline.target), indent=2, sort_keys=True))
     typer.echo()
     typer.echo(
         "Comparing baseline snapshots from different databases or targets may produce "
@@ -315,6 +341,27 @@ def _print_profile_summary(
     typer.echo(f"Relationship Types: {len(baseline.graph_schema.relationship_types)}")
     typer.echo(f"Constraints: {len(baseline.graph_schema.constraints)}")
     typer.echo(f"Indexes: {len(baseline.graph_schema.indexes)}")
+
+    typer.echo()
+
+    typer.echo("Degree Distribution:")
+    for label in baseline.graph_schema.labels:
+        distribution = label.degree_distribution
+        if distribution is None:
+            typer.echo(f"  {label.name}: unavailable")
+        else:
+            typer.echo(
+                f"  {label.name}: median={distribution.median}, p95={distribution.p95}, "
+                f"p99={distribution.p99}, maximum={distribution.maximum}"
+            )
+
+    typer.echo()
+
+    typer.echo("Property Coverage:")
+    for coverage in baseline.statistics.property_coverage:
+        typer.echo(
+            f"  {coverage.owner_name}.{coverage.property} ({coverage.owner}): {coverage.coverage}%"
+        )
 
     typer.echo()
 

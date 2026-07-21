@@ -187,10 +187,43 @@ def test_collect_labels_returns_sorted_contract_models() -> None:
     ]
 
 
-def test_collect_labels_falls_back_to_unknown_when_type_probe_fails() -> None:
-    labels = collect_labels(cast(Neo4jClient, UnknownTypeClient()))
+def test_collect_labels_propagates_type_probe_failure() -> None:
+    with pytest.raises(GraphCheckError, match="query failed"):
+        collect_labels(cast(Neo4jClient, UnknownTypeClient()))
+
+
+class EmptyTypeClient(UnknownTypeClient):
+    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+        if query == (
+            "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
+            "WITH n "
+            "ORDER BY id(n) "
+            "RETURN n[$property] AS value LIMIT 1"
+        ):
+            return []
+        return super().run_read(query, params)
+
+
+def test_collect_labels_uses_unknown_when_type_probe_returns_no_value() -> None:
+    labels = collect_labels(cast(Neo4jClient, EmptyTypeClient()))
 
     assert labels[0].properties == [ProfileProperty(name="id", type="unknown")]
+
+
+class FailedPropertyTypeClient(FakeNeo4jClient):
+    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+        if "RETURN n[$property] AS value LIMIT 1" in query:
+            raise GraphCheckError("neo4j.query_failed", "type query failed", "try again")
+        return super().run_read(query, params)
+
+
+def test_profile_is_partial_when_property_type_measurement_fails() -> None:
+    baseline = profile(cast(Neo4jClient, FailedPropertyTypeClient()))
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert "Failed collecting labels" in baseline.partial_reason
+    assert "type query failed" in baseline.partial_reason
 
 
 class DegreeClient:

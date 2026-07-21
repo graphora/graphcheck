@@ -20,6 +20,7 @@ class DiffReport:
     a_status: str
     b_status: str
     fingerprint_changed: bool
+    drift_detected: bool
     labels: dict[str, Any]
     relationship_types: dict[str, Any]
     constraints: dict[str, Any]
@@ -203,13 +204,28 @@ def compare(
             )
         },
     }
+    fingerprint_changed = baseline_a.fingerprint != baseline_b.fingerprint
+    drift_detected = any(
+        (
+            fingerprint_changed,
+            bool(labels["changed"] or labels["added"] or labels["removed"]),
+            bool(relationships["changed"] or relationships["added"] or relationships["removed"]),
+            bool(constraints["added"] or constraints["removed"]),
+            bool(indexes["added"] or indexes["removed"]),
+            statistics["node_count"] is not None,
+            statistics["relationship_count"] is not None,
+            bool(coverage["changed"] or coverage["added"] or coverage["removed"]),
+            any(item is not None for item in degree.values()),
+        )
+    )
     return DiffReport(
         baseline_a.schema_version,
         Path(baseline_a_name).name,
         Path(baseline_b_name).name,
         str(baseline_a.status),
         str(baseline_b.status),
-        baseline_a.fingerprint != baseline_b.fingerprint,
+        fingerprint_changed,
+        drift_detected,
         labels,
         relationships,
         constraints,
@@ -225,7 +241,7 @@ def _number(value: int | float) -> str:
     return f"{value:,.0f}" if float(value).is_integer() else f"{value:,}"
 
 
-def _count_lines(item: dict[str, Any], prefix: str = "") -> list[str]:
+def _count_line(item: dict[str, Any], prefix: str = "") -> str:
     before, after, delta = item.get("from", 0), item.get("to", 0), item.get("delta")
     if "from" not in item:
         note = "new"
@@ -234,17 +250,17 @@ def _count_lines(item: dict[str, Any], prefix: str = "") -> list[str]:
     else:
         pct = item["pct"]
         note = f"{delta:+,}, n/a" if pct is None else f"{delta:+,}, {pct:+.1f}%"
-    return [f"{prefix}{item['name']}", f"{_number(before)} → {_number(after)} ({note})"]
+    return f"{prefix}{item['name']} {_number(before)} → {_number(after)} ({note})"
 
 
 def _render_counts(title: str, section: dict[str, Any]) -> list[str]:
     body: list[str] = []
     for item in section["changed"]:
-        body.extend(_count_lines(item))
+        body.append(_count_line(item))
     for item in section["added"]:
-        body.extend(_count_lines(item, "+ "))
+        body.append(_count_line(item, "+ "))
     for item in section["removed"]:
-        body.extend(_count_lines(item, "- "))
+        body.append(_count_line(item, "- "))
     if section["unchanged"]:
         body.append(f"({section['unchanged']} unchanged)")
     return [title, *body] if body else []
@@ -264,7 +280,7 @@ def render_human(report: DiffReport) -> str:
         partial = True
     if partial:
         lines.append("Collections missing due to partial status are not reported as removed.")
-    if not report.fingerprint_changed:
+    if not report.drift_detected:
         return "\n".join((*lines, "", "No drift detected."))
     sections = [
         _render_counts("Labels", report.labels),
@@ -275,13 +291,12 @@ def render_human(report: DiffReport) -> str:
         for sign, key in (("+", "added"), ("-", "removed")):
             for item in collection[key]:
                 target, props = ", ".join(item["labels_or_types"]), ", ".join(item["properties"])
-                body.extend((f"{sign} {item['name']}", f"[{target}({props}), {item['type']}]"))
+                body.append(f"{sign} {item['name']} [{target}({props}), {item['type']}]")
         sections.append([title, *body] if body else [])
     stats: list[str] = []
     for label, key in (("Nodes", "node_count"), ("Relationships", "relationship_count")):
         if report.statistics[key]:
-            count_line = _count_lines({**report.statistics[key], "name": label})[1]
-            stats.append(f"{label}    {count_line}")
+            stats.append(_count_line({**report.statistics[key], "name": label}))
     for item in report.statistics["property_coverage"]["changed"]:
         stats.append(
             f"{item['owner_name']}.{item['property']} cover    "
@@ -365,10 +380,17 @@ def render_json(report: DiffReport) -> str:
         "a_status": report.a_status,
         "b_status": report.b_status,
         "fingerprint_changed": report.fingerprint_changed,
+        "drift_detected": report.drift_detected,
         "labels": report.labels,
         "relationship_types": report.relationship_types,
-        "constraints": report.constraints,
-        "indexes": report.indexes,
+        "constraints": {
+            "added": report.constraints["added"],
+            "removed": report.constraints["removed"],
+        },
+        "indexes": {
+            "added": report.indexes["added"],
+            "removed": report.indexes["removed"],
+        },
         "statistics": statistics,
         "summary": report.summary,
     }
@@ -378,4 +400,4 @@ def render_json(report: DiffReport) -> str:
 def diff(current_baseline: BaselineProfile, latest_baseline: BaselineProfile) -> list[str]:
     """Compatibility wrapper for the original line-oriented API."""
     report = compare(current_baseline, latest_baseline)
-    return [] if not report.fingerprint_changed else render_human(report).splitlines()[3:]
+    return [] if not report.drift_detected else render_human(report).splitlines()[3:]

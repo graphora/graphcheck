@@ -67,6 +67,7 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
         "a_status",
         "b_status",
         "fingerprint_changed",
+        "drift_detected",
         "labels",
         "relationship_types",
         "constraints",
@@ -95,6 +96,8 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
     }
     assert "name" not in payload["statistics"]["node_count"]
     assert "name" not in payload["statistics"]["relationship_count"]
+    assert set(payload["constraints"]) == {"added", "removed"}
+    assert set(payload["indexes"]) == {"added", "removed"}
 
 
 def test_degree_distribution_json_uses_model_shape_and_not_a_list() -> None:
@@ -129,16 +132,42 @@ def test_partial_warning_explains_suppressed_removals() -> None:
 def test_human_count_formatting_and_statistics_labels() -> None:
     output = render_human(compare(_profile(), _changed_profile()))
 
-    assert "Account\n10 → 12 (+2, +20.0%)" in output
-    assert "+ Airport\n0 → 42 (new)" in output
-    assert "- Customer\n3 → 0 (removed)" in output
-    assert "Nodes    13 → 54 (+41, +315.4%)" in output
-    assert "Relationships    7 → 9 (+2, +28.6%)" in output
+    assert "Account 10 → 12 (+2, +20.0%)" in output
+    assert "+ Airport 0 → 42 (new)" in output
+    assert "- Customer 3 → 0 (removed)" in output
+    assert "Nodes 13 → 54 (+41, +315.4%)" in output
+    assert "Relationships 7 → 9 (+2, +28.6%)" in output
     assert "Account.id cover    100.0% → 92.0% (-8.0 pp)" in output
     assert "median: 1 → 1.8 (+0.8)" in output
     assert "Summary: 1 label changed, 1 added, 1 removed · 4 statistics changed" in output
     assert "Node count" not in output
     assert "Relationship count" not in output
+
+
+def test_human_constraint_and_index_changes_use_single_line_contract() -> None:
+    baseline = _profile()
+    changed = baseline.model_copy(
+        update={
+            "fingerprint": "sha256:stored-different",
+            "graph_schema": baseline.graph_schema.model_copy(
+                update={"constraints": [], "indexes": []}
+            ),
+        }
+    )
+
+    assert render_human(compare(baseline, changed)) == (
+        "diff  baseline_a → baseline_b\n"
+        "fingerprint: CHANGED\n\n"
+        "Labels\n"
+        "(2 unchanged)\n\n"
+        "Relationships\n"
+        "(1 unchanged)\n\n"
+        "Constraints\n"
+        "- customer_id_unique [Customer(id), UNIQUENESS]\n\n"
+        "Indexes\n"
+        "- customer_name_index [Customer(name), RANGE]\n\n"
+        "Summary: 1 constraint removed · 1 index removed"
+    )
 
 
 def test_human_output_omits_summary_when_there_is_no_drift() -> None:
@@ -167,3 +196,27 @@ def test_fingerprint_uses_stored_values_and_is_never_recomputed(monkeypatch) -> 
 
     monkeypatch.setattr("graphcheck.contracts.profile.profile_fingerprint", fail_recompute)
     assert compare(baseline, changed).fingerprint_changed is True
+
+
+def test_coverage_only_change_detects_drift_with_matching_fingerprint() -> None:
+    baseline = _profile()
+    coverage = baseline.statistics.property_coverage
+    changed = baseline.model_copy(
+        update={
+            "statistics": baseline.statistics.model_copy(
+                update={
+                    "property_coverage": [
+                        coverage[0].model_copy(update={"coverage": 92.0}),
+                        *coverage[1:],
+                    ]
+                }
+            )
+        }
+    )
+
+    report = compare(baseline, changed)
+
+    assert report.fingerprint_changed is False
+    assert report.drift_detected is True
+    assert "No drift detected." not in render_human(report)
+    assert "Account.id cover    100.0% → 92.0% (-8.0 pp)" in render_human(report)
