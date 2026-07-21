@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import pytest
 
+import graphcheck.profiler as profiler_module
 from graphcheck.contracts.profile import (
     BaselineProfile,
     ConstraintProfile,
@@ -34,8 +35,11 @@ from graphcheck.profiler import (
 class FakeNeo4jClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object] | None]] = []
+        self.probe_timeout_s: float | None = None
+        self.query_timeouts: list[float | None] = []
 
-    def probe(self) -> tuple[RunTarget, object, Counts]:
+    def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, object, Counts]:
+        self.probe_timeout_s = timeout_s
         return (
             RunTarget(
                 database="neo4j",
@@ -48,8 +52,15 @@ class FakeNeo4jClient:
             Counts(nodes=5, relationships=7),
         )
 
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         self.calls.append((query, params))
+        self.query_timeouts.append(timeout_s)
         if query == "CALL db.labels() YIELD label RETURN label":
             return [{"label": "Customer"}, {"label": "Account"}]
         if query == ("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"):
@@ -132,7 +143,13 @@ class FakeNeo4jClient:
 
 
 class UnknownTypeClient:
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         if query == "CALL db.labels() YIELD label RETURN label":
             return [{"label": "Customer"}]
         if query == "MATCH (n:`Customer`) RETURN count(n) AS count":
@@ -193,7 +210,13 @@ def test_collect_labels_propagates_type_probe_failure() -> None:
 
 
 class EmptyTypeClient(UnknownTypeClient):
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         if query == (
             "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
             "WITH n "
@@ -201,7 +224,7 @@ class EmptyTypeClient(UnknownTypeClient):
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return []
-        return super().run_read(query, params)
+        return super().run_read(query, params, timeout_s=timeout_s)
 
 
 def test_collect_labels_uses_unknown_when_type_probe_returns_no_value() -> None:
@@ -211,10 +234,16 @@ def test_collect_labels_uses_unknown_when_type_probe_returns_no_value() -> None:
 
 
 class FailedPropertyTypeClient(FakeNeo4jClient):
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         if "RETURN n[$property] AS value LIMIT 1" in query:
             raise GraphCheckError("neo4j.query_failed", "type query failed", "try again")
-        return super().run_read(query, params)
+        return super().run_read(query, params, timeout_s=timeout_s)
 
 
 def test_profile_is_partial_when_property_type_measurement_fails() -> None:
@@ -230,7 +259,13 @@ class DegreeClient:
     def __init__(self, degrees: list[int]) -> None:
         self.degrees = degrees
 
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         assert query == "MATCH (n:`Test`) RETURN COUNT { (n)--() } AS degree"
         assert params is None
         return [{"degree": degree} for degree in self.degrees]
@@ -240,7 +275,13 @@ class RelationshipCoverageClient:
     def __init__(self, properties: dict[str, dict[str, int]]) -> None:
         self.properties = properties
 
-    def run_read(self, query: str, params: dict[str, object] | None = None) -> list[dict[str, Any]]:
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
         if query == "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType":
             return [{"relationshipType": name} for name in reversed(self.properties)]
         for relationship_type, property_counts in self.properties.items():
@@ -412,14 +453,45 @@ def test_profile_returns_valid_baseline_from_probe_and_labels() -> None:
     assert baseline.fingerprint.startswith("sha256:")
 
 
+def test_profile_passes_remaining_budget_to_probe_and_queries() -> None:
+    client = FakeNeo4jClient()
+
+    baseline = profile(cast(Neo4jClient, client))
+
+    assert baseline.status is ProfileStatus.COMPLETE
+    assert client.probe_timeout_s is not None
+    assert 0 < client.probe_timeout_s <= 60
+    assert client.query_timeouts
+    assert all(timeout is not None and timeout > 0 for timeout in client.query_timeouts)
+    assert all(timeout <= client.probe_timeout_s for timeout in client.query_timeouts if timeout)
+
+
+def test_collectors_shrink_timeout_for_each_database_operation(monkeypatch) -> None:
+    clock_values = iter(float(value) for value in range(20))
+    monkeypatch.setattr("graphcheck.profiler.time.monotonic", lambda: next(clock_values))
+    client = FakeNeo4jClient()
+
+    collect_labels(cast(Neo4jClient, client), timeout_s=20)
+
+    timeouts = [timeout for timeout in client.query_timeouts if timeout is not None]
+    assert timeouts
+    assert timeouts == sorted(timeouts, reverse=True)
+    assert len(set(timeouts)) == len(timeouts)
+
+
 def test_profile_returns_valid_partial_baseline_when_wall_clock_budget_is_exceeded(
     monkeypatch,
 ) -> None:
-    clock_values = iter((0.0, 0.0, 61.0))
-    monkeypatch.setattr(
-        "graphcheck.profiler.time.monotonic",
-        lambda: next(clock_values, 61.0),
-    )
+    clock = [0.0]
+    original = profiler_module.collect_labels
+
+    def collect_then_expire(client: Neo4jClient, *, timeout_s: float | None = None):
+        labels = original(client, timeout_s=timeout_s)
+        clock[0] = 61.0
+        return labels
+
+    monkeypatch.setattr("graphcheck.profiler.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("graphcheck.profiler.collect_labels", collect_then_expire)
 
     baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
 
@@ -443,13 +515,17 @@ def test_profile_returns_valid_partial_baseline_when_wall_clock_budget_is_exceed
 def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_probe(
     monkeypatch,
 ) -> None:
-    clock_values = iter((0.0, 61.0))
-    monkeypatch.setattr(
-        "graphcheck.profiler.time.monotonic",
-        lambda: next(clock_values, 61.0),
-    )
+    clock = [0.0]
 
-    baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
+    class ExpiringProbeClient(FakeNeo4jClient):
+        def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, object, Counts]:
+            result = super().probe(timeout_s=timeout_s)
+            clock[0] = 61.0
+            return result
+
+    monkeypatch.setattr("graphcheck.profiler.time.monotonic", lambda: clock[0])
+
+    baseline = profile(cast(Neo4jClient, ExpiringProbeClient()))
 
     assert baseline.status is ProfileStatus.PARTIAL
     assert baseline.partial_reason
@@ -479,7 +555,7 @@ def test_profile_returns_partial_baseline_when_collector_fails(
     reason_fragment: str,
     completed_sections: int,
 ) -> None:
-    def fail_collection(client: Neo4jClient) -> None:
+    def fail_collection(client: Neo4jClient, *, timeout_s: float | None = None) -> None:
         raise GraphCheckError("neo4j.query_failed", "simulated collector failure", "retry")
 
     monkeypatch.setattr(f"graphcheck.profiler.{collector_name}", fail_collection)
@@ -500,25 +576,31 @@ def test_profile_returns_partial_baseline_when_collector_fails(
 
 
 @pytest.mark.parametrize(
-    ("stage", "completed_sections"),
+    ("stage", "collector_name", "completed_sections"),
     [
-        ("labels", 1),
-        ("relationship types", 2),
-        ("constraints", 3),
-        ("indexes", 4),
-        ("property coverage", 5),
+        ("labels", "collect_labels", 1),
+        ("relationship types", "collect_relationship_types", 2),
+        ("constraints", "collect_constraints", 3),
+        ("indexes", "collect_indexes", 4),
+        ("property coverage", "collect_property_coverage", 5),
     ],
 )
 def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_stage(
     monkeypatch,
     stage: str,
+    collector_name: str,
     completed_sections: int,
 ) -> None:
-    clock_values = iter([0.0] * (completed_sections + 1) + [61.0])
-    monkeypatch.setattr(
-        "graphcheck.profiler.time.monotonic",
-        lambda: next(clock_values, 61.0),
-    )
+    clock = [0.0]
+    original = getattr(profiler_module, collector_name)
+
+    def collect_then_expire(client: Neo4jClient, *, timeout_s: float | None = None):
+        result = original(client, timeout_s=timeout_s)
+        clock[0] = 61.0
+        return result
+
+    monkeypatch.setattr("graphcheck.profiler.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(f"graphcheck.profiler.{collector_name}", collect_then_expire)
 
     baseline = profile(cast(Neo4jClient, FakeNeo4jClient()))
 

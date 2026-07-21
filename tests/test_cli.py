@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -6,10 +7,38 @@ from graphcheck import __version__
 from graphcheck.cli import app
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
 from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
 from graphcheck.packs.catalog import PACKS_DIRECTORY
 
 runner = CliRunner()
+
+
+def _baseline_fixture() -> BaselineProfile:
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    return BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+
+
+def _configure_profile_command(tmp_path, monkeypatch, baseline: BaselineProfile):
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    client = RecordingClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: object())
+    monkeypatch.setattr(
+        "graphcheck.cli.select_profile",
+        lambda profiles, name: ("local", object()),
+    )
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: client)
+    monkeypatch.setattr("graphcheck.cli.build_profile", lambda selected_client: baseline)
+    return client
 
 
 def test_version_flag_prints_version():
@@ -300,6 +329,132 @@ def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
         assert content in result.stdout
 
 
+def test_profile_handles_graphcheck_error(tmp_path, monkeypatch):
+    _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
+
+    def fail_profile(client):
+        raise GraphCheckError(
+            "neo4j.query_failed",
+            "Profiling query failed.",
+            "Retry the profile command.",
+        )
+
+    monkeypatch.setattr("graphcheck.cli.build_profile", fail_profile)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 1
+    assert "neo4j.query_failed" in result.output
+    assert "Profiling query failed." in result.output
+
+
+def test_profile_closes_client_after_success(tmp_path, monkeypatch):
+    client = _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert client.closed is True
+
+
+def test_profile_closes_client_when_profiling_fails(tmp_path, monkeypatch):
+    client = _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
+
+    def fail_profile(selected_client):
+        raise GraphCheckError("neo4j.query_failed", "Profiling query failed.", "Retry.")
+
+    monkeypatch.setattr("graphcheck.cli.build_profile", fail_profile)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 1
+    assert client.closed is True
+
+
+def test_profile_json_prints_partial_profile_without_human_summary(tmp_path, monkeypatch):
+    baseline = _baseline_fixture().model_copy(
+        update={
+            "status": ProfileStatus.PARTIAL,
+            "partial_reason": "degree collection timed out",
+        }
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile", "--json"])
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert payload["status"] == "partial"
+    assert payload["partial_reason"] == "degree collection timed out"
+    assert "Profile completed." not in result.stdout
+
+
+def test_profile_summary_handles_empty_labels(tmp_path, monkeypatch):
+    baseline = _baseline_fixture()
+    baseline = baseline.model_copy(
+        update={"graph_schema": baseline.graph_schema.model_copy(update={"labels": []})}
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert "Labels: 0" in result.stdout
+
+
+def test_profile_summary_handles_empty_relationship_types(tmp_path, monkeypatch):
+    baseline = _baseline_fixture()
+    baseline = baseline.model_copy(
+        update={"graph_schema": baseline.graph_schema.model_copy(update={"relationship_types": []})}
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert "Relationship Types: 0" in result.stdout
+
+
+def test_profile_summary_handles_empty_constraints(tmp_path, monkeypatch):
+    baseline = _baseline_fixture()
+    baseline = baseline.model_copy(
+        update={"graph_schema": baseline.graph_schema.model_copy(update={"constraints": []})}
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert "Constraints: 0" in result.stdout
+
+
+def test_profile_summary_handles_empty_indexes(tmp_path, monkeypatch):
+    baseline = _baseline_fixture()
+    baseline = baseline.model_copy(
+        update={"graph_schema": baseline.graph_schema.model_copy(update={"indexes": []})}
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert "Indexes: 0" in result.stdout
+
+
+def test_profile_summary_handles_empty_property_coverage(tmp_path, monkeypatch):
+    baseline = _baseline_fixture()
+    baseline = baseline.model_copy(
+        update={"statistics": baseline.statistics.model_copy(update={"property_coverage": []})}
+    )
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert "Property Coverage:" in result.stdout
+    assert "Account.id (node):" not in result.stdout
+
+
 def test_baseline_set_selects_previous_and_prints_confirmation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
@@ -328,6 +483,17 @@ def test_baseline_set_specific_snapshot_and_missing_snapshot_error(tmp_path, mon
     assert selected.stdout.strip() == "Baseline set to 20260714T120000.json"
     assert missing.exit_code == 1
     assert "baseline.not_found" in missing.output
+
+
+def test_baseline_set_reports_error_when_no_baselines_exist(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    (tmp_path / ".graphcheck" / "baselines").mkdir(parents=True)
+
+    result = runner.invoke(app, ["baseline", "set"])
+
+    assert result.exit_code == 1
+    assert "baseline.missing" in result.output
 
 
 def test_diff_identical_targets_do_not_prompt_and_print_no_drift(monkeypatch):

@@ -30,15 +30,15 @@ DEFAULT_PROFILE_BUDGET_SECONDS = 60
 
 
 def profile(client: Neo4jClient) -> BaselineProfile:
-    start_time = time.monotonic()
-    target, _, counts = client.probe()
+    deadline = time.monotonic() + DEFAULT_PROFILE_BUDGET_SECONDS
+    target, _, counts = client.probe(timeout_s=_remaining_budget(deadline))
     labels: list[LabelProfile] = []
     relationship_types: list[RelationshipTypeProfile] = []
     constraints: list[ConstraintProfile] = []
     indexes: list[IndexProfile] = []
     property_coverage: list[PropertyCoverage] = []
 
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -51,7 +51,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        labels = collect_labels(client)
+        labels = collect_labels(client, timeout_s=_remaining_budget(deadline))
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -63,7 +63,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Failed collecting labels: {exc}",
         )
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -77,7 +77,9 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        relationship_types = collect_relationship_types(client)
+        relationship_types = collect_relationship_types(
+            client, timeout_s=_remaining_budget(deadline)
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -89,7 +91,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Failed collecting relationship types: {exc}",
         )
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -103,7 +105,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        constraints = collect_constraints(client)
+        constraints = collect_constraints(client, timeout_s=_remaining_budget(deadline))
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -115,7 +117,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Failed collecting constraints: {exc}",
         )
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -129,7 +131,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        indexes = collect_indexes(client)
+        indexes = collect_indexes(client, timeout_s=_remaining_budget(deadline))
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -141,7 +143,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Failed collecting indexes: {exc}",
         )
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -155,7 +157,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        property_coverage = collect_property_coverage(client)
+        property_coverage = collect_property_coverage(client, timeout_s=_remaining_budget(deadline))
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -167,7 +169,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Failed collecting property coverage: {exc}",
         )
-    if _budget_exceeded(start_time):
+    if _budget_exceeded(deadline):
         return _partial_profile(
             target,
             counts,
@@ -248,28 +250,40 @@ def print_profile(client: Neo4jClient) -> None:
     print(profile(client).model_dump_json(indent=2, by_alias=True))
 
 
-def collect_labels(client: Neo4jClient) -> list[LabelProfile]:
+def collect_labels(client: Neo4jClient, *, timeout_s: float | None = None) -> list[LabelProfile]:
+    deadline = _timeout_deadline(timeout_s)
     labels = sorted(
-        str(row["label"]) for row in client.run_read("CALL db.labels() YIELD label RETURN label")
+        str(row["label"])
+        for row in _run_read(client, "CALL db.labels() YIELD label RETURN label", deadline=deadline)
     )
-    return [_collect_label(client, label) for label in labels]
+    return [_collect_label(client, label, deadline) for label in labels]
 
 
-def collect_relationship_types(client: Neo4jClient) -> list[RelationshipTypeProfile]:
+def collect_relationship_types(
+    client: Neo4jClient, *, timeout_s: float | None = None
+) -> list[RelationshipTypeProfile]:
+    deadline = _timeout_deadline(timeout_s)
     relationship_types = sorted(
         str(row["relationshipType"])
-        for row in client.run_read(
-            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+        for row in _run_read(
+            client,
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+            deadline=deadline,
         )
     )
     return [
-        _collect_relationship_type(client, relationship_type)
+        _collect_relationship_type(client, relationship_type, deadline)
         for relationship_type in relationship_types
     ]
 
 
-def collect_constraints(client: Neo4jClient) -> list[ConstraintProfile]:
-    constraints = [_collect_constraint(row) for row in client.run_read("SHOW CONSTRAINTS")]
+def collect_constraints(
+    client: Neo4jClient, *, timeout_s: float | None = None
+) -> list[ConstraintProfile]:
+    deadline = _timeout_deadline(timeout_s)
+    constraints = [
+        _collect_constraint(row) for row in _run_read(client, "SHOW CONSTRAINTS", deadline=deadline)
+    ]
     return sorted(constraints, key=lambda constraint: constraint.name)
 
 
@@ -282,8 +296,9 @@ def _collect_constraint(row: dict[str, Any]) -> ConstraintProfile:
     )
 
 
-def collect_indexes(client: Neo4jClient) -> list[IndexProfile]:
-    indexes = [_collect_index(row) for row in client.run_read("SHOW INDEXES")]
+def collect_indexes(client: Neo4jClient, *, timeout_s: float | None = None) -> list[IndexProfile]:
+    deadline = _timeout_deadline(timeout_s)
+    indexes = [_collect_index(row) for row in _run_read(client, "SHOW INDEXES", deadline=deadline)]
     return sorted(indexes, key=lambda index: index.name)
 
 
@@ -297,37 +312,54 @@ def _collect_index(row: dict[str, Any]) -> IndexProfile:
 
 
 def _collect_relationship_type(
-    client: Neo4jClient, relationship_type: str
+    client: Neo4jClient, relationship_type: str, deadline: float | None
 ) -> RelationshipTypeProfile:
     relationship_type_ref = _cypher_identifier(relationship_type)
     return RelationshipTypeProfile(
         name=relationship_type,
-        count=_relationship_type_count(client, relationship_type_ref),
+        count=_relationship_type_count(client, relationship_type_ref, deadline),
     )
 
 
-def _relationship_type_count(client: Neo4jClient, relationship_type_ref: str) -> int:
-    rows = client.run_read(f"MATCH ()-[r:{relationship_type_ref}]->() RETURN count(r) AS count")
+def _relationship_type_count(
+    client: Neo4jClient, relationship_type_ref: str, deadline: float | None
+) -> int:
+    rows = _run_read(
+        client,
+        f"MATCH ()-[r:{relationship_type_ref}]->() RETURN count(r) AS count",
+        deadline=deadline,
+    )
     return int(rows[0]["count"]) if rows else 0
 
 
-def _collect_label(client: Neo4jClient, label: str) -> LabelProfile:
+def _collect_label(client: Neo4jClient, label: str, deadline: float | None) -> LabelProfile:
     label_ref = _cypher_identifier(label)
-    count = _label_count(client, label_ref)
+    count = _label_count(client, label_ref, deadline)
     properties = [
-        _collect_property(client, label_ref, property_name)
-        for property_name in _label_properties(client, label_ref)
+        _collect_property(client, label_ref, property_name, deadline)
+        for property_name in _label_properties(client, label_ref, deadline)
     ]
     return LabelProfile(
         name=label,
         count=count,
         properties=properties,
-        degree_distribution=_collect_degree_distribution(client, label_ref),
+        degree_distribution=_collect_degree_distribution(
+            client,
+            label_ref,
+            timeout_s=None if deadline is None else _remaining_budget(deadline),
+        ),
     )
 
 
-def _collect_degree_distribution(client: Neo4jClient, label_ref: str) -> DegreeDistribution:
-    rows = client.run_read(f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree")
+def _collect_degree_distribution(
+    client: Neo4jClient, label_ref: str, *, timeout_s: float | None = None
+) -> DegreeDistribution:
+    deadline = _timeout_deadline(timeout_s)
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree",
+        deadline=deadline,
+    )
     degrees = sorted(int(row["degree"]) for row in rows)
     if not degrees:
         return DegreeDistribution(median=0, p95=0, p99=0, maximum=0)
@@ -349,38 +381,50 @@ def _percentile(sorted_values: list[int], percentile: float) -> float:
     return lower + (upper - lower) * fraction
 
 
-def _label_count(client: Neo4jClient, label_ref: str) -> int:
-    rows = client.run_read(f"MATCH (n:{label_ref}) RETURN count(n) AS count")
+def _label_count(client: Neo4jClient, label_ref: str, deadline: float | None) -> int:
+    rows = _run_read(client, f"MATCH (n:{label_ref}) RETURN count(n) AS count", deadline=deadline)
     return int(rows[0]["count"]) if rows else 0
 
 
-def _label_properties(client: Neo4jClient, label_ref: str) -> list[str]:
-    rows = client.run_read(
+def _label_properties(client: Neo4jClient, label_ref: str, deadline: float | None) -> list[str]:
+    rows = _run_read(
+        client,
         f"MATCH (n:{label_ref}) UNWIND keys(n) AS property "
-        "RETURN DISTINCT property ORDER BY property"
+        "RETURN DISTINCT property ORDER BY property",
+        deadline=deadline,
     )
     return sorted(str(row["property"]) for row in rows)
 
 
-def _collect_property(client: Neo4jClient, label_ref: str, property_name: str) -> ProfileProperty:
+def _collect_property(
+    client: Neo4jClient, label_ref: str, property_name: str, deadline: float | None
+) -> ProfileProperty:
     return ProfileProperty(
         name=property_name,
-        type=_property_type(client, label_ref, property_name),
+        type=_property_type(client, label_ref, property_name, deadline),
     )
 
 
-def _property_count(client: Neo4jClient, label_ref: str, property_name: str) -> int:
-    rows = client.run_read(
+def _property_count(
+    client: Neo4jClient, label_ref: str, property_name: str, deadline: float | None
+) -> int:
+    rows = _run_read(
+        client,
         f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL RETURN count(n) AS count",
         {"property": property_name},
+        deadline=deadline,
     )
     return int(rows[0]["count"]) if rows else 0
 
 
-def _relationship_properties(client: Neo4jClient, relationship_type_ref: str) -> list[str]:
-    rows = client.run_read(
+def _relationship_properties(
+    client: Neo4jClient, relationship_type_ref: str, deadline: float | None
+) -> list[str]:
+    rows = _run_read(
+        client,
         f"MATCH ()-[r:{relationship_type_ref}]->() UNWIND keys(r) AS property "
-        "RETURN DISTINCT property ORDER BY property"
+        "RETURN DISTINCT property ORDER BY property",
+        deadline=deadline,
     )
     return sorted(str(row["property"]) for row in rows)
 
@@ -389,22 +433,32 @@ def _relationship_property_count(
     client: Neo4jClient,
     relationship_type_ref: str,
     property_name: str,
+    deadline: float | None,
 ) -> int:
-    rows = client.run_read(
+    rows = _run_read(
+        client,
         f"MATCH ()-[r:{relationship_type_ref}]->() "
         "WHERE r[$property] IS NOT NULL RETURN count(r) AS count",
         {"property": property_name},
+        deadline=deadline,
     )
     return int(rows[0]["count"]) if rows else 0
 
 
-def _property_type(client: Neo4jClient, label_ref: str, property_name: str) -> str:
-    rows = client.run_read(
+def _property_type(
+    client: Neo4jClient,
+    label_ref: str,
+    property_name: str,
+    deadline: float | None,
+) -> str:
+    rows = _run_read(
+        client,
         f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL "
         "WITH n "
         "ORDER BY id(n) "
         "RETURN n[$property] AS value LIMIT 1",
         {"property": property_name},
+        deadline=deadline,
     )
     if not rows:
         return "unknown"
@@ -429,8 +483,35 @@ def _python_value_type(value: Any) -> str:
     return value.__class__.__name__
 
 
-def _budget_exceeded(start_time: float) -> bool:
-    return (time.monotonic() - start_time) >= DEFAULT_PROFILE_BUDGET_SECONDS
+def _timeout_deadline(timeout_s: float | None) -> float | None:
+    return None if timeout_s is None else time.monotonic() + timeout_s
+
+
+def _remaining_budget(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise GraphCheckError(
+            "profile.budget_exceeded",
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget.",
+            "Retry profiling after reducing graph load.",
+        )
+    return remaining
+
+
+def _run_read(
+    client: Neo4jClient,
+    query: str,
+    params: dict[str, object] | None = None,
+    *,
+    deadline: float | None,
+) -> list[dict[str, Any]]:
+    if deadline is None:
+        return client.run_read(query, params)
+    return client.run_read(query, params, timeout_s=_remaining_budget(deadline))
+
+
+def _budget_exceeded(deadline: float) -> bool:
+    return time.monotonic() >= deadline
 
 
 def _coverage(populated_count: int, total_count: int) -> float:
@@ -443,11 +524,19 @@ def _cypher_identifier(value: str) -> str:
     return f"`{value.replace('`', '``')}`"
 
 
-def collect_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
-
+def collect_property_coverage(
+    client: Neo4jClient, *, timeout_s: float | None = None
+) -> list[PropertyCoverage]:
+    deadline = _timeout_deadline(timeout_s)
     coverage = [
-        *collect_node_property_coverage(client),
-        *collect_relationship_property_coverage(client),
+        *collect_node_property_coverage(
+            client,
+            timeout_s=None if deadline is None else _remaining_budget(deadline),
+        ),
+        *collect_relationship_property_coverage(
+            client,
+            timeout_s=None if deadline is None else _remaining_budget(deadline),
+        ),
     ]
     return sorted(
         coverage,
@@ -455,22 +544,27 @@ def collect_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
     )
 
 
-def collect_node_property_coverage(client: Neo4jClient) -> list[PropertyCoverage]:
+def collect_node_property_coverage(
+    client: Neo4jClient, *, timeout_s: float | None = None
+) -> list[PropertyCoverage]:
+    deadline = _timeout_deadline(timeout_s)
     coverage: list[PropertyCoverage] = []
 
     labels = sorted(
-        str(row["label"]) for row in client.run_read("CALL db.labels() YIELD label RETURN label")
+        str(row["label"])
+        for row in _run_read(client, "CALL db.labels() YIELD label RETURN label", deadline=deadline)
     )
 
     for label in labels:
         label_ref = _cypher_identifier(label)
-        label_count = _label_count(client, label_ref)
+        label_count = _label_count(client, label_ref, deadline)
 
-        for property_name in _label_properties(client, label_ref):
+        for property_name in _label_properties(client, label_ref, deadline):
             populated_count = _property_count(
                 client,
                 label_ref,
                 property_name,
+                deadline,
             )
 
             coverage.append(
@@ -490,23 +584,29 @@ def collect_node_property_coverage(client: Neo4jClient) -> list[PropertyCoverage
 
 def collect_relationship_property_coverage(
     client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
 ) -> list[PropertyCoverage]:
+    deadline = _timeout_deadline(timeout_s)
     coverage: list[PropertyCoverage] = []
     relationship_types = sorted(
         str(row["relationshipType"])
-        for row in client.run_read(
-            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+        for row in _run_read(
+            client,
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+            deadline=deadline,
         )
     )
 
     for relationship_type in relationship_types:
         relationship_type_ref = _cypher_identifier(relationship_type)
-        relationship_count = _relationship_type_count(client, relationship_type_ref)
-        for property_name in _relationship_properties(client, relationship_type_ref):
+        relationship_count = _relationship_type_count(client, relationship_type_ref, deadline)
+        for property_name in _relationship_properties(client, relationship_type_ref, deadline):
             populated_count = _relationship_property_count(
                 client,
                 relationship_type_ref,
                 property_name,
+                deadline,
             )
             coverage.append(
                 PropertyCoverage(
