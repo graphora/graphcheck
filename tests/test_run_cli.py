@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -125,6 +126,100 @@ competency:
     assert "exit code: 0" in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
+
+
+def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: quiet
+competency:
+  - id: value
+    question: Does the graph return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+
+    class NoisyClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            logging.getLogger("neo4j.notifications").warning(
+                "Received notification from DBMS server: deprecated query"
+            )
+            return super().run_read_result(query, params, timeout_s=timeout_s)
+
+    client = NoisyClient([QueryResult([{"value": 1}], ("value",), ())])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    caplog.set_level(logging.WARNING, logger="neo4j.notifications")
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    assert "Received notification from DBMS server" not in caplog.text
+    assert "Checks: 1 | passed 1" in result.stdout
+
+
+def test_run_shows_interactive_progress_for_each_selected_check(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: progress
+competency:
+  - id: first
+    question: Does the first query return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+  - id: second
+    question: Does the second query return a value?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult([{"value": 2}], ("value",), ()),
+        ]
+    )
+    progress: dict[str, object] = {"updates": []}
+
+    class FakeProgressBar:
+        label = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, amount):
+            progress["updates"].append((amount, self.label))
+
+    def progressbar(**kwargs):
+        progress["options"] = kwargs
+        bar = FakeProgressBar()
+        bar.label = kwargs["label"]
+        return bar
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
+    monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    assert progress["options"]["length"] == 2
+    assert progress["options"]["label"] == "Running graph checks"
+    assert progress["updates"] == [
+        (1, "Completed progress/first"),
+        (1, "Checks complete"),
+    ]
 
 
 def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(

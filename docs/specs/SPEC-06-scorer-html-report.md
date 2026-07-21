@@ -10,13 +10,13 @@ rather than bypassing them.
 Implemented in this slice:
 
 - SPEC-01 `results.json` writer.
+- Deterministic severity-weighted scorer.
 - Offline HTML report renderer.
 - Report history listing, selection, comparison, retention, and diagnostic filtering.
 - Regression tests over the existing SPEC-01 fixture results.
 
 Deferred:
 
-- Scorer module.
 - C1 engine-output adapter.
 - Fixture graph full-pipeline coverage.
 - Browser-level network interception test.
@@ -116,7 +116,10 @@ The report shows:
 
 - run id,
 - run status,
-- top-level score or `n/a`,
+- CI exit code, kept distinct from the score,
+- one prominent top-level score normalized to 0–100, rendered as a progress ring
+  (or an empty `n/a` ring when no score can be calculated),
+- execution coverage, kept separate from score,
 - target database/version/fingerprint when available,
 - run error banner for failed runs,
 - partial-run banner when `partial_reason` is present,
@@ -124,7 +127,8 @@ The report shows:
 - GraphCheck version,
 - pack version,
 - total counts,
-- per-suite score/totals/source SHA,
+- a score breakdown attributing integer points docked to each non-passing test,
+- per-suite verdict totals, coverage, and source SHA,
 - checks sorted failures-first,
 - compiled Cypher when present,
 - expected and measured values,
@@ -223,9 +227,9 @@ exit 2 without changing artifacts.
 
 ## Scorer
 
-TODO.
-
-SPEC-01 already defines the scoring contract:
+The scorer lives in `src/graphcheck/scoring.py`. It is the single implementation
+used by the engine, the `Results` consistency validator, and report rendering.
+It computes the SPEC-01 contract:
 
 ```text
 round(100 * sum(weight(pass)) / sum(weight(pass|fail|warn|errored)))
@@ -238,9 +242,57 @@ error = 3
 warn = 1
 ```
 
-The current `Results` model validates score consistency, totals, per-suite score,
-and exit code. C5 does not yet expose a separate scorer module. When added, it
-must reuse SPEC-01 rules rather than introducing a second scoring contract.
+For each selected check:
+
+| Verdict | Possible weight | Earned weight |
+| --- | ---: | ---: |
+| `pass` | severity weight | severity weight |
+| `fail` | severity weight | 0 |
+| `warn` | severity weight | 0 |
+| `errored` | severity weight | 0 |
+| `skipped` | excluded | excluded |
+
+An empty or all-skipped input has a `null` score. Execution coverage is reported
+separately as executed checks divided by selected checks, so skipped checks cannot
+be hidden behind a 100 score.
+
+### Determinism
+
+Scoring uses integer arithmetic only. The exact rational percentage is rounded
+half-to-even without an intermediate floating-point value. Check order does not
+affect the calculation, weights are immutable, duplicate check identities are
+rejected by `Results`, and invalid severities or verdict/execution combinations
+fail loudly.
+
+### Per-suite Breakdown
+
+Each suite is scored from its own member checks with the same algorithm. The
+overall score is computed directly from all checks; it is never an average of
+rounded suite scores. This preserves check-level weighting and prevents a tiny
+suite from receiving the same influence as a large suite.
+
+The `Results` model validates the stored overall and per-suite score values against
+fresh calculations. Per-suite scores remain part of the machine-readable SPEC-01
+contract, but the human report deliberately presents only one score: the overall
+0–100 value. It does not expose earned/possible weights or additional suite scores.
+Instead, users drill into per-suite verdict counts and the failure-first check list
+to identify which issues affected the score.
+
+### Point Deduction Breakdown
+
+The human report attributes `100 - score` integer points to the individual
+`fail`, `warn`, and `errored` tests. Deductions are proportional to the same
+locked severity weights used by the scorer. Integer remainders are assigned by
+largest remainder, with suite id and check id as stable tie-breakers. Therefore:
+
+- the deduction rows always sum exactly to `100 - score`,
+- error-severity issues dock three times the points of warning-severity issues
+  before integer rounding,
+- input order cannot change a test's deduction, and
+- passing and skipped tests dock no points.
+
+The report exposes these final per-test point deductions, but not earned/possible
+weight arithmetic.
 
 ## Tests
 
@@ -273,7 +325,11 @@ The tests assert:
 - a historical run can be selected and opened by id,
 - report comparisons classify outcome changes and show score movement,
 - pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
-- diagnostic reports contain failures, warnings, and errors but omit passing checks.
+- diagnostic reports contain failures, warnings, and errors but omit passing checks,
+- scorer results are invariant to input order and use exact half-even rounding,
+- per-suite calculations use the same locked weights as the overall score,
+- reports show one normalized score, per-test deductions that reconcile to it,
+  execution coverage, per-suite outcome counts, and failure-first issue details.
 
 ## Deferred Work
 
@@ -284,5 +340,4 @@ The following require C1, the fixture graph, or additional tooling:
 - Compute graph fingerprint, DB version, suite SHA, and timestamps at runtime.
 - Full pipeline fixture graph coverage.
 - Browser-level offline asset/network test.
-- Dedicated scorer API.
 - MCP/C7 consumption tests.

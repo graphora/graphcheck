@@ -25,23 +25,31 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `graphcheck run` with suite/tag selection, explicit fail-fast partial results, C4 baseline lookup,
   C5-compatible `results.json` and self-contained offline HTML artifacts, console summaries, and
   the frozen CI exit-code contract.
+- Interactive `graphcheck run` progress with exact per-check completion and clean redirected output.
 - SPEC-04 Engine, consolidating the C1 and run-command contracts into one detailed source for
   compilation, execution, evaluation, evidence, sampling, baselines, artifacts, and CI behavior.
 - Core and PII pack metadata/schema slice: eleven additional core conformance `with` schemas, strictly typed `core.yml` and `pii.yml` metadata, a generated metadata JSON Schema, SPEC-09, and validation-parity tests.
 - Complete built-in C3 runtime: manifest-driven compiler/capability binding for every registered
   check plus executable, deterministically sampled PII name/value scans with Luhn/Verhoeff
   validation, redacted findings, mandatory node evidence, and confidence intervals.
+- A pure deterministic severity-weighted scorer with exact half-even rounding, execution
+  coverage, and independently calculated per-suite scores for the machine-readable contract.
 
 ### Changed
 
 - `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
   the separate `--run ID` selector when opening a historical report.
+- Offline reports now present one normalized top-level score as a progress ring without a percent
+  glyph or weight arithmetic; a per-test deduction table reconciles every docked point to the
+  overall score and links it to the relevant issue, suite, result, and severity.
 - Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
   measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).
 
 ### Fixed
 
+- Neo4j driver deprecation notifications no longer flood GraphCheck CLI output; GraphCheck still
+  consumes the notification metadata needed to reject missing schema references.
 - Report history and rendering now read schema 1.0 artifacts by upgrading them to schema 1.1 in
   memory; newly written `results.json` files continue to use the current 1.1 contract.
 - Corrected the C1/C5 merge resolution so human-readable visibility and blocker diagnostics remain

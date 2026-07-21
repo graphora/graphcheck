@@ -60,7 +60,7 @@ Every model forbids unknown keys (`extra="forbid"`).
 3. **`errored` carries the fix** (`{code, message, fix}`); a `failed` run carries the same at `run.error`.
 4. **Estimates are labeled** (`estimate:false` = exact, else `{sample_size, population, confidence, ci}`). `errored`/`skipped` are never estimates.
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
-6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. `round` is **half-to-even** (Python's `round()`); re-implementations must match. Weights are locked. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
+6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. Rounding applies to the exact rational value using **half-to-even**, without an intermediate floating-point value. Weights are locked. The overall score is computed directly from all checks, never by averaging rounded suite scores. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
 7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry graph element IDs or aggregate measurement-scope IDs plus labels/types only; `compiled_query` keeps placeholders.
 
 Evidence pointer `kind` is `node`, `rel`, or `aggregate`. An `aggregate` pointer identifies a
@@ -73,6 +73,8 @@ node/relationship or property-coverage evidence.
 ## Deliverables
 
 - `src/graphcheck/contracts/results.py` — the Pydantic model (source of truth) with `model_validator`s for the status shape, `partial_reason` iff, derived invariants (score incl. per-suite null, totals, exit code), field-presence table, coverage-status, and identity/suite uniqueness.
+- `src/graphcheck/scoring.py` — the pure deterministic weighted scorer shared by the engine,
+  result validator, and report renderer.
 - `docs/specs/results.schema.json` — generated JSON Schema (structural).
 - `tests/contracts/fixtures/results.{complete,partial,generated-only,failed}.json` — machine-valid artifacts.
 - `tests/contracts/test_results.py` — validates fixtures against the schema, round-trips them, and asserts every invariant directly.

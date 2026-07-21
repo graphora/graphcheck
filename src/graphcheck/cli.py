@@ -1,5 +1,9 @@
 import json
+import logging
+import sys
 import webbrowser
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,6 +38,7 @@ from graphcheck.reporting import (
 )
 
 _DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
+_NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
 app = typer.Typer(
     name="graphcheck",
@@ -56,6 +61,11 @@ def main(
     ),
 ) -> None:
     """Run graph checks, diagnose Neo4j, and inspect offline reports."""
+
+    # Neo4j 6 logs every server notification at WARNING by default. These are query metadata,
+    # which the adapter consumes and promotes when GraphCheck needs to act on them; letting the
+    # driver's logger also write them to stderr overwhelms the CLI's stable human output.
+    logging.getLogger(_NEO4J_NOTIFICATION_LOGGER).setLevel(logging.ERROR)
 
 
 @app.command()
@@ -381,15 +391,17 @@ def run_command(
         profiles = load_profiles(root)
         _, selected_profile = select_profile(profiles, profile)
         client = Neo4jClient(selected_profile)
-        results = Engine(
-            client,
-            baselines=DirectoryBaselineProvider(artifacts / "baselines"),
-        ).run(
-            suite_inputs,
-            tags=tags,
-            fail_fast=fail_fast,
-            selection_suites=requested_suites or None,
-        )
+        with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
+            results = Engine(
+                client,
+                baselines=DirectoryBaselineProvider(artifacts / "baselines"),
+                progress_callback=progress_callback,
+            ).run(
+                suite_inputs,
+                tags=tags,
+                fail_fast=fail_fast,
+                selection_suites=requested_suites or None,
+            )
     except GraphCheckError as exc:
         if run_dir is None:
             _print_setup_error(exc.error)
@@ -432,6 +444,46 @@ def run_command(
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
+
+
+def _selected_check_count(suites: Sequence[SuiteInput], tags: Sequence[str]) -> int:
+    return sum(
+        1
+        for suite_input in suites
+        for check in suite_input.suite.checks
+        if not tags or any(tag in check.tags for tag in tags)
+    )
+
+
+def _interactive_stderr() -> bool:
+    return bool(getattr(sys.stderr, "isatty", lambda: False)())
+
+
+@contextmanager
+def _run_progress(
+    total_checks: int,
+) -> Iterator[Callable[[int, int, str], None] | None]:
+    if total_checks == 0 or not _interactive_stderr():
+        yield None
+        return
+
+    with typer.progressbar(
+        length=total_checks,
+        label="Running graph checks",
+        file=sys.stderr,
+        show_eta=True,
+        show_percent=True,
+        show_pos=True,
+        fill_char="=",
+        empty_char="-",
+        width=28,
+    ) as bar:
+
+        def update(completed: int, total: int, check_name: str) -> None:
+            bar.label = "Checks complete" if completed == total else f"Completed {check_name}"
+            bar.update(1)
+
+        yield update
 
 
 def _selection_tags(selectors: list[str]) -> list[str]:

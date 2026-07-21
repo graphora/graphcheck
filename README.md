@@ -148,6 +148,9 @@ inconsistent expectations fail loudly before execution.
 graphcheck run
 ```
 
+Interactive terminals show a per-check progress bar while the run is in flight. The bar is omitted
+when output is redirected or captured, keeping CI logs and shell pipelines clean.
+
 Useful selections include:
 
 ```console

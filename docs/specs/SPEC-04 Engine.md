@@ -21,7 +21,8 @@ The implementation is split by responsibility:
 | Pure verdict evaluation and evidence extraction | `src/graphcheck/engine/evaluator.py` |
 | Seeded sampling policy | `src/graphcheck/engine/sampling.py` |
 | C4-compatible baseline resolution | `src/graphcheck/engine/baseline.py` |
-| Run isolation, deadlines, metadata, score inputs, and result assembly | `src/graphcheck/engine/runner.py` |
+| Deterministic severity-weighted scoring | `src/graphcheck/scoring.py` and SPEC-06 |
+| Run isolation, deadlines, metadata, and result assembly | `src/graphcheck/engine/runner.py` |
 | Project-facing `graphcheck run` command | `src/graphcheck/cli.py` |
 | SPEC-01 JSON and offline HTML serialization | `src/graphcheck/reporting/` |
 
@@ -132,9 +133,10 @@ are ordered by their canonical JSON representation before becoming arrays.
 
 The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and no
 JavaScript, CDN, external font, image, stylesheet, or link dependency. It opens offline and shows
-run metadata, score, target fingerprint/version, partial/failed banners, suite totals and source
-SHAs, compiled Cypher, expected/measured values, estimates, errors, and evidence pointers. Checks
-are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then by severity, suite id, and check id.
+run metadata, one normalized score, execution coverage, target fingerprint/version, partial/failed
+banners, per-suite coverage/totals and source SHAs, compiled Cypher, expected/measured values,
+estimates, errors, and evidence pointers. Checks are ordered `fail`, `warn`, `errored`, `skipped`,
+`pass`, then by severity, suite id, and check id.
 
 Configuration and connection failures also produce failed-run artifacts when the project artifact
 path can be resolved. A missing project root cannot produce an artifact because no authoritative
