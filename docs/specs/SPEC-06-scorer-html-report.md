@@ -34,7 +34,12 @@ The writer accepts:
 - a JSON string,
 - or a `Path` to a `results.json` file.
 
-All inputs are normalized through the SPEC-01 source-of-truth model:
+All inputs are normalized through the SPEC-01 source-of-truth model. Historical
+schema 1.0 artifacts are upgraded in memory by changing their version marker to
+the current 1.1 contract before validation; this compatibility read does not
+rewrite the source file. Newly written artifacts always use schema 1.1.
+
+Current inputs are validated through:
 
 ```python
 Results.model_validate(...)
@@ -76,8 +81,9 @@ SPEC-01 requires failing and warning checks to carry evidence. The model also
 requires `evidence.elements` to contain at least one pointer, so a fail/warn
 cannot be written with an empty evidence list.
 
-Evidence elements carry node/relationship IDs and labels/types only. Property
-values must not be placed in evidence pointers.
+Evidence elements carry node/relationship IDs with labels/types, or an aggregate
+measurement-scope ID for aggregate drift findings. Property values must not be
+placed in evidence pointers.
 
 ## HTML Renderer
 
@@ -124,7 +130,7 @@ The report shows:
 - expected and measured values,
 - estimate details when present,
 - check errors when present,
-- evidence message and node/relationship IDs.
+- evidence message and node/relationship or aggregate-scope IDs.
 
 ### Ordering
 
@@ -143,25 +149,31 @@ Within the same verdict, checks sort by severity, suite id, then check id.
 `graphcheck report` operates on report artifacts that already exist. It does not
 connect to Neo4j or create new run data.
 
-History operations load and validate each run's `results.json`. If `runs/latest`
-duplicates a historical run id, it appears only once in history. History is ordered
-by `run.finished_at`, newest first.
+History operations load and validate each run's `results.json`, including the
+schema 1.0 compatibility read described above. If `runs/latest` duplicates a
+historical run id, it appears only once in history. History is ordered by
+`run.finished_at`, newest first.
 
 ### Open and Select
 
-`graphcheck report --open`:
+`graphcheck report --open [<id>]`:
 
 1. discovers the project root and configured artifacts directory,
-2. finds `report.html` files below `<artifacts>/runs/`,
-3. selects the most recently modified report, and
+2. when `<id>` is omitted, finds `report.html` files below `<artifacts>/runs/`
+   and selects the most recently modified report,
+3. when `<id>` is present, resolves it against `results.json.run.id` or the run
+   directory name and selects that run's `report.html`, and
 4. opens its local file URI in the default browser.
 
 If no report exists or the browser cannot be launched, the command exits non-zero
 with an actionable error.
 
-`graphcheck report --run <id>` resolves `<id>` against `results.json.run.id` and
-opens that run's `report.html`. A missing id or HTML artifact is an error that points
-the user to `graphcheck report --list`.
+A missing id or HTML artifact is an error that points the user to
+`graphcheck report --list`. A positional report ID without `--open` is a usage
+error. The former `--run <id>` selector is not part of the command surface.
+
+Running `graphcheck report` without an action prints a concise command guide;
+`graphcheck report --help` provides argument and option details.
 
 ### List
 
@@ -202,9 +214,9 @@ the retention limit. Directories that do not contain a valid immediate
 `errored` checks while preserving the original run summary; it does not modify
 `results.json` or `report.html`.
 
-`--run <id>` selects another run for diagnostic generation. Combining
-`--failures-only` with `--open`, or selecting it with `--run`, opens the generated
-diagnostic after writing it.
+Combining `--failures-only` with `--open` generates the diagnostic for the newest
+run and opens it. `--open <id> --failures-only` selects a historical run, generates
+its diagnostic, and opens the generated file.
 
 `--list`, `--compare`, and `--prune` are standalone actions. Invalid combinations
 exit 2 without changing artifacts.
@@ -253,6 +265,8 @@ The tests assert:
 - evidence IDs are visible,
 - failed-run errors are visible,
 - `report --open` selects the newest HTML report,
+- `report --open <id>` selects a historical report and a bare ID is rejected,
+- schema 1.0 historical artifacts load without being rewritten,
 - the configured artifacts directory is honored,
 - missing reports and browser-launch failures exit non-zero,
 - report history is ordered and de-duplicates `runs/latest`,

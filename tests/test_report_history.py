@@ -72,14 +72,14 @@ def test_report_list_deduplicates_latest_alias(tmp_path, monkeypatch):
     assert result.stdout.count("run-one") == 1
 
 
-def test_report_run_opens_selected_historical_report(tmp_path, monkeypatch):
+def test_report_open_id_opens_selected_historical_report(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
     selected = _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
     _write_run(tmp_path, "run-new", "2026-07-02T10:00:00Z")
     opened = []
     monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
-    result = runner.invoke(app, ["report", "--run", "run-old"])
+    result = runner.invoke(app, ["report", "--open", "run-old"])
 
     assert result.exit_code == 0
     assert opened == [(selected / "report.html").resolve().as_uri()]
@@ -180,7 +180,7 @@ def test_report_failures_only_can_generate_and_open_selected_run(tmp_path, monke
     opened = []
     monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
-    result = runner.invoke(app, ["report", "--run", "run-one", "--failures-only"])
+    result = runner.invoke(app, ["report", "--open", "run-one", "--failures-only"])
 
     diagnostic = run_dir / "report.failures.html"
     assert result.exit_code == 0
@@ -197,3 +197,27 @@ def test_report_compare_is_a_standalone_action(tmp_path, monkeypatch):
 
     assert result.exit_code == 2
     assert "standalone actions" in result.stderr
+
+
+def test_report_id_requires_open(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["report", "run-one"])
+
+    assert result.exit_code == 2
+    assert "A report ID requires --open" in result.stderr
+
+
+def test_report_history_reads_schema_1_0_artifacts(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    run_dir = _write_run(tmp_path, "legacy-run", "2026-07-01T10:00:00Z")
+    results_path = run_dir / "results.json"
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "1.0"
+    results_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = runner.invoke(app, ["report", "--list"])
+
+    assert result.exit_code == 0
+    assert "legacy-run" in result.stdout
+    assert json.loads(results_path.read_text(encoding="utf-8"))["schema_version"] == "1.0"

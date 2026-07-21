@@ -34,12 +34,16 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
+  the separate `--run ID` selector when opening a historical report.
 - Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
   measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).
 
 ### Fixed
 
+- Report history and rendering now read schema 1.0 artifacts by upgrading them to schema 1.1 in
+  memory; newly written `results.json` files continue to use the current 1.1 contract.
 - Corrected the C1/C5 merge resolution so human-readable visibility and blocker diagnostics remain
   in `graphcheck debug`, report opening no longer references an undefined debug trace, HTML reports
   retain deterministic check ordering and aggregate-scope labels, and results/HTML artifacts share

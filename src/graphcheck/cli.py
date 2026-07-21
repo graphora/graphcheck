@@ -55,7 +55,7 @@ def main(
         False, "--version", callback=_version, is_eager=True, help="Show version and exit."
     ),
 ) -> None:
-    """GraphCheck — the command surface lands in Week 3 (C6)."""
+    """Run graph checks, diagnose Neo4j, and inspect offline reports."""
 
 
 @app.command()
@@ -162,21 +162,20 @@ def debug(
 
 @app.command()
 def report(
+    report_id: str | None = typer.Argument(
+        None,
+        metavar="[ID]",
+        help="Historical run ID to open; valid only with --open.",
+    ),
     open_report: bool = typer.Option(
         False,
         "--open",
-        help="Open the most recent report.html in the default browser.",
+        help="Open the latest report, or the selected ID when one is provided.",
     ),
     list_reports: bool = typer.Option(
         False,
         "--list",
         help="List report history with timestamps, scores, and statuses.",
-    ),
-    run_id: str | None = typer.Option(
-        None,
-        "--run",
-        metavar="ID",
-        help="Open a specific historical run.",
     ),
     compare: tuple[str, str] | None = typer.Option(
         None,
@@ -198,24 +197,21 @@ def report(
     failures_only: bool = typer.Option(
         False,
         "--failures-only",
-        help="Generate a diagnostic report containing failures, warnings, and errors.",
+        help="Write a report containing only failures, warnings, and errors.",
     ),
 ) -> None:
-    """Work with generated GraphCheck reports."""
+    """Open, list, compare, prune, or filter generated reports."""
     _validate_report_options(
         open_report=open_report,
+        report_id=report_id,
         list_reports=list_reports,
-        run_id=run_id,
         compare=compare,
         prune=prune,
         keep=keep,
         failures_only=failures_only,
     )
-    if not any((open_report, list_reports, run_id, compare, prune, failures_only)):
-        typer.echo(
-            "Use `graphcheck report --open`, `--list`, `--run`, `--compare`, `--prune`, "
-            "or `--failures-only`."
-        )
+    if not any((open_report, list_reports, compare, prune, failures_only)):
+        _print_report_command_help()
         return
 
     try:
@@ -252,20 +248,20 @@ def report(
 
         if failures_only:
             records = discover_report_runs(runs_dir)
-            record = find_report_run(records, run_id) if run_id else _latest_run(records)
+            record = find_report_run(records, report_id) if report_id else _latest_run(records)
             output = record.directory / "report.failures.html"
             write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
             typer.echo(f"Wrote {output}")
-            if open_report or run_id is not None:
+            if open_report:
                 _open_html_report(output)
             return
 
-        if run_id is not None:
-            record = find_report_run(discover_report_runs(runs_dir), run_id)
-            _open_html_report(record.report_path)
-            return
-
-        _open_html_report(_latest_html_report(runs_dir))
+        if open_report:
+            if report_id is not None:
+                record = find_report_run(discover_report_runs(runs_dir), report_id)
+                _open_html_report(record.report_path)
+            else:
+                _open_html_report(_latest_html_report(runs_dir))
     except ReportHistoryError as exc:
         typer.echo(f"report.error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -274,13 +270,15 @@ def report(
 def _validate_report_options(
     *,
     open_report: bool,
+    report_id: str | None,
     list_reports: bool,
-    run_id: str | None,
     compare: tuple[str, str] | None,
     prune: bool,
     keep: int | None,
     failures_only: bool,
 ) -> None:
+    if report_id is not None and not open_report:
+        _report_usage_error("A report ID requires --open.")
     if keep is not None and not prune:
         _report_usage_error("--keep requires --prune.")
     if prune and keep is None:
@@ -289,7 +287,7 @@ def _validate_report_options(
         _report_usage_error("--keep must be at least 1.")
 
     standalone = sum((list_reports, compare is not None, prune))
-    selection_actions = any((open_report, run_id is not None, failures_only))
+    selection_actions = open_report or failures_only
     if standalone > 1 or (standalone and selection_actions):
         _report_usage_error(
             "--list, --compare, and --prune are standalone actions and cannot be combined "
@@ -300,6 +298,18 @@ def _validate_report_options(
 def _report_usage_error(message: str) -> None:
     typer.echo(f"report.usage: {message}", err=True)
     raise typer.Exit(2)
+
+
+def _print_report_command_help() -> None:
+    typer.echo(
+        "Report commands:\n"
+        "  graphcheck report --open [ID]         Open the latest or a selected report.\n"
+        "  graphcheck report --list              List available report IDs.\n"
+        "  graphcheck report --compare ID1 ID2   Compare two report outcomes.\n"
+        "  graphcheck report --prune --keep N    Retain the newest N historical runs.\n"
+        "  graphcheck report --failures-only     Write a diagnostic-only report.\n"
+        "Use `graphcheck report --help` for option details."
+    )
 
 
 def _latest_run(records: list[ReportRun]) -> ReportRun:

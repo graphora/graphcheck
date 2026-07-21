@@ -257,6 +257,25 @@ def test_report_without_open_explains_usage():
 
     assert result.exit_code == 0
     assert "graphcheck report --open" in result.stdout
+    assert "graphcheck report --list" in result.stdout
+    assert "graphcheck report --compare" in result.stdout
+    assert "graphcheck report --prune" in result.stdout
+    assert "graphcheck report --failures-only" in result.stdout
+
+
+def test_report_help_describes_optional_open_id():
+    result = runner.invoke(app, ["report", "--help"])
+
+    assert result.exit_code == 0
+    assert "Usage: graphcheck report [OPTIONS] [ID]" in result.stdout
+    assert "Historical run ID to open; valid only with --open" in result.stdout
+
+
+def test_report_run_option_has_been_replaced():
+    result = runner.invoke(app, ["report", "--run", "run-one"])
+
+    assert result.exit_code == 2
+    assert "No such option: --run" in result.stderr
 
 
 def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):

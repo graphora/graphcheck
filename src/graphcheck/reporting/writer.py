@@ -8,7 +8,7 @@ from typing import Any
 import jsonschema
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from graphcheck.contracts.results import Results
+from graphcheck.contracts.results import SCHEMA_VERSION, Results
 from graphcheck.contracts.schemas import results_schema
 
 _JSON_VALUE = TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
@@ -41,10 +41,11 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
     if isinstance(data, Results):
         return data
     if isinstance(data, Path):
-        return Results.model_validate_json(data.read_text(encoding="utf-8"))
-    if isinstance(data, str):
-        return Results.model_validate_json(data)
-    return Results.model_validate(data)
+        data = data.read_text(encoding="utf-8")
+    payload = json.loads(data) if isinstance(data, str) else data
+    if isinstance(payload, dict) and payload.get("schema_version") == "1.0":
+        payload = {**payload, "schema_version": SCHEMA_VERSION}
+    return Results.model_validate(payload)
 
 
 def results_json(results: Results | dict[str, Any]) -> str:

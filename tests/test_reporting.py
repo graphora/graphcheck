@@ -30,6 +30,15 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
     assert Results.model_validate(raw) == model
 
 
+def test_writer_upgrades_schema_1_0_input_to_current_output():
+    raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
+    raw["schema_version"] = "1.0"
+
+    output = json.loads(results_json(raw))
+
+    assert output["schema_version"] == "1.1"
+
+
 def test_writer_rejects_invalid_results():
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["checks"][0]["evidence"] = None
