@@ -6,11 +6,13 @@ import pytest
 from pydantic import ValidationError
 
 from graphcheck.contracts.results import (
+    SCHEMA_VERSION,
     WEIGHTS,
     CheckError,
     CheckResult,
     Estimate,
     Evidence,
+    EvidenceElement,
     Pattern,
     RedactionPolicy,
     Results,
@@ -73,7 +75,11 @@ def _full_check(verdict, severity):
         data.update(compiled_query="RETURN 1", params={}, measured={})
     if verdict in (Verdict.FAIL, Verdict.WARN):
         data["evidence"] = Evidence(
-            message="m", elements=[], truncated=False, cap=50, total_count=0
+            message="m",
+            elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+            truncated=False,
+            cap=50,
+            total_count=1,
         )
     if verdict is Verdict.ERRORED:
         data["error"] = CheckError(code="c", message="m", fix="f")
@@ -114,8 +120,28 @@ def test_fail_requires_evidence():
         CheckResult(**_base(verdict=Verdict.FAIL, evidence=None))
 
 
+def test_evidence_requires_at_least_one_pointer():
+    with pytest.raises(ValidationError):
+        Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
+
+
+def test_aggregate_measurement_pointer_is_in_typed_and_json_schema_contracts():
+    pointer = EvidenceElement(kind="aggregate", id="node_count:label=Customer")
+
+    jsonschema.validate(
+        pointer.model_dump(exclude_none=False),
+        results_schema()["$defs"]["EvidenceElement"],
+    )
+
+
 def test_pass_forbids_evidence():
-    ev = Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
+    ev = Evidence(
+        message="m",
+        elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+        truncated=False,
+        cap=50,
+        total_count=1,
+    )
     with pytest.raises(ValidationError):
         CheckResult(**_base(verdict=Verdict.PASS, evidence=ev))
 
@@ -255,7 +281,7 @@ def _run(**over):
 def _results(checks, status=RunStatus.COMPLETE, **run_over):
     sc = score_value(checks)
     return Results(
-        schema_version="1.0",
+        schema_version=SCHEMA_VERSION,
         run=_run(status=status, exit_code=exit_code(status, checks), **run_over),
         score=None if sc is None else _score(sc),
         totals=totals(checks),
@@ -271,7 +297,7 @@ def test_consistent_results_validate():
 def test_wrong_totals_rejected():
     with pytest.raises(ValidationError):
         Results(
-            schema_version="1.0",
+            schema_version=SCHEMA_VERSION,
             run=_run(exit_code=0),
             score=_score(100),
             totals={"checks": 9, "pass": 9, "fail": 0, "warn": 0, "errored": 0, "skipped": 0},
@@ -306,7 +332,7 @@ def test_complete_requires_target():
     checks = [_chk(Verdict.PASS)]
     with pytest.raises(ValidationError):
         Results(
-            schema_version="1.0",
+            schema_version=SCHEMA_VERSION,
             run=_run(target=None, exit_code=0),
             score=_score(100),
             totals=totals(checks),
@@ -324,7 +350,7 @@ def test_per_suite_totals_checked():
     checks = [_chk(Verdict.PASS)]
     with pytest.raises(ValidationError):
         Results(
-            schema_version="1.0",
+            schema_version=SCHEMA_VERSION,
             run=_run(exit_code=0),
             score=_score(100),
             totals=totals(checks),
@@ -378,7 +404,7 @@ def test_duplicate_suite_id_rejected():
     checks = [_chk(Verdict.PASS)]
     with pytest.raises(ValidationError):
         Results(
-            schema_version="1.0",
+            schema_version=SCHEMA_VERSION,
             run=_run(exit_code=0),
             score=_score(100),
             totals=totals(checks),

@@ -7,6 +7,7 @@ from graphcheck.neo4j_adapter import (
     Counts,
     DebugTrace,
     Neo4jClient,
+    QueryResult,
     Visibility,
     _fingerprint,
     _is_apoc_absent_error,
@@ -22,6 +23,19 @@ class Plan:
     def __init__(self, operator_type, children=None):
         self.operator_type = operator_type
         self.children = children or []
+
+
+class _ReadPlanSummary:
+    query_type = "r"
+
+
+class _ReadPlanResult:
+    def consume(self):
+        return _ReadPlanSummary()
+
+
+def _is_explain(query):
+    return str(getattr(query, "text", query)).startswith("EXPLAIN ")
 
 
 def test_plan_operator_searches_nested_driver_plan_objects():
@@ -92,9 +106,19 @@ def test_error_json_shape_matches_spec():
     }
 
 
-def test_fingerprint_is_stable_and_short():
-    assert _fingerprint("bolt://x", "neo4j", "5") == _fingerprint("bolt://x", "neo4j", "5")
-    assert len(_fingerprint("bolt://x", "neo4j", "5")) == 16
+def test_fingerprint_is_canonical_and_changes_with_graph_structure_or_counts():
+    counts = Counts(nodes=3, relationships=2)
+    first = _fingerprint(("Customer", "Account"), ("OWNS",), counts)
+
+    assert first == _fingerprint(("Account", "Customer"), ("OWNS",), counts)
+    assert first.startswith("sha256:")
+    assert len(first) == len("sha256:") + 64
+    assert first != _fingerprint(("Account",), ("OWNS",), counts)
+    assert first != _fingerprint(
+        ("Customer", "Account"),
+        ("OWNS",),
+        Counts(nodes=4, relationships=2),
+    )
 
 
 def test_count_store_probe_returns_false_when_explain_fails():
@@ -134,6 +158,80 @@ def test_counts_are_converted_to_ints():
     client.run_read = lambda query: rows[query]
 
     assert client._counts() == Counts(nodes=3, relationships=4)
+
+
+def test_count_probe_recomputes_remaining_timeout_between_queries(monkeypatch):
+    client = object.__new__(Neo4jClient)
+    captured = []
+    rows = {
+        "MATCH (n) RETURN count(n) AS count": [{"count": 3}],
+        "MATCH ()-[r]->() RETURN count(r) AS count": [{"count": 4}],
+    }
+
+    def run_read(query, *, timeout_s):
+        captured.append(timeout_s)
+        return rows[query]
+
+    ticks = iter([0.0, 1.0, 2.5])
+    monkeypatch.setattr("graphcheck.neo4j_adapter.time.monotonic", lambda: next(ticks))
+    client.run_read = run_read
+
+    assert client._counts(timeout_s=10.0) == Counts(nodes=3, relationships=4)
+    assert captured == [pytest.approx(9.0), pytest.approx(7.5)]
+
+
+def test_enterprise_privilege_probe_recomputes_timeout_for_home_database(monkeypatch):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    captured = []
+    privileges = [
+        {
+            "access": "GRANTED",
+            "action": "MATCH",
+            "graph": "HOME",
+            "resource": "ALL_PROPERTIES",
+            "segment": "NODE(*)",
+        },
+        {
+            "access": "GRANTED",
+            "action": "MATCH",
+            "graph": "HOME",
+            "resource": "ALL_PROPERTIES",
+            "segment": "RELATIONSHIP(*)",
+        },
+    ]
+
+    def run_read(query, *, timeout_s):
+        captured.append(timeout_s)
+        if query.startswith("SHOW USER PRIVILEGES"):
+            return privileges
+        if query == "SHOW HOME DATABASE":
+            return [{"name": "neo4j", "aliases": []}]
+        pytest.fail(f"unexpected query: {query}")
+
+    ticks = iter([0.0, 1.0, 2.5])
+    monkeypatch.setattr("graphcheck.neo4j_adapter.time.monotonic", lambda: next(ticks))
+    client.run_read = run_read
+
+    assert client._can_read("enterprise", timeout_s=10.0) is True
+    assert captured == [pytest.approx(9.0), pytest.approx(7.5)]
+
+
+def test_schema_tokens_are_canonicalized_for_fingerprinting():
+    client = object.__new__(Neo4jClient)
+    client.run_read = lambda query: [
+        {
+            "labels": ["Customer", "Account", "Customer"],
+            "relationship_types": ["OWNS", "CONTROLS"],
+        }
+    ]
+
+    assert client._schema_tokens() == (
+        ("Account", "Customer"),
+        ("CONTROLS", "OWNS"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -427,6 +525,7 @@ def test_probe_handles_permission_denied_apoc_probe():
     client._server_info = lambda: ("5.18.0", "enterprise")
     client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
+    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
 
     def apoc_denied():
@@ -451,6 +550,7 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     client._server_info = lambda: ("5.18.0", "enterprise")
     client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
+    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
 
     def missing_apoc():
@@ -638,6 +738,20 @@ def test_map_neo4j_error_codes(exc, code):
     assert map_neo4j_error(exc).error.code == code
 
 
+def test_transaction_timeout_error_has_an_actionable_timeout_fix():
+    error_type = type(
+        "ClientError",
+        (Exception,),
+        {"code": "Neo.TransientError.Transaction.TransactionTimedOut"},
+    )
+
+    mapped = map_neo4j_error(error_type("The transaction timed out"))
+
+    assert mapped.error.code == "neo4j.query_failed"
+    assert "timed out" in mapped.error.message
+    assert "sampling" in mapped.error.fix
+
+
 def test_map_neo4j_error_uses_driver_security_code_for_permission_denial():
     exc = Exception("operation rejected")
     exc.code = "Neo.ClientError.Security.Forbidden"
@@ -660,6 +774,8 @@ def test_run_read_uses_read_access_mode(monkeypatch):
             return False
 
         def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
             return iter([])
 
     class _FakeDriver:
@@ -678,3 +794,389 @@ def test_run_read_uses_read_access_mode(monkeypatch):
     assert client.run_read("RETURN 1") == []
     assert captured["default_access_mode"] == neo4j.READ_ACCESS
     assert captured["database"] == "neo4j"
+
+
+def test_run_read_rejects_server_classified_write_before_execution(monkeypatch):
+    import neo4j
+
+    executed: list[str] = []
+
+    class _WriteSummary:
+        query_type = "w"
+
+    class _WritePlanResult:
+        def consume(self):
+            return _WriteSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            text = str(getattr(query, "text", query))
+            if text.startswith("EXPLAIN "):
+                return _WritePlanResult()
+            executed.append(text)
+            return iter([])
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read_result("CREATE (:Forbidden)")
+
+    assert caught.value.error.code == "neo4j.write_rejected"
+    assert executed == []
+
+
+def test_plain_read_compatibility_path_does_not_reclassify_trusted_dbms_procedure(monkeypatch):
+    import neo4j
+
+    queries: list[str] = []
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            text = str(getattr(query, "text", query))
+            queries.append(text)
+            if text.startswith("EXPLAIN "):
+                raise AssertionError("trusted compatibility reads must not be planner-reclassified")
+            return iter([neo4j.Record([("version", "5.18.0")])])
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    rows = client.run_read("CALL dbms.components() YIELD versions RETURN versions[0] AS version")
+
+    assert rows == [{"version": "5.18.0"}]
+    assert queries == ["CALL dbms.components() YIELD versions RETURN versions[0] AS version"]
+
+
+def test_run_read_result_preserves_graph_values_columns_and_notifications(monkeypatch):
+    import neo4j
+    from neo4j.graph import Graph, Node
+
+    node = Node(Graph(), "4:customer:1", 1, ["Customer"], {"customer_id": "C-1"})
+    notification = {
+        "code": "Neo.ClientNotification.Statement.CartesianProduct",
+        "title": "Cartesian product",
+        "description": "The query builds a cartesian product.",
+    }
+
+    class _FakeSummary:
+        notifications = [notification]
+
+    class _FakeResult:
+        def keys(self):
+            return ("customer", "count")
+
+        def __iter__(self):
+            return iter([neo4j.Record([("customer", node), ("count", 1)])])
+
+        def consume(self):
+            return _FakeSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
+            return _FakeResult()
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    rich = client.run_read_result("RETURN customer, count")
+
+    assert isinstance(rich, QueryResult)
+    assert rich.columns == ("customer", "count")
+    assert rich.rows[0]["customer"] is node
+    assert rich.rows[0]["customer"].element_id == "4:customer:1"
+    assert rich.notifications == (notification,)
+    # The frozen API remains intentionally plain/lossy for compatibility.
+    assert client.run_read("RETURN customer, count") == [
+        {"customer": {"customer_id": "C-1"}, "count": 1}
+    ]
+
+
+def test_run_read_result_uses_driver_query_timeout(monkeypatch):
+    import neo4j
+
+    captured: dict = {"queries": []}
+
+    class _FakeResult:
+        def keys(self):
+            return ("n",)
+
+        def __iter__(self):
+            return iter([])
+
+        def consume(self):
+            return None
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            captured["queries"].append(query)
+            if _is_explain(query):
+                return _ReadPlanResult()
+            captured["query"] = query
+            captured["params"] = params
+            return _FakeResult()
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    result = client.run_read_result("RETURN $n AS n", {"n": 1}, timeout_s=2.5)
+
+    assert result.columns == ("n",)
+    assert len(captured["queries"]) == 2
+    assert captured["queries"][0].text == "EXPLAIN RETURN $n AS n"
+    assert isinstance(captured["query"], neo4j.Query)
+    assert captured["query"].text == "RETURN $n AS n"
+    assert 0 < captured["query"].timeout <= 2.5
+    assert captured["params"] == {"n": 1}
+    assert captured["default_access_mode"] == neo4j.READ_ACCESS
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "notifications": [
+                {
+                    "code": "Neo.ClientNotification.Statement.UnknownLabelWarning",
+                    "title": "The provided label is not in the database.",
+                    "description": "The missing label name is: CustomerTypo",
+                }
+            ]
+        },
+        {
+            "statuses": [
+                {
+                    "neo4j_code": "Neo.ClientNotification.Statement.UnknownLabelWarning",
+                    "title": "The provided label is not in the database.",
+                    "description": "The missing label name is: CustomerTypo",
+                    "diagnostic_record": {
+                        "_severity": "WARNING",
+                        "_classification": "UNRECOGNIZED",
+                    },
+                }
+            ]
+        },
+        {
+            "notifications": [],
+            "statuses": [
+                {
+                    "neo4j_code": "Neo.ClientNotification.Statement.UnknownLabelWarning",
+                    "title": "The provided label is not in the database.",
+                    "description": "The missing label name is: CustomerTypo",
+                }
+            ],
+        },
+    ],
+)
+def test_run_read_result_turns_missing_label_notification_into_error(monkeypatch, metadata):
+    import neo4j
+
+    class _FakeSummary:
+        def __init__(self):
+            self.metadata = metadata
+
+    class _FakeResult:
+        def keys(self):
+            return ("n",)
+
+        def __iter__(self):
+            return iter([])
+
+        def consume(self):
+            return _FakeSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
+            return _FakeResult()
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read_result("MATCH (n:CustomerTypo) RETURN n")
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "label" in caught.value.error.message.lower()
+    assert "CustomerTypo" in caught.value.error.message
+    assert caught.value.error.fix.startswith("Correct the label")
+
+
+def test_gql_status_object_reports_missing_schema_without_deprecated_notification_api(
+    monkeypatch,
+):
+    import neo4j
+
+    class _Status:
+        is_notification = True
+        gql_status = "01N50"
+        status_description = "warn: the label is not in the database: CustomerTypo"
+        raw_severity = "WARNING"
+        raw_classification = "UNRECOGNIZED"
+        position = None
+
+    class _FakeSummary:
+        gql_status_objects = (_Status(),)
+
+        @property
+        def notifications(self):
+            raise AssertionError("deprecated notification API must not be accessed")
+
+        @property
+        def summary_notifications(self):
+            raise AssertionError("deprecated notification API must not be accessed")
+
+    class _FakeResult:
+        def keys(self):
+            return ("n",)
+
+        def __iter__(self):
+            return iter([])
+
+        def consume(self):
+            return _FakeSummary()
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            if _is_explain(query):
+                return _ReadPlanResult()
+            return _FakeResult()
+
+    class _FakeDriver:
+        def session(self, **kwargs):
+            return _FakeSession()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _FakeDriver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read_result("MATCH (n:CustomerTypo) RETURN n")
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "label" in caught.value.error.message.lower()
+
+
+def test_unknown_relationship_type_notification_is_a_query_error():
+    from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
+
+    with pytest.raises(GraphCheckError) as caught:
+        _raise_for_missing_schema_reference(
+            (
+                {
+                    "code": "Neo.ClientNotification.Statement.UnknownRelationshipTypeWarning",
+                    "description": "The relationship type is not in the database: OWNZ",
+                },
+            )
+        )
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "relationship type" in caught.value.error.message
+    assert "OWNZ" in caught.value.error.message
+
+
+def test_unknown_property_key_notification_is_a_query_error():
+    from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
+
+    with pytest.raises(GraphCheckError) as caught:
+        _raise_for_missing_schema_reference(
+            (
+                {
+                    "code": "Neo.ClientNotification.Statement.UnknownPropertyKeyWarning",
+                    "description": "The property key is not in the database: customer_emali",
+                },
+            )
+        )
+
+    assert caught.value.error.code == "neo4j.query_failed"
+    assert "property key" in caught.value.error.message
+    assert "customer_emali" in caught.value.error.message

@@ -1,0 +1,604 @@
+{
+  "$defs": {
+    "CapabilityRequirement": {
+      "enum": [
+        "read",
+        "show_procedures",
+        "apoc",
+        "count_store",
+        "store_consistency"
+      ],
+      "type": "string"
+    },
+    "CoreCheckMetadata": {
+      "discriminator": {
+        "mapping": {
+          "False": "#/$defs/UnsampledCoreCheckMetadata",
+          "True": "#/$defs/SampledCoreCheckMetadata"
+        },
+        "propertyName": "sampled"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnsampledCoreCheckMetadata"
+        },
+        {
+          "$ref": "#/$defs/SampledCoreCheckMetadata"
+        }
+      ]
+    },
+    "CoreCheckName": {
+      "enum": [
+        "completeness",
+        "cardinality",
+        "no_orphans",
+        "dangling_rels",
+        "property_type",
+        "property_format",
+        "value_in_set",
+        "uniqueness",
+        "hub_outlier",
+        "label_cooccurrence",
+        "rel_direction",
+        "temporal_sanity"
+      ],
+      "type": "string"
+    },
+    "CoreChecksMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "cardinality": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "cardinality"
+            }
+          }
+        },
+        "completeness": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "completeness"
+            }
+          }
+        },
+        "dangling_rels": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "dangling_rels"
+            }
+          }
+        },
+        "hub_outlier": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "hub_outlier"
+            }
+          }
+        },
+        "label_cooccurrence": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "label_cooccurrence"
+            }
+          }
+        },
+        "no_orphans": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "no_orphans"
+            }
+          }
+        },
+        "property_format": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "property_format"
+            }
+          }
+        },
+        "property_type": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "property_type"
+            }
+          }
+        },
+        "rel_direction": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "rel_direction"
+            }
+          }
+        },
+        "temporal_sanity": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "temporal_sanity"
+            }
+          }
+        },
+        "uniqueness": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "uniqueness"
+            }
+          }
+        },
+        "value_in_set": {
+          "$ref": "#/$defs/CoreCheckMetadata",
+          "properties": {
+            "template": {
+              "const": "value_in_set"
+            }
+          }
+        }
+      },
+      "required": [
+        "completeness",
+        "cardinality",
+        "no_orphans",
+        "dangling_rels",
+        "property_type",
+        "property_format",
+        "value_in_set",
+        "uniqueness",
+        "hub_outlier",
+        "label_cooccurrence",
+        "rel_direction",
+        "temporal_sanity"
+      ],
+      "title": "CoreChecksMetadata",
+      "type": "object"
+    },
+    "CorePackMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/CoreChecksMetadata"
+        },
+        "pack": {
+          "const": "core",
+          "title": "Pack",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.1.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "version",
+        "checks"
+      ],
+      "title": "CorePackMetadata",
+      "type": "object"
+    },
+    "EstimateMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "required_when_sampled": {
+          "$ref": "#/$defs/StrictTrueLiteral"
+        }
+      },
+      "required": [
+        "required_when_sampled"
+      ],
+      "title": "EstimateMetadata",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "enum": [
+        "node",
+        "rel"
+      ],
+      "type": "string"
+    },
+    "EvidenceMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "elements": {
+          "items": {
+            "$ref": "#/$defs/EvidenceKind"
+          },
+          "minItems": 1,
+          "title": "Elements",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id_fields": {
+          "items": {
+            "$ref": "#/$defs/NonWhitespaceString"
+          },
+          "minItems": 1,
+          "title": "Id Fields",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "elements",
+        "id_fields"
+      ],
+      "title": "EvidenceMetadata",
+      "type": "object"
+    },
+    "NonWhitespaceString": {
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "PiiCheckName": {
+      "enum": [
+        "pii_name_match",
+        "pii_value_match"
+      ],
+      "type": "string"
+    },
+    "PiiChecksMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "pii_name_match": {
+          "$ref": "#/$defs/_PiiCheckMetadataBase",
+          "properties": {
+            "template": {
+              "const": "pii_name_match"
+            }
+          }
+        },
+        "pii_value_match": {
+          "$ref": "#/$defs/_PiiCheckMetadataBase",
+          "properties": {
+            "template": {
+              "const": "pii_value_match"
+            }
+          }
+        }
+      },
+      "required": [
+        "pii_name_match",
+        "pii_value_match"
+      ],
+      "title": "PiiChecksMetadata",
+      "type": "object"
+    },
+    "PiiNameMatchMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "const": "name-match",
+          "title": "Confidence",
+          "type": "string"
+        },
+        "patterns": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PiiNamePatternMetadata"
+          },
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/NonWhitespaceString"
+          },
+          "title": "Patterns",
+          "type": "object"
+        }
+      },
+      "required": [
+        "confidence",
+        "patterns"
+      ],
+      "title": "PiiNameMatchMetadata",
+      "type": "object"
+    },
+    "PiiNamePatternMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "keys": {
+          "items": {
+            "$ref": "#/$defs/NonWhitespaceString"
+          },
+          "minItems": 1,
+          "title": "Keys",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "title": "PiiNamePatternMetadata",
+      "type": "object"
+    },
+    "PiiPackMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/PiiChecksMetadata"
+        },
+        "completeness_notice": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "name_match": {
+          "$ref": "#/$defs/PiiNameMatchMetadata"
+        },
+        "pack": {
+          "const": "pii",
+          "title": "Pack",
+          "type": "string"
+        },
+        "value_match": {
+          "$ref": "#/$defs/PiiValueMatchMetadata"
+        },
+        "version": {
+          "const": "0.1.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "version",
+        "completeness_notice",
+        "checks",
+        "name_match",
+        "value_match"
+      ],
+      "title": "PiiPackMetadata",
+      "type": "object"
+    },
+    "PiiReportMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ReportField"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Fields",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "title": "PiiReportMetadata",
+      "type": "object"
+    },
+    "PiiValueMatchMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "const": "value-match",
+          "title": "Confidence",
+          "type": "string"
+        },
+        "patterns": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PiiValuePatternMetadata"
+          },
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/NonWhitespaceString"
+          },
+          "title": "Patterns",
+          "type": "object"
+        },
+        "report": {
+          "$ref": "#/$defs/PiiReportMetadata"
+        },
+        "sample_required": {
+          "$ref": "#/$defs/StrictTrueLiteral"
+        }
+      },
+      "required": [
+        "confidence",
+        "sample_required",
+        "report",
+        "patterns"
+      ],
+      "title": "PiiValueMatchMetadata",
+      "type": "object"
+    },
+    "PiiValuePatternMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "checksum": {
+          "anyOf": [
+            {
+              "enum": [
+                "luhn",
+                "verhoeff"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checksum"
+        },
+        "regex": {
+          "$ref": "#/$defs/NonWhitespaceString",
+          "format": "regex"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "title": "PiiValuePatternMetadata",
+      "type": "object"
+    },
+    "ReportField": {
+      "enum": [
+        "location",
+        "exposure_count",
+        "confidence"
+      ],
+      "type": "string"
+    },
+    "SampledCoreCheckMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "estimate": {
+          "$ref": "#/$defs/EstimateMetadata"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "const": true,
+          "title": "Sampled",
+          "type": "boolean"
+        },
+        "template": {
+          "$ref": "#/$defs/CoreCheckName"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled",
+        "estimate"
+      ],
+      "title": "SampledCoreCheckMetadata",
+      "type": "object"
+    },
+    "StrictTrueLiteral": {
+      "const": true,
+      "type": "boolean"
+    },
+    "UnsampledCoreCheckMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "const": false,
+          "title": "Sampled",
+          "type": "boolean"
+        },
+        "template": {
+          "$ref": "#/$defs/CoreCheckName"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled"
+      ],
+      "title": "UnsampledCoreCheckMetadata",
+      "type": "object"
+    },
+    "_PiiCheckMetadataBase": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "estimate": {
+          "$ref": "#/$defs/EstimateMetadata"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "$ref": "#/$defs/StrictTrueLiteral"
+        },
+        "template": {
+          "$ref": "#/$defs/PiiCheckName"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "sampled",
+        "estimate",
+        "evidence",
+        "template"
+      ],
+      "title": "_PiiCheckMetadataBase",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "discriminator": {
+    "mapping": {
+      "core": "#/$defs/CorePackMetadata",
+      "pii": "#/$defs/PiiPackMetadata"
+    },
+    "propertyName": "pack"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CorePackMetadata"
+    },
+    {
+      "$ref": "#/$defs/PiiPackMetadata"
+    }
+  ],
+  "x-pack-version": "0.1.0"
+}

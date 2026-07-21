@@ -40,7 +40,7 @@ drift:
 
 1. **`generated: true` is inert, and a file marker dominates.** Allowed at file and per-check scope; effective state is monotonic (`file OR check`) — a child cannot un-generate a generated file. The loader records the marker; the engine (C1) emits the resulting `skipped` / `skip_reason:"generated"` result at run time. A generated check is still fully validated first.
 2. **Suite-level keys:** `suite`, `generated`, `defaults`, and `conformance` / `competency` / `drift`. `defaults` accepts `severity` and `tags` only. Resolution: `severity` = check → defaults → `error` (fail-closed); `tags` = union of defaults + check.
-3. **Strictness is two layers:** a duplicate-key-rejecting `SafeLoader` subclass (PyYAML's `safe_load` silently keeps the last duplicate) runs before Pydantic, and `extra="forbid"` rejects unknown keys — so duplicate *and* unknown keys are loud errors.
+3. **Strictness is two layers:** a duplicate-key-rejecting `SafeLoader` subclass (PyYAML's `safe_load` silently keeps the last duplicate) runs before Pydantic, and the shared suite models use `strict=True` plus `extra="forbid"`. Duplicate and unknown keys are loud errors, and scalar values are not generally coerced (`"1"` is not an integer and `0`/`1` are not booleans). Integer-valued fields follow Draft 2020-12 number semantics: an integral JSON number such as `1.0` is normalized to `1`, while fractional numbers remain invalid. Frozen string enum values such as `severity: error` are parsed explicitly at the YAML boundary.
 4. **Envelope frozen; `with` is a versioned pack payload.** The frozen per-check envelope: `id`, `severity`, `tags`, `provenance`, `generated` (all); `question`, `query`, `params`, `expect` (competency); `check`, `with` (conformance, both required); `metric`, `target`, `baseline`, `tolerance` (drift). A conformance check's type-specific config lives entirely under `with`, validated against a pack-owned schema selected by `check`.
 5. **Competency pattern is derived:** `expect` with `contains`/`equals` → `competency-regression`; else `competency-shape`.
 6. **Drift baseline** is optional, defaults to `latest`; a missing resolved baseline errors at run time (never a silent pass).
@@ -51,8 +51,41 @@ drift:
 
 - **Registry:** `graphcheck.packs.REGISTRY: dict[str, type[BaseModel]]` maps a `check` name to a strict (`extra="forbid"`) model for its `with` payload; the built-in pack exposes `PACK_VERSION`.
 - **Loading:** the loader looks up `check` in `REGISTRY` (unknown → loud error), validates `with` against the model, and keeps the normalized result (so pack defaults like `threshold=1.0` survive onto the loaded `spec.with_`).
-- **Two schema artifacts:** `docs/specs/check.envelope.schema.json` is the **frozen** envelope (with `with` opaque — *not* a full validator on its own). `docs/specs/check.schema.json` is a **generated** combined schema (envelope + a `oneOf` over the registry, stamped with `x-pack-version`), regenerated as the pack grows. Full `with` validation comes only from `check.py` or the combined schema. v0 pack models must be flat (ref-free); the generator rejects any that emit `$defs`.
-- **Week 1 vs Week 2:** SPEC-02 freezes the envelope + the protocol (registry interface, generation step, `pack_version`). The twelve `with` models are C3's Week-2 work.
+- **Two schema artifacts:** `docs/specs/check.envelope.schema.json` is the **frozen** envelope (with `with` opaque — *not* a full validator on its own). `docs/specs/check.schema.json` is a **generated** combined schema (envelope + a `oneOf` over the registry, stamped with `x-pack-version`), regenerated as the pack grows. It declares the standard Draft 2020-12 dialect. Consumers must enable standard format assertion for `format: regex`; Python consumers can use `validate_check_schema`. The semantic comparisons below remain loader rules because standard JSON Schema cannot express them without changing the frozen representation. v0 pack models must be flat (ref-free); the generator rejects any that emit `$defs`.
+
+## Portable validation boundary
+
+`check.schema.json`, evaluated with format assertion enabled, is the portable
+structural contract. `load_suite` then applies four semantic invariants that
+Draft 2020-12 cannot express over SPEC-02's frozen list and named-field shape:
+
+1. Check IDs are unique across `conformance`, `competency`, and `drift` together.
+2. `label_cooccurrence.with.label_a` differs from `label_b`.
+3. `rel_direction.with.from_label` differs from `to_label`.
+4. `temporal_sanity.with.start_property` differs from `end_property`.
+
+Every consumer must implement the same language-neutral algorithm after standard
+schema validation:
+
+```text
+seen_ids = empty set
+for collection in [conformance, competency, drift]:
+  for item in collection:
+    reject if item.id is in seen_ids
+    add item.id to seen_ids
+
+for item in conformance:
+  if item.check == label_cooccurrence:
+    reject if item.with.label_a == item.with.label_b
+  if item.check == rel_direction:
+    reject if item.with.from_label == item.with.to_label
+  if item.check == temporal_sanity:
+    reject if item.with.start_property == item.with.end_property
+```
+
+These are semantic validation rules, not a custom JSON Schema dialect. The
+generated combined schema carries a standard `$comment` pointing consumers back
+to this section.
 
 ## Loader output
 
@@ -60,7 +93,10 @@ drift:
 
 ## Deliverables
 
-- `src/graphcheck/packs/__init__.py` — the pack registry + built-in `completeness`.
+- `src/graphcheck/packs/__init__.py` — the pack registry + built-in core conformance `with` models.
+- `src/graphcheck/packs/core.yml` — data-only metadata for the built-in core conformance pack.
+- `src/graphcheck/packs/pii.yml` — validated metadata, executable-template bindings, patterns, and
+  heuristic limits for the separate PII pack (`pii_name_match` and `pii_value_match`).
 - `src/graphcheck/contracts/check.py` — the duplicate-key loader, strict envelope + `Expect` models, defaults/generated resolution, and `REGISTRY`-driven `with` validation.
 - `docs/specs/check.envelope.schema.json` (frozen) + `docs/specs/check.schema.json` (generated, pack-versioned).
 - `tests/contracts/fixtures/suite.valid.yml` + `suite.invalid-*.yml`, and `tests/contracts/test_check_validation.py`.

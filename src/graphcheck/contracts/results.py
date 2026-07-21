@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 class Verdict(StrEnum):
@@ -55,7 +55,7 @@ class _Strict(BaseModel):
 
 
 class EvidenceElement(_Strict):
-    kind: Literal["node", "rel"]
+    kind: Literal["node", "rel", "aggregate"]
     id: str
     labels: list[str] | None = None
     type: str | None = None
@@ -63,7 +63,7 @@ class EvidenceElement(_Strict):
 
 class Evidence(_Strict):
     message: str
-    elements: list[EvidenceElement]
+    elements: list[EvidenceElement] = Field(min_length=1)
     truncated: bool
     cap: int
     total_count: int
@@ -272,7 +272,7 @@ class Suite(_Strict):
 
 
 class Results(_Strict):
-    schema_version: Literal["1.0"]  # frozen top-level key, required and present
+    schema_version: Literal["1.1"]  # frozen top-level key, required and present
     run: Run
     score: Score | None
     totals: Totals
