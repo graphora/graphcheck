@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from graphcheck.contracts.results import Pattern, Severity
 from graphcheck.contracts.scalars import JsonSchemaInteger
@@ -66,6 +66,35 @@ class RowBounds(_Strict):
     max: JsonSchemaInteger | None = None
     exactly: JsonSchemaInteger | None = None
 
+    @model_validator(mode="after")
+    def _bounds_are_meaningful_and_consistent(self) -> RowBounds:
+        values = {"min": self.min, "max": self.max, "exactly": self.exactly}
+        if all(value is None for value in values.values()):
+            raise ValueError("rows must declare at least one of min, max, or exactly")
+        for name, value in values.items():
+            if value is not None and value < 0:
+                raise ValueError(f"rows.{name} must be non-negative")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("rows.min must not exceed rows.max")
+        if self.exactly is not None:
+            if self.min is not None and self.exactly < self.min:
+                raise ValueError("rows.exactly must not be less than rows.min")
+            if self.max is not None and self.exactly > self.max:
+                raise ValueError("rows.exactly must not exceed rows.max")
+        return self
+
+    def permits(self, count: int) -> bool:
+        if self.exactly is not None and count != self.exactly:
+            return False
+        if self.min is not None and count < self.min:
+            return False
+        return self.max is None or count <= self.max
+
+    def permits_nonempty(self) -> bool:
+        if self.exactly is not None:
+            return self.exactly > 0
+        return self.max is None or self.max > 0
+
 
 class Expect(_Strict):
     rows: RowBounds | None = None
@@ -75,6 +104,47 @@ class Expect(_Strict):
     equals: list | None = None
     empty: bool | None = None
 
+    @model_validator(mode="after")
+    def _assertions_are_meaningful_and_consistent(self) -> Expect:
+        assertions = (
+            self.rows,
+            self.columns,
+            self.unique,
+            self.contains,
+            self.equals,
+            self.empty,
+        )
+        if all(assertion is None for assertion in assertions):
+            raise ValueError("expect must declare at least one assertion")
+        if self.contains == []:
+            raise ValueError("expect.contains must not be empty")
+
+        if self.rows is not None:
+            if self.empty is True and not self.rows.permits(0):
+                raise ValueError("expect.empty=true conflicts with expect.rows")
+            if self.empty is False and not self.rows.permits_nonempty():
+                raise ValueError("expect.empty=false conflicts with expect.rows")
+            if self.equals is not None and not self.rows.permits(len(self.equals)):
+                raise ValueError("expect.equals length conflicts with expect.rows")
+            if self.contains and not self.rows.permits_nonempty():
+                raise ValueError("expect.contains conflicts with expect.rows")
+
+        if self.empty is True:
+            if self.contains:
+                raise ValueError("expect.empty=true conflicts with expect.contains")
+            if self.equals is not None and self.equals:
+                raise ValueError("expect.empty=true conflicts with expect.equals")
+        elif self.empty is False and self.equals == []:
+            raise ValueError("expect.empty=false conflicts with empty expect.equals")
+
+        if (
+            self.contains is not None
+            and self.equals is not None
+            and any(value not in self.equals for value in self.contains)
+        ):
+            raise ValueError("expect.contains must be a subset of expect.equals")
+        return self
+
 
 class CompetencyCheck(_Envelope):
     question: str
@@ -82,12 +152,36 @@ class CompetencyCheck(_Envelope):
     params: dict = {}
     expect: Expect
 
+    @model_validator(mode="after")
+    def _content_is_valid(self) -> CompetencyCheck:
+        if not self.question.strip():
+            raise ValueError("competency question must not be blank")
+        if not self.query.strip():
+            raise ValueError("competency query must not be blank")
+        if any(not isinstance(key, str) for key in self.params):
+            raise ValueError("competency params keys must be strings")
+        return self
+
 
 class DriftCheck(_Envelope):
     metric: str
     target: dict
     baseline: str = "latest"
     tolerance: dict
+
+    @model_validator(mode="after")
+    def _content_is_valid(self) -> DriftCheck:
+        if not self.metric.strip():
+            raise ValueError("drift metric must not be blank")
+        if not self.baseline.strip():
+            raise ValueError("drift baseline must not be blank")
+        if not self.tolerance:
+            raise ValueError("drift tolerance must not be empty")
+        if any(not isinstance(key, str) for key in self.target):
+            raise ValueError("drift target keys must be strings")
+        if any(not isinstance(key, str) for key in self.tolerance):
+            raise ValueError("drift tolerance keys must be strings")
+        return self
 
 
 class LoadedCheck(_Strict):

@@ -1,6 +1,29 @@
 pack: pii
 version: 0.1.0
 completeness_notice: Findings are heuristic and sampled; this pack never claims complete PII discovery.
+checks:
+  pii_name_match:
+    catches: Sampled property occurrences whose keys match known personal-data aliases.
+    does_not_catch: Personal data stored under unknown or ambiguous property names.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: pii_name_match
+  pii_value_match:
+    catches: Sampled string property values matching known PII formats and required checksums.
+    does_not_catch: Encoded, encrypted, unrecognized, or unsampled personal-data values.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: pii_value_match
 name_match:
   confidence: name-match
   patterns:

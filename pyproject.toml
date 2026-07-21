@@ -42,5 +42,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "performance: opt-in performance budget tests against a preloaded customer-scale graph",
+]
 # Coverage is enforced in CI (.github/workflows/ci.yml), not here — so focused
 # `pytest -k ...` runs don't trip the package-wide 80% gate.

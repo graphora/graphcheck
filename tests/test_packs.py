@@ -43,6 +43,15 @@ CORE_CHECKS = {
         "end_property": "end_at",
     },
 }
+PII_CHECKS = {
+    "pii_name_match": {"label": "Customer", "patterns": ["email"]},
+    "pii_value_match": {
+        "label": "Customer",
+        "patterns": ["credit_card"],
+        "properties": ["notes"],
+        "sample_size": 500,
+    },
+}
 
 
 def _load_pack(name: str) -> dict:
@@ -121,6 +130,15 @@ def test_each_core_template_mapping_has_typed_and_json_schema_parity(check):
     _assert_rejected_by_typed_and_json_schema(raw, CorePackMetadata)
 
 
+@pytest.mark.parametrize("check", PII_CHECKS)
+def test_each_pii_template_mapping_has_typed_and_json_schema_parity(check):
+    raw = _load_pack("pii.yml")
+    wrong_template = "pii_value_match" if check == "pii_name_match" else "pii_name_match"
+    raw["checks"][check]["template"] = wrong_template
+
+    _assert_rejected_by_typed_and_json_schema(raw, PiiPackMetadata)
+
+
 @pytest.mark.parametrize(
     ("filename", "model", "path", "invalid_value"),
     [
@@ -151,6 +169,13 @@ def test_each_core_template_mapping_has_typed_and_json_schema_parity(check):
             ("checks", "hub_outlier", "estimate", "required_when_sampled"),
             1,
             id="required-when-sampled-one",
+        ),
+        pytest.param(
+            "pii.yml",
+            PiiPackMetadata,
+            ("checks", "pii_value_match", "sampled"),
+            1,
+            id="pii-check-sampled-one",
         ),
         pytest.param(
             "pii.yml",
@@ -358,7 +383,8 @@ def test_pack_metadata_schema_uses_standard_draft_without_custom_validation_keyw
 
 
 def test_all_core_conformance_checks_are_registered():
-    assert set(REGISTRY) == set(CORE_CHECKS) == set(CORE_CHECK_NAMES)
+    assert set(CORE_CHECKS) == set(CORE_CHECK_NAMES)
+    assert set(REGISTRY) == set(CORE_CHECKS) | set(PII_CHECKS)
 
 
 def test_core_check_with_models_accept_representative_configs():
@@ -389,6 +415,32 @@ def test_load_suite_accepts_all_core_conformance_checks():
     assert len(suite.checks) == len(CORE_CHECKS)
     assert {check.id for check in suite.checks} == set(CORE_CHECKS)
     assert all(check.pattern is Pattern.CONFORMANCE for check in suite.checks)
+
+
+def test_load_suite_accepts_executable_pii_checks_and_normalizes_defaults():
+    items = []
+    for check, payload in PII_CHECKS.items():
+        rendered = yaml.safe_dump(payload, default_flow_style=True).strip()
+        items.append(f"  - id: {check}\n    check: {check}\n    with: {rendered}\n")
+
+    suite = load_suite("suite: pii\nconformance:\n" + "".join(items))
+
+    assert {check.spec.check for check in suite.checks} == set(PII_CHECKS)
+    assert all(check.pattern is Pattern.CONFORMANCE for check in suite.checks)
+
+
+@pytest.mark.parametrize(
+    ("check", "payload"),
+    [
+        ("pii_name_match", {"patterns": ["unknown"]}),
+        ("pii_name_match", {"patterns": ["email", "email"]}),
+        ("pii_value_match", {"patterns": ["email", "email"]}),
+        ("pii_value_match", {"properties": ["notes", "notes"]}),
+    ],
+)
+def test_pii_with_models_reject_unknown_or_duplicate_selectors(check, payload):
+    with pytest.raises(ValidationError):
+        REGISTRY[check].model_validate(payload)
 
 
 def test_core_check_with_models_reject_invalid_enum_values():
@@ -493,7 +545,7 @@ def test_core_check_with_models_reject_semantically_unusable_configs(check, payl
 def test_core_pack_metadata_matches_registry_and_declares_evidence():
     core = _load_core_metadata()
 
-    assert {check for check, _ in core.checks.items()} == set(REGISTRY)
+    assert {check for check, _ in core.checks.items()} == set(CORE_CHECKS)
     for check, metadata in core.checks.items():
         assert metadata.catches
         assert metadata.does_not_catch
@@ -519,6 +571,13 @@ def test_pii_pack_is_separate_and_declares_heuristic_limits():
     assert "never claims complete PII discovery" in pii.completeness_notice
     assert pii.name_match.confidence == "name-match"
     assert pii.value_match.confidence == "value-match"
+    assert {name for name, _ in pii.checks.items()} == set(PII_CHECKS)
+    for name, metadata in pii.checks.items():
+        assert metadata.template == name
+        assert metadata.sampled is True
+        assert metadata.estimate.required_when_sampled is True
+        assert tuple(metadata.requires) == PACK_REQUIREMENTS[name]
+        assert metadata.evidence.elements == ["node"]
 
 
 def test_pii_name_match_has_expected_pattern_coverage():
@@ -542,7 +601,7 @@ def test_pii_value_match_declares_required_patterns_and_checksums():
     assert patterns["credit_card"].checksum == "luhn"
 
 
-def test_combined_schema_contains_all_core_checks():
+def test_combined_schema_contains_all_executable_pack_checks():
     branches = check_combined_schema()["$defs"]["WithByCheck"]["oneOf"]
 
-    assert {branch["properties"]["check"]["const"] for branch in branches} == set(CORE_CHECKS)
+    assert {branch["properties"]["check"]["const"] for branch in branches} == set(REGISTRY)

@@ -5,7 +5,8 @@
         "read",
         "show_procedures",
         "apoc",
-        "count_store"
+        "count_store",
+        "store_consistency"
       ],
       "type": "string"
     },
@@ -239,6 +240,40 @@
       "pattern": "\\S",
       "type": "string"
     },
+    "PiiCheckName": {
+      "enum": [
+        "pii_name_match",
+        "pii_value_match"
+      ],
+      "type": "string"
+    },
+    "PiiChecksMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "pii_name_match": {
+          "$ref": "#/$defs/_PiiCheckMetadataBase",
+          "properties": {
+            "template": {
+              "const": "pii_name_match"
+            }
+          }
+        },
+        "pii_value_match": {
+          "$ref": "#/$defs/_PiiCheckMetadataBase",
+          "properties": {
+            "template": {
+              "const": "pii_value_match"
+            }
+          }
+        }
+      },
+      "required": [
+        "pii_name_match",
+        "pii_value_match"
+      ],
+      "title": "PiiChecksMetadata",
+      "type": "object"
+    },
     "PiiNameMatchMetadata": {
       "additionalProperties": false,
       "properties": {
@@ -288,6 +323,9 @@
     "PiiPackMetadata": {
       "additionalProperties": false,
       "properties": {
+        "checks": {
+          "$ref": "#/$defs/PiiChecksMetadata"
+        },
         "completeness_notice": {
           "$ref": "#/$defs/NonWhitespaceString"
         },
@@ -312,6 +350,7 @@
         "pack",
         "version",
         "completeness_notice",
+        "checks",
         "name_match",
         "value_match"
       ],
@@ -499,6 +538,49 @@
         "sampled"
       ],
       "title": "UnsampledCoreCheckMetadata",
+      "type": "object"
+    },
+    "_PiiCheckMetadataBase": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "estimate": {
+          "$ref": "#/$defs/EstimateMetadata"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "$ref": "#/$defs/StrictTrueLiteral"
+        },
+        "template": {
+          "$ref": "#/$defs/PiiCheckName"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "sampled",
+        "estimate",
+        "evidence",
+        "template"
+      ],
+      "title": "_PiiCheckMetadataBase",
       "type": "object"
     }
   },
