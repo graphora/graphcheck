@@ -25,7 +25,7 @@ from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 
 # test addition
-#DEFAULT_PROFILE_BUDGET_SECONDS = 3
+# DEFAULT_PROFILE_BUDGET_SECONDS = 3
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
 
 
@@ -558,7 +558,7 @@ def collect_property_coverage(
     _deadline: float | None = None,
 ) -> list[PropertyCoverage]:
     deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
-    #time.sleep(3)  # Wait for the database to stabilize before collecting property coverage
+    # time.sleep(3)  # Wait for the database to stabilize before collecting property coverage
     coverage = [
         *collect_node_property_coverage(
             client,
