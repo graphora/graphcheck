@@ -118,20 +118,24 @@ use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
 The report shows:
 
 - run id,
-- run status,
-- CI exit code, kept distinct from the score,
-- one prominent top-level score normalized to 0–100, rendered as a progress ring
-  (or an empty `n/a` ring when no score can be calculated),
-- execution coverage, kept separate from score,
-- target database/version/fingerprint when available,
+- a grey `RUN COMPLETE`, `RUN PARTIAL`, or `RUN FAILED` metadata label,
+- an outcome-and-timing summary beneath that label; its issue/no-issue text uses
+  the exit-code color while any appended skipped-check count remains neutral,
+- target database, version, and edition when available,
 - run error banner for failed runs,
 - partial-run banner when `partial_reason` is present,
-- run timestamps,
+- run start time and duration,
 - GraphCheck version,
 - pack version,
-- total counts,
-- a score breakdown attributing integer points docked to each non-passing test,
-- per-suite verdict totals, coverage, and source SHA,
+- per-suite executed/selected counts,
+- per-suite outcome badges that distinguish failed, warning, errored, and skipped
+  checks, use singular `WARNING` for a count of one, and show skipped counts in
+  grey rather than treating them as failures,
+- each suite's `SCORE: <value>` badge, or `SCORE: N/A` when that suite has no
+  calculated score, always as the rightmost badge in its status card,
+- a colored status marker for every rendered check,
+- an issue summary containing `fail`, `warn`, and `errored` checks; intentional
+  `skipped` checks are not issues,
 - checks sorted failures-first,
 - compiled Cypher when present,
 - expected and measured values,
@@ -139,10 +143,13 @@ The report shows:
 - check errors when present,
 - evidence message and node/relationship or aggregate-scope IDs.
 
-The embedded script reveals the checks explorer, filters checks by verdict or
-search text, toggles check details, and switches the inline CSS theme. These
-interactions operate only on the already-rendered document and do not load or
-transmit data.
+The embedded script reveals the checks explorer, navigates from suite status
+markers to checks, filters checks by verdict or search text, sorts the issue
+summary, toggles check details, and switches the inline CSS theme. Event handlers
+are registered with `addEventListener`; check identities are read from escaped
+data attributes and matched directly rather than interpolated into JavaScript or
+CSS selectors. These interactions operate only on the already-rendered document
+and do not load or transmit data.
 
 ### Ordering
 
@@ -236,8 +243,9 @@ exit 2 without changing artifacts.
 ## Scorer
 
 The scorer lives in `src/graphcheck/scoring.py`. It is the single implementation
-used by the engine, the `Results` consistency validator, and report rendering.
-It computes the SPEC-01 contract:
+used by the engine and the `Results` consistency validator. The renderer consumes
+the validated per-suite scores stored in `results.suites[].score`. The scorer
+computes the SPEC-01 contract:
 
 ```text
 round(100 * sum(weight(pass)) / sum(weight(pass|fail|warn|errored)))
@@ -260,9 +268,7 @@ For each selected check:
 | `errored` | severity weight | 0 |
 | `skipped` | excluded | excluded |
 
-An empty or all-skipped input has a `null` score. Execution coverage is reported
-separately as executed checks divided by selected checks, so skipped checks cannot
-be hidden behind a 100 score.
+An empty or all-skipped input has a `null` score.
 
 ### Determinism
 
@@ -280,18 +286,18 @@ rounded suite scores. This preserves check-level weighting and prevents a tiny
 suite from receiving the same influence as a large suite.
 
 The `Results` model validates the stored overall and per-suite score values against
-fresh calculations. Per-suite scores remain part of the machine-readable SPEC-01
-contract, but the human report deliberately presents only one score: the overall
-0–100 value. It does not expose earned/possible weights or additional suite scores.
-Instead, users drill into per-suite verdict counts and the failure-first check list
-to identify which issues affected the score.
+fresh calculations. The HTML report presents each independently calculated suite
+score as the rightmost badge in that suite's status card. The overall
+`results.score` remains part of the machine-readable SPEC-01 contract but is not
+repeated in Graph Health Overview. The report does not expose earned/possible
+weights. Users drill into the failure-first check list to identify issues.
 
-### Point Deduction Breakdown
+### Point Deduction Calculation
 
-The human report attributes `100 - score` integer points to the individual
-`fail`, `warn`, and `errored` tests. Deductions are proportional to the same
-locked severity weights used by the scorer. Integer remainders are assigned by
-largest remainder, with suite id and check id as stable tie-breakers. Therefore:
+The scorer can attribute `100 - score` integer points to individual `fail`,
+`warn`, and `errored` tests. Deductions are proportional to the same locked
+severity weights used by the scorer. Integer remainders are assigned by largest
+remainder, with suite id and check id as stable tie-breakers. Therefore:
 
 - the deduction rows always sum exactly to `100 - score`,
 - error-severity issues dock three times the points of warning-severity issues
@@ -299,8 +305,8 @@ largest remainder, with suite id and check id as stable tie-breakers. Therefore:
 - input order cannot change a test's deduction, and
 - passing and skipped tests dock no points.
 
-The report exposes these final per-test point deductions, but not earned/possible
-weight arithmetic.
+Point deductions and earned/possible weight arithmetic are not presented in the
+current HTML report.
 
 ## Tests
 
@@ -336,8 +342,10 @@ The tests assert:
 - diagnostic reports contain failures, warnings, and errors but omit passing checks,
 - scorer results are invariant to input order and use exact half-even rounding,
 - per-suite calculations use the same locked weights as the overall score,
-- reports show one normalized score, per-test deductions that reconcile to it,
-  execution coverage, per-suite outcome counts, and failure-first issue details.
+- reports show each suite score as the rightmost badge in its status card,
+  distinguish errored checks from failed checks, derive run messaging from status
+  and issue totals, exclude skipped checks from the issue summary, and render
+  failure-first issue details.
 
 ## Deferred Work
 

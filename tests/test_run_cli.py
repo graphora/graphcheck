@@ -125,8 +125,75 @@ competency:
     assert ' src="' not in html and ' href="' not in html
     assert "Checks: 1 | passed 1" in result.stdout
     assert "exit code: 0" in result.stdout
+    assert "Suite selected:" not in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
+
+
+def test_run_prints_each_suite_summary_without_multi_suite_aggregate(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "alpha.yml": """\
+suite: alpha
+competency:
+  - id: passing
+    question: Does alpha return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+            "beta.yml": """\
+suite: beta
+competency:
+  - id: warning
+    severity: warn
+    question: Is beta empty?
+    query: RETURN 2 AS value
+    expect: {empty: true}
+""",
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult(
+                [
+                    {
+                        "value": 2,
+                        "evidence": {
+                            "kind": "node",
+                            "id": "node-2",
+                            "labels": ["Example"],
+                        },
+                    }
+                ],
+                ("value", "evidence"),
+                (),
+            ),
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    assert (
+        "Suite alpha: score 100 | checks 1 | passed 1 | failed 0 | warnings 0 | "
+        "errored 0 | skipped 0"
+    ) in result.stdout
+    assert (
+        "Suite beta: score 0 | checks 1 | passed 0 | failed 0 | warnings 1 | errored 0 | skipped 0"
+    ) in result.stdout
+    assert "Overall:" not in result.stdout
+    assert "Checks: 2" not in result.stdout
+    assert "Score: 75" not in result.stdout
+    assert "Exit code: 2" in result.stdout
+    payload = _payload(tmp_path)
+    assert [(suite["id"], suite["score"]) for suite in payload["suites"]] == [
+        ("alpha", 100),
+        ("beta", 0),
+    ]
 
 
 def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):

@@ -561,12 +561,23 @@ def _print_run_summary(results: Results, results_path: Path, report_path: Path) 
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
     typer.echo(f"GraphCheck run {results.run.id}: {results.run.status.value}")
-    typer.echo(
-        "Checks: "
-        f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
-        f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
-    )
-    typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
+    if len(results.suites) > 1:
+        for suite in results.suites:
+            suite_score = "n/a" if suite.score is None else str(suite.score)
+            typer.echo(
+                f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
+                f"passed {suite.totals.passed} | failed {suite.totals.fail} | "
+                f"warnings {suite.totals.warn} | errored {suite.totals.errored} | "
+                f"skipped {suite.totals.skipped}"
+            )
+        typer.echo(f"Exit code: {results.run.exit_code}")
+    else:
+        typer.echo(
+            "Checks: "
+            f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
+            f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
+        )
+        typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
     if results.run.error is not None:

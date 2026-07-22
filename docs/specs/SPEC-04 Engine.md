@@ -148,8 +148,10 @@ filesystem fix.
 ### Console summary and exit codes
 
 The command prints run id/status, verdict totals, score, exit code, partial reason or structured
-error when present, and both artifact paths. The process returns the already-validated
-`run.exit_code`; the CLI does not derive a second result.
+error when present, and both artifact paths. When multiple suites run, it first prints each
+suite's independent score and verdict totals instead of an aggregate score/totals block, then
+prints the run exit code. The process returns the already-validated `run.exit_code`; the CLI does
+not derive a second result.
 
 Exit precedence is the frozen SPEC-01 contract:
 

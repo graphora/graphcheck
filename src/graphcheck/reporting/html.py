@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from graphcheck.contracts.results import CheckResult, Results, Verdict
+from graphcheck.contracts.results import CheckResult, Results, RunStatus, Totals, Verdict
 from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
@@ -18,13 +18,6 @@ _VERDICT_ORDER = {
     Verdict.PASS: 4,
 }
 _SEVERITY_ORDER = {"error": 0, "warn": 1}
-
-_EXIT_CODES = {
-    0: "Run complete. No issues found.",
-    1: "Run complete. Errors found.",
-    2: "Run interrupted. Please try again.",
-    3: "Run incomplete. Please check configured connections.",
-}
 
 _EXIT_COLORS = {
     0: "var(--pass-color)",
@@ -101,7 +94,7 @@ def _header(results: Results) -> str:
         f'    <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
         f"    <h1>Run: <code>{_escape(results.run.id)}</code></h1>"
         "  </div>"
-        '  <button id="theme-toggle" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle Theme" title="Toggle Theme">🌙</button>'
+        '  <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme" title="Toggle Theme">🌙</button>'
         "</header>"
     )
 
@@ -130,7 +123,7 @@ def _banners(results: Results) -> str:
 
 def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
     exit_code = results.run.exit_code
-    details_rows, total_issues = _details_rows(checks)
+    details_rows = _details_rows(checks)
 
     target = results.run.target
     if target is None:
@@ -142,9 +135,12 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
         )
 
     run_info_html = _format_run_info(
-        results.run.started_at, results.run.finished_at, exit_code, total_issues
+        results.run.started_at,
+        results.run.finished_at,
+        exit_code,
+        results.run.status,
+        results.totals,
     )
-
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
     for check in checks:
@@ -160,29 +156,35 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
 
         # Right side status badges
         right_badges = []
-        failed_count = totals.fail + totals.errored
-        if failed_count > 0:
-            right_badges.append(f'<span class="badge badge-fail">{failed_count} FAILED</span>')
+        if totals.fail > 0:
+            right_badges.append(f'<span class="badge badge-fail">{totals.fail} FAILED</span>')
+        if totals.errored > 0:
+            right_badges.append(
+                f'<span class="badge badge-errored">{totals.errored} ERRORED</span>'
+            )
         if totals.warn > 0:
-            right_badges.append(f'<span class="badge badge-warn">{totals.warn} WARNINGS</span>')
+            warning_label = "WARNING" if totals.warn == 1 else "WARNINGS"
+            right_badges.append(
+                f'<span class="badge badge-warn">{totals.warn} {warning_label}</span>'
+            )
+        if totals.skipped > 0:
+            right_badges.append(
+                f'<span class="badge badge-skipped">{totals.skipped} SKIPPED</span>'
+            )
 
         if not right_badges:
             if totals.passed > 0:
                 right_badges.append('<span class="badge badge-pass">OPERATIONAL</span>')
             else:
-                right_badges.append('<span class="badge badge-skipped">SKIPPED</span>')
+                right_badges.append('<span class="badge badge-skipped">NO CHECKS</span>')
 
+        score = "N/A" if suite.score is None else str(suite.score)
+        right_badges.append(f'<span class="badge badge-score">SCORE: {score}</span>')
         right_badges_html = f'<div class="suite-badges-row">{"".join(right_badges)}</div>'
 
-        # Left side stats description
-        stats_notes = []
-        if totals.skipped > 0:
-            stats_notes.append(f"{totals.skipped} skipped")
-        if totals.errored > 0:
-            stats_notes.append(f"{totals.errored} errored")
-
-        notes_str = f" ({', '.join(stats_notes)})" if stats_notes else ""
-        suite_stats_html = f'<span class="suite-check-stats">{run_checks}/{total_checks} checks run{notes_str}</span>'
+        suite_stats_html = (
+            f'<span class="suite-check-stats">{run_checks}/{total_checks} checks run</span>'
+        )
 
         box_htmls = []
         for check in suite_checks:
@@ -191,7 +193,8 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
             box_htmls.append(
                 f'<div class="status-box status-box-{v_class}" '
                 f'data-tooltip="{tooltip_text}" '
-                f"onclick=\"navigateToCheck('{_escape(check.suite_id)}', '{_escape(check.id)}')\"></div>"
+                f'data-suite-id="{_escape(check.suite_id)}" '
+                f'data-check-id="{_escape(check.id)}" role="button" tabindex="0"></div>'
             )
 
         bars_content = (
@@ -230,7 +233,7 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
         "      <h2>Graph Health Overview</h2>"
         '      <div class="summary-meta-grid">'
         '        <div class="meta-item">'
-        '          <span class="meta-label">Run Info</span>'
+        f'          <span class="meta-label">RUN {_escape(results.run.status.value.upper())}</span>'
         f"          <div>{run_info_html}</div>"
         "        </div>"
         '        <div class="meta-item">'
@@ -243,30 +246,30 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
         '  <div class="scrollable-content">'
         f'    <div class="suite-status-list">{suite_body}</div>'
         '    <div class="summary-toggle-wrapper">'
-        '      <button id="toggle-summary-btn" class="btn-summary-toggle" onclick="toggleSummaryTable()">'
+        '      <button id="toggle-summary-btn" class="btn-summary-toggle">'
         '        Show Issue Summary <span class="toggle-arrow">▼</span>'
         "      </button>"
         "    </div>"
         '    <div id="summary-table-container" class="table-container hidden-summary">'
         '      <table class="styled-table" id="summary-table"><thead><tr>'
-        '        <th onclick="sortTable(0)">Test <span class="sort-icon">↕</span></th>'
-        '        <th onclick="sortTable(1)">Suite <span class="sort-icon">↕</span></th>'
-        '        <th onclick="sortTable(2)">Result <span class="sort-icon">↕</span></th>'
-        '        <th onclick="sortTable(3)">Issue <span class="sort-icon">↕</span></th>'
+        '        <th data-sort-column="0">Test <span class="sort-icon">↕</span></th>'
+        '        <th data-sort-column="1">Suite <span class="sort-icon">↕</span></th>'
+        '        <th data-sort-column="2">Result <span class="sort-icon">↕</span></th>'
+        '        <th data-sort-column="3">Issue <span class="sort-icon">↕</span></th>'
         "      </tr></thead>"
         f"      <tbody>{details_body}</tbody>"
         "      </table>"
         "    </div>"
         "  </div>"
         '  <div class="panel-footer">'
-        '    <button id="explore-checks-btn" class="btn-primary" onclick="showChecksExplorer()">Explore Checks &rarr;</button>'
+        '    <button id="explore-checks-btn" class="btn-primary">Explore Checks &rarr;</button>'
         "  </div>"
         "</section>"
     )
 
 
-def _details_rows(checks: Collection[CheckResult]) -> tuple[list[str], int]:
-    issues = [check for check in checks if check.verdict != Verdict.PASS]
+def _details_rows(checks: Collection[CheckResult]) -> list[str]:
+    issues = [check for check in checks if check.verdict not in (Verdict.PASS, Verdict.SKIPPED)]
     issues.sort(
         key=lambda check: (
             _VERDICT_ORDER[check.verdict],
@@ -286,7 +289,7 @@ def _details_rows(checks: Collection[CheckResult]) -> tuple[list[str], int]:
             f"<td>{_escape(_issue(check))}</td>"
             "</tr>"
         )
-    return rows, len(issues)
+    return rows
 
 
 def _issue(check: CheckResult) -> str:
@@ -304,16 +307,16 @@ def _checks(checks: list[CheckResult]) -> str:
         '  <div class="checks-header">'
         "    <h2>Checks Explorer</h2>"
         '    <div class="checks-controls">'
-        '      <input type="text" id="search-input" placeholder="🔍 Search checks..." onkeyup="filterChecks()">'
+        '      <input type="text" id="search-input" placeholder="🔍 Search checks...">'
         '      <div class="filter-group">'
-        '        <button class="filter-btn active" data-filter="all" onclick="setVerdictFilter(\'all\', this)">All</button>'
-        '        <button class="filter-btn" data-filter="fail" onclick="setVerdictFilter(\'fail\', this)">Fail</button>'
-        '        <button class="filter-btn" data-filter="warn" onclick="setVerdictFilter(\'warn\', this)">Warn</button>'
-        '        <button class="filter-btn" data-filter="errored" onclick="setVerdictFilter(\'errored\', this)">Errored</button>'
-        '        <button class="filter-btn" data-filter="pass" onclick="setVerdictFilter(\'pass\', this)">Pass</button>'
-        '        <button class="filter-btn" data-filter="skipped" onclick="setVerdictFilter(\'skipped\', this)">Skipped</button>'
+        '        <button class="filter-btn active" data-filter="all">All</button>'
+        '        <button class="filter-btn" data-filter="fail">Fail</button>'
+        '        <button class="filter-btn" data-filter="warn">Warn</button>'
+        '        <button class="filter-btn" data-filter="errored">Errored</button>'
+        '        <button class="filter-btn" data-filter="pass">Pass</button>'
+        '        <button class="filter-btn" data-filter="skipped">Skipped</button>'
         "      </div>"
-        '      <button class="btn-secondary" onclick="toggleAllDetails()">Toggle Details</button>'
+        '      <button id="toggle-details-btn" class="btn-secondary">Toggle Details</button>'
         "    </div>"
         "  </div>"
         f'  <div id="checks-container" class="scrollable-content">{items}</div>'
@@ -356,7 +359,8 @@ def _check(check: CheckResult) -> str:
         details.append(_evidence(check))
 
     return (
-        f'<article class="{classes}" data-verdict="{verdict_str}" data-check-key="{key_esc}">'
+        f'<article class="{classes}" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
+        f'data-suite-id="{suite_id_esc}" data-check-id="{check_id_esc}">'
         '<div class="check-title-row">'
         f'<span class="badge badge-{verdict_str}">{_escape(check.verdict.value)}</span>'
         f"<h3>{_escape(check.name)}</h3>"
@@ -396,26 +400,31 @@ def _evidence(check: CheckResult) -> str:
     )
 
 
-def _exit_code_desc(code: int) -> str:
-    return _EXIT_CODES.get(code, f"{code}: Unknown exit code")
-
-
 def _details_open(check: CheckResult) -> str:
     return ""
 
 
-def _format_run_info(started: Any, finished: Any, exit_code: int, total_issues: int) -> str:
+def _format_run_info(
+    started: Any,
+    finished: Any,
+    exit_code: int,
+    status: RunStatus,
+    totals: Totals,
+) -> str:
     s_dt = _parse_datetime(started)
     f_dt = _parse_datetime(finished)
 
-    if exit_code in (0, 1):
-        if total_issues == 0:
-            status_text = "Run complete. No issues found"
-        else:
-            issue_str = "issue" if total_issues == 1 else "issues"
-            status_text = f"Run complete. {total_issues} {issue_str} found"
+    total_issues = totals.fail + totals.warn + totals.errored
+    executed = totals.checks - totals.skipped
+    status_text: str | None = None
+    if status is RunStatus.FAILED:
+        status_text = "Please check configured connections"
     else:
-        status_text = _exit_code_desc(exit_code)
+        if total_issues > 0:
+            issue_str = "issue" if total_issues == 1 else "issues"
+            status_text = f"{total_issues} {issue_str} found"
+        elif totals.skipped == 0:
+            status_text = "No checks evaluated" if executed == 0 else "No issues found"
 
     exit_class = f"exit-{exit_code}" if exit_code in _EXIT_COLORS else ""
 
@@ -426,16 +435,23 @@ def _format_run_info(started: Any, finished: Any, exit_code: int, total_issues: 
         if f_dt is not None:
             duration = max(0, int((f_dt - s_dt).total_seconds()))
             unit = "second" if duration == 1 else "seconds"
-            time_str = f"on {formatted_date} (ran in {duration} {unit})"
+            time_str = f"on {formatted_date} (in {duration} {unit})"
         else:
             time_str = f"on {formatted_date}"
 
-    exit_html = (
-        f'<span class="{exit_class}">{_escape(status_text)}</span>'
-        if exit_class
-        else _escape(status_text)
-    )
-    return f"{exit_html} {_escape(time_str)}"
+    summary_parts = []
+    if status_text is not None:
+        summary_parts.append(
+            f'<span class="{exit_class}">{_escape(status_text)}</span>'
+            if exit_class
+            else _escape(status_text)
+        )
+    if totals.skipped > 0:
+        check_str = "check" if totals.skipped == 1 else "checks"
+        skipped_text = f"{totals.skipped} {check_str} skipped"
+        separator = ", " if summary_parts else ""
+        summary_parts.append(f"{separator}{_escape(skipped_text)}")
+    return f"{''.join(summary_parts)} {_escape(time_str)}"
 
 
 def _parse_datetime(val: Any) -> datetime | None:
@@ -867,6 +883,8 @@ body {
 .badge-warn { background: var(--warn-bg); color: var(--warn-color); border: 1px solid rgba(245, 158, 11, 0.3); }
 .badge-errored { background: var(--errored-bg); color: var(--errored-color); border: 1px solid rgba(139, 92, 246, 0.3); }
 .badge-skipped { background: var(--skipped-bg); color: var(--skipped-color); border: 1px solid var(--border); }
+.badge-score { background: #eff6ff; color: #2563eb; border: 1px solid rgba(37, 99, 235, 0.3); order: 999; }
+[data-theme="dark"] .badge-score { background: #1e3a8a; color: #bfdbfe; }
 
 .banner { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
 .banner-error { background: var(--fail-bg); border-left: 4px solid var(--fail-color); color: var(--fail-color); }
@@ -1119,8 +1137,9 @@ function showChecksExplorer() {
 function navigateToCheck(suiteId, checkId) {
   showChecksExplorer();
 
-  const key = `${suiteId}::${checkId}`;
-  const targetCard = document.querySelector(`[data-check-key="${key}"]`);
+  const targetCard = Array.from(document.querySelectorAll('.check-card')).find(card =>
+    card.dataset.suiteId === suiteId && card.dataset.checkId === checkId
+  );
 
   if (targetCard) {
     targetCard.style.display = 'block';
@@ -1138,5 +1157,34 @@ function navigateToCheck(suiteId, checkId) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', initTooltips);
+function initInteractions() {
+  initTooltips();
+
+  document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+  document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
+  document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
+  document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);
+  document.getElementById('search-input')?.addEventListener('input', filterChecks);
+
+  document.querySelectorAll('.filter-btn').forEach(button => {
+    button.addEventListener('click', () => setVerdictFilter(button.dataset.filter, button));
+  });
+
+  document.querySelectorAll('[data-sort-column]').forEach(header => {
+    header.addEventListener('click', () => sortTable(Number(header.dataset.sortColumn)));
+  });
+
+  document.querySelectorAll('.status-box').forEach(box => {
+    const navigate = () => navigateToCheck(box.dataset.suiteId, box.dataset.checkId);
+    box.addEventListener('click', navigate);
+    box.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        navigate();
+      }
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', initInteractions);
 """.strip()
