@@ -199,7 +199,7 @@ def compare(
                     statistics["node_count"] is not None,
                     statistics["relationship_count"] is not None,
                     bool(cov_changed or coverage["added"] or coverage["removed"]),
-                    bool(degree),
+                    any(item is not None for item in degree.values()),
                 )
             )
         },
@@ -261,7 +261,7 @@ def _render_counts(title: str, section: dict[str, Any]) -> list[str]:
         body.append(_count_line(item, "+ "))
     for item in section["removed"]:
         body.append(_count_line(item, "- "))
-    if section["unchanged"]:
+    if body and section["unchanged"]:
         body.append(f"({section['unchanged']} unchanged)")
     return [title, *body] if body else []
 
@@ -291,7 +291,7 @@ def render_human(report: DiffReport) -> str:
         for sign, key in (("+", "added"), ("-", "removed")):
             for item in collection[key]:
                 target, props = ", ".join(item["labels_or_types"]), ", ".join(item["properties"])
-                body.append(f"{sign} {item['name']} [{target}({props}), {item['type']}]")
+                body.append(f"{sign} {item['name']} [{target}({props}), {item['type']}] ({key})")
         sections.append([title, *body] if body else [])
     stats: list[str] = []
     for label, key in (("Nodes", "node_count"), ("Relationships", "relationship_count")):
@@ -301,6 +301,16 @@ def render_human(report: DiffReport) -> str:
         stats.append(
             f"{item['owner_name']}.{item['property']} cover    "
             f"{item['from']:.1f}% → {item['to']:.1f}% ({item['delta_pp']:+.1f} pp)"
+        )
+
+    for item in report.statistics["property_coverage"]["added"]:
+        stats.append(
+            f"+ {item['owner_name']}.{item['property']} cover    {item['coverage']:.1f}% (new)"
+        )
+
+    for item in report.statistics["property_coverage"]["removed"]:
+        stats.append(
+            f"- {item['owner_name']}.{item['property']} cover    {item['coverage']:.1f}% (removed)"
         )
     for name, item in report.statistics["degree_distribution"].items():
         if item is not None:

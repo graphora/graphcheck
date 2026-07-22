@@ -44,7 +44,14 @@ def _changed_profile(*, degree_missing: bool = False) -> BaselineProfile:
                         baseline.statistics.property_coverage[0].model_copy(
                             update={"coverage": 92.0}
                         ),
-                        *baseline.statistics.property_coverage[1:],
+                        baseline.statistics.property_coverage[1].model_copy(
+                            update={
+                                "owner_name": "Airport",
+                                "property": "code",
+                                "coverage": 75.0,
+                            }
+                        ),
+                        baseline.statistics.property_coverage[2],
                     ],
                 }
             ),
@@ -94,6 +101,36 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
         "delta": 2,
         "pct": 28.6,
     }
+    coverage = payload["statistics"]["property_coverage"]
+
+    assert coverage["changed"] == [
+        {
+            "owner": "node",
+            "owner_name": "Account",
+            "property": "id",
+            "from": 100.0,
+            "to": 92.0,
+            "delta_pp": -8.0,
+        }
+    ]
+
+    assert coverage["added"] == [
+        {
+            "owner": "node",
+            "owner_name": "Airport",
+            "property": "code",
+            "coverage": 75.0,
+        }
+    ]
+
+    assert coverage["removed"] == [
+        {
+            "owner": "node",
+            "owner_name": "Customer",
+            "property": "id",
+            "coverage": 100.0,
+        }
+    ]
     assert "name" not in payload["statistics"]["node_count"]
     assert "name" not in payload["statistics"]["relationship_count"]
     assert set(payload["constraints"]) == {"added", "removed"}
@@ -122,6 +159,32 @@ def test_degree_distribution_json_is_null_when_either_side_is_missing() -> None:
     assert degree["Account"] is None
 
 
+def test_missing_degree_distribution_is_not_counted_as_drift() -> None:
+    baseline = _profile()
+    account, customer = baseline.graph_schema.labels
+    partial = baseline.model_copy(
+        update={
+            "status": ProfileStatus.PARTIAL,
+            "partial_reason": "degree probe timed out",
+            "graph_schema": baseline.graph_schema.model_copy(
+                update={
+                    "labels": [
+                        account.model_copy(update={"degree_distribution": None}),
+                        customer,
+                    ]
+                }
+            ),
+        }
+    )
+
+    report = compare(baseline, partial)
+
+    assert report.statistics["degree_distribution"]["Account"] is None
+    assert report.drift_detected is False
+    assert report.summary["statistics"]["changed"] == 0
+    assert "Account degree distribution" not in render_human(report)
+
+
 def test_partial_warning_explains_suppressed_removals() -> None:
     output = render_human(compare(_profile(), _changed_profile(degree_missing=True)))
 
@@ -138,10 +201,17 @@ def test_human_count_formatting_and_statistics_labels() -> None:
     assert "Nodes 13 → 54 (+41, +315.4%)" in output
     assert "Relationships 7 → 9 (+2, +28.6%)" in output
     assert "Account.id cover    100.0% → 92.0% (-8.0 pp)" in output
+    assert "+ Airport.code cover    75.0% (new)" in output
+    assert "- Customer.id cover    100.0% (removed)" in output
     assert "median: 1 → 1.8 (+0.8)" in output
     assert "Summary: 1 label changed, 1 added, 1 removed · 4 statistics changed" in output
     assert "Node count" not in output
     assert "Relationship count" not in output
+    assert output.index("Nodes 13 → 54") < output.index("Relationships 7 → 9")
+    assert output.index("Relationships 7 → 9") < output.index("Account.id cover")
+    assert output.index("Account.id cover") < output.index("+ Airport.code cover")
+    assert output.index("+ Airport.code cover") < output.index("- Customer.id cover")
+    assert output.index("- Customer.id cover") < output.index("Account degree distribution")
 
 
 def test_human_constraint_and_index_changes_use_single_line_contract() -> None:
@@ -158,14 +228,10 @@ def test_human_constraint_and_index_changes_use_single_line_contract() -> None:
     assert render_human(compare(baseline, changed)) == (
         "diff  baseline_a → baseline_b\n"
         "fingerprint: CHANGED\n\n"
-        "Labels\n"
-        "(2 unchanged)\n\n"
-        "Relationships\n"
-        "(1 unchanged)\n\n"
         "Constraints\n"
-        "- customer_id_unique [Customer(id), UNIQUENESS]\n\n"
+        "- customer_id_unique [Customer(id), UNIQUENESS] (removed)\n\n"
         "Indexes\n"
-        "- customer_name_index [Customer(name), RANGE]\n\n"
+        "- customer_name_index [Customer(name), RANGE] (removed)\n\n"
         "Summary: 1 constraint removed · 1 index removed"
     )
 

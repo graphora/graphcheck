@@ -25,7 +25,7 @@ from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 
 # test addition
-# DEFAULT_PROFILE_BUDGET_SECONDS = 2
+# DEFAULT_PROFILE_BUDGET_SECONDS = 3
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
 
 
@@ -51,7 +51,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        labels = collect_labels(client, timeout_s=_remaining_budget(deadline))
+        labels = collect_labels(client, _deadline=deadline)
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -77,9 +77,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        relationship_types = collect_relationship_types(
-            client, timeout_s=_remaining_budget(deadline)
-        )
+        relationship_types = collect_relationship_types(client, _deadline=deadline)
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -105,7 +103,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        constraints = collect_constraints(client, timeout_s=_remaining_budget(deadline))
+        constraints = collect_constraints(client, _deadline=deadline)
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -131,7 +129,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        indexes = collect_indexes(client, timeout_s=_remaining_budget(deadline))
+        indexes = collect_indexes(client, _deadline=deadline)
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -157,7 +155,7 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         )
 
     try:
-        property_coverage = collect_property_coverage(client, timeout_s=_remaining_budget(deadline))
+        property_coverage = collect_property_coverage(client, _deadline=deadline)
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -250,8 +248,14 @@ def print_profile(client: Neo4jClient) -> None:
     print(profile(client).model_dump_json(indent=2, by_alias=True))
 
 
-def collect_labels(client: Neo4jClient, *, timeout_s: float | None = None) -> list[LabelProfile]:
-    deadline = _timeout_deadline(timeout_s)
+def collect_labels(
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
+) -> list[LabelProfile]:
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
+    # time.sleep(3)  # Wait for the database to stabilize before collecting labels
     labels = sorted(
         str(row["label"])
         for row in _run_read(client, "CALL db.labels() YIELD label RETURN label", deadline=deadline)
@@ -260,9 +264,12 @@ def collect_labels(client: Neo4jClient, *, timeout_s: float | None = None) -> li
 
 
 def collect_relationship_types(
-    client: Neo4jClient, *, timeout_s: float | None = None
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> list[RelationshipTypeProfile]:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     relationship_types = sorted(
         str(row["relationshipType"])
         for row in _run_read(
@@ -278,9 +285,12 @@ def collect_relationship_types(
 
 
 def collect_constraints(
-    client: Neo4jClient, *, timeout_s: float | None = None
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> list[ConstraintProfile]:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     constraints = [
         _collect_constraint(row) for row in _run_read(client, "SHOW CONSTRAINTS", deadline=deadline)
     ]
@@ -296,8 +306,13 @@ def _collect_constraint(row: dict[str, Any]) -> ConstraintProfile:
     )
 
 
-def collect_indexes(client: Neo4jClient, *, timeout_s: float | None = None) -> list[IndexProfile]:
-    deadline = _timeout_deadline(timeout_s)
+def collect_indexes(
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
+) -> list[IndexProfile]:
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     indexes = [_collect_index(row) for row in _run_read(client, "SHOW INDEXES", deadline=deadline)]
     return sorted(indexes, key=lambda index: index.name)
 
@@ -346,15 +361,19 @@ def _collect_label(client: Neo4jClient, label: str, deadline: float | None) -> L
         degree_distribution=_collect_degree_distribution(
             client,
             label_ref,
-            timeout_s=None if deadline is None else _remaining_budget(deadline),
+            _deadline=deadline,
         ),
     )
 
 
 def _collect_degree_distribution(
-    client: Neo4jClient, label_ref: str, *, timeout_s: float | None = None
+    client: Neo4jClient,
+    label_ref: str,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> DegreeDistribution:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     rows = _run_read(
         client,
         f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree",
@@ -507,7 +526,9 @@ def _run_read(
 ) -> list[dict[str, Any]]:
     if deadline is None:
         return client.run_read(query, params)
-    return client.run_read(query, params, timeout_s=_remaining_budget(deadline))
+    remaining = _remaining_budget(deadline)
+    # print(f"Remaining timeout: {remaining:.2f}s")
+    return client.run_read(query, params, timeout_s=remaining)
 
 
 def _budget_exceeded(deadline: float) -> bool:
@@ -525,17 +546,21 @@ def _cypher_identifier(value: str) -> str:
 
 
 def collect_property_coverage(
-    client: Neo4jClient, *, timeout_s: float | None = None
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> list[PropertyCoverage]:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
+    # time.sleep(3)  # Wait for the database to stabilize before collecting property coverage
     coverage = [
         *collect_node_property_coverage(
             client,
-            timeout_s=None if deadline is None else _remaining_budget(deadline),
+            _deadline=deadline,
         ),
         *collect_relationship_property_coverage(
             client,
-            timeout_s=None if deadline is None else _remaining_budget(deadline),
+            _deadline=deadline,
         ),
     ]
     return sorted(
@@ -545,9 +570,12 @@ def collect_property_coverage(
 
 
 def collect_node_property_coverage(
-    client: Neo4jClient, *, timeout_s: float | None = None
+    client: Neo4jClient,
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> list[PropertyCoverage]:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     coverage: list[PropertyCoverage] = []
 
     labels = sorted(
@@ -586,8 +614,9 @@ def collect_relationship_property_coverage(
     client: Neo4jClient,
     *,
     timeout_s: float | None = None,
+    _deadline: float | None = None,
 ) -> list[PropertyCoverage]:
-    deadline = _timeout_deadline(timeout_s)
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     coverage: list[PropertyCoverage] = []
     relationship_types = sorted(
         str(row["relationshipType"])

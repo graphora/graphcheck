@@ -485,8 +485,13 @@ def test_profile_returns_valid_partial_baseline_when_wall_clock_budget_is_exceed
     clock = [0.0]
     original = profiler_module.collect_labels
 
-    def collect_then_expire(client: Neo4jClient, *, timeout_s: float | None = None):
-        labels = original(client, timeout_s=timeout_s)
+    def collect_then_expire(
+        client: Neo4jClient,
+        *,
+        timeout_s: float | None = None,
+        _deadline: float | None = None,
+    ):
+        labels = original(client, timeout_s=timeout_s, _deadline=_deadline)
         clock[0] = 61.0
         return labels
 
@@ -555,7 +560,12 @@ def test_profile_returns_partial_baseline_when_collector_fails(
     reason_fragment: str,
     completed_sections: int,
 ) -> None:
-    def fail_collection(client: Neo4jClient, *, timeout_s: float | None = None) -> None:
+    def fail_collection(
+        client: Neo4jClient,
+        *,
+        timeout_s: float | None = None,
+        _deadline: float | None = None,
+    ) -> None:
         raise GraphCheckError("neo4j.query_failed", "simulated collector failure", "retry")
 
     monkeypatch.setattr(f"graphcheck.profiler.{collector_name}", fail_collection)
@@ -594,8 +604,13 @@ def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_stage(
     clock = [0.0]
     original = getattr(profiler_module, collector_name)
 
-    def collect_then_expire(client: Neo4jClient, *, timeout_s: float | None = None):
-        result = original(client, timeout_s=timeout_s)
+    def collect_then_expire(
+        client: Neo4jClient,
+        *,
+        timeout_s: float | None = None,
+        _deadline: float | None = None,
+    ):
+        result = original(client, timeout_s=timeout_s, _deadline=_deadline)
         clock[0] = 61.0
         return result
 

@@ -512,6 +512,18 @@ def test_diff_identical_targets_do_not_prompt_and_print_no_drift(monkeypatch):
     assert "Do you want to continue?" not in result.stdout
 
 
+def test_diff_structurally_invalid_json_baseline_exits_through_usage_error(tmp_path):
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("[]", encoding="utf-8")
+    valid = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+
+    result = runner.invoke(app, ["diff", str(invalid), str(valid)])
+
+    assert result.exit_code == 2
+    assert "baseline.invalid: Baseline JSON root must be an object." in result.output
+    assert not isinstance(result.exception, AttributeError)
+
+
 def test_diff_mutable_target_fields_do_not_trigger_identity_warning(tmp_path, monkeypatch):
     fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
     current = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
@@ -520,6 +532,8 @@ def test_diff_mutable_target_fields_do_not_trigger_identity_warning(tmp_path, mo
             "target": current.target.model_copy(
                 update={
                     "fingerprint": "different-fingerprint",
+                    "server_version": "5.19.0",
+                    "edition": "enterprise",
                     "capabilities": current.target.capabilities.model_copy(
                         update={"apoc": not current.target.capabilities.apoc}
                     ),
@@ -617,8 +631,8 @@ def test_diff_different_targets_yes_continues(tmp_path, monkeypatch):
         assert "WARNING" in result.stdout
         assert "Do you want to continue? [y/N]" in result.stdout
         assert '"database"' in result.stdout
-        assert '"server_version"' in result.stdout
-        assert '"edition"' in result.stdout
+        assert '"server_version"' not in result.stdout
+        assert '"edition"' not in result.stdout
         assert '"fingerprint"' not in result.stdout
         assert '"capabilities"' not in result.stdout
         assert "No drift detected." in result.stdout
@@ -641,6 +655,27 @@ def test_diff_different_targets_no_or_enter_cancels(tmp_path, monkeypatch):
         result = runner.invoke(app, ["diff"], input=answer)
         assert result.exit_code == 0
         assert "Diff cancelled by user." in result.stdout
+    assert calls == []
+
+
+def test_diff_json_database_mismatch_exits_two_without_prompt(tmp_path, monkeypatch):
+    current_path, latest_path = _different_target_baselines(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.resolve_diff_baselines",
+        lambda current, latest: (current_path, latest_path),
+    )
+    calls = []
+    monkeypatch.setattr(
+        "graphcheck.cli.compare_baselines",
+        lambda current, latest: calls.append((current, latest)),
+    )
+
+    result = runner.invoke(app, ["diff", "--json"])
+
+    assert result.exit_code == 2
+    assert "error: cannot diff baselines from different databases" in result.output
+    assert "Do you want to continue?" not in result.output
+    assert "WARNING" not in result.output
     assert calls == []
 
 
