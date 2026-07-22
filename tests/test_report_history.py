@@ -56,6 +56,17 @@ def test_report_list_displays_newest_first_with_metadata(tmp_path, monkeypatch):
     assert result.stdout.index("run-new") < result.stdout.index("run-old")
 
 
+def test_report_history_orders_fractional_utc_timestamps_chronologically(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    _write_run(tmp_path, "run-whole-second", "2026-07-01T10:00:00Z")
+    _write_run(tmp_path, "run-half-second", "2026-07-01T10:00:00.500000Z")
+
+    result = runner.invoke(app, ["report", "--list"])
+
+    assert result.exit_code == 0
+    assert result.stdout.index("run-half-second") < result.stdout.index("run-whole-second")
+
+
 def test_report_list_deduplicates_latest_alias(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
     _write_run(tmp_path, "run-one", "2026-07-01T10:00:00Z")

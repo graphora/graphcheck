@@ -59,7 +59,7 @@ def render_html_report(
             '<main class="dashboard-body">',
             _banners(model),
             '<div class="dashboard-grid">',
-            _status_overview(model, checks),
+            _status_overview(model, checks, filtered=verdicts is not None),
             _checks(checks),
             "</div>",
             "</main>",
@@ -121,7 +121,12 @@ def _banners(results: Results) -> str:
     return f"{error_html}{partial_html}"
 
 
-def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
+def _status_overview(
+    results: Results,
+    checks: Collection[CheckResult],
+    *,
+    filtered: bool,
+) -> str:
     exit_code = results.run.exit_code
     details_rows = _details_rows(checks)
 
@@ -200,7 +205,11 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
         bars_content = (
             "".join(box_htmls)
             if box_htmls
-            else '<span class="text-muted">No checks executed</span>'
+            else (
+                '<span class="text-muted">No matching issues</span>'
+                if filtered
+                else '<span class="text-muted">No checks selected</span>'
+            )
         )
 
         suite_blocks.append(
@@ -221,9 +230,7 @@ def _status_overview(results: Results, checks: Collection[CheckResult]) -> str:
     )
 
     details_body = (
-        "".join(details_rows)
-        if details_rows
-        else '<tr><td colspan="4" class="text-center text-muted">All clear! No issues found. 🎉</td></tr>'
+        "".join(details_rows) if details_rows else _empty_issue_summary(results, filtered=filtered)
     )
 
     return (
@@ -290,6 +297,18 @@ def _details_rows(checks: Collection[CheckResult]) -> list[str]:
             "</tr>"
         )
     return rows
+
+
+def _empty_issue_summary(results: Results, *, filtered: bool) -> str:
+    if results.run.status is RunStatus.FAILED:
+        message = "Run failed before checks could be evaluated."
+    elif filtered:
+        message = "No matching issues found."
+    elif results.run.status is RunStatus.PARTIAL:
+        message = "No issues found in the checks that were evaluated."
+    else:
+        message = "All clear! No issues found. 🎉"
+    return f'<tr><td colspan="4" class="text-center text-muted">{message}</td></tr>'
 
 
 def _issue(check: CheckResult) -> str:

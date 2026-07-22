@@ -1,6 +1,8 @@
 import json
 import logging
+import shutil
 import sys
+import uuid
 import webbrowser
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -374,15 +376,15 @@ def run_command(
 
     requested_suites = list(dict.fromkeys(suite or []))
     root: Path | None = None
-    run_dir: Path | None = None
+    runs_dir: Path | None = None
     tags: list[str] = []
     client: Neo4jClient | None = None
     try:
         root = find_project_root()
-        run_dir = root / ARTIFACTS_DIR / "runs" / "latest"
+        runs_dir = root / ARTIFACTS_DIR / "runs"
         config = load_project_config(root)
         artifacts = _project_path(root, config.artifacts)
-        run_dir = artifacts / "runs" / "latest"
+        runs_dir = artifacts / "runs"
         tags = _selection_tags(select or [])
         suite_inputs = _load_suite_inputs(
             _project_path(root, config.checks),
@@ -403,7 +405,7 @@ def run_command(
                 selection_suites=requested_suites or None,
             )
     except GraphCheckError as exc:
-        if run_dir is None:
+        if runs_dir is None:
             _print_setup_error(exc.error)
             raise typer.Exit(3) from exc
         results = failed_results(
@@ -418,7 +420,7 @@ def run_command(
             message=f"GraphCheck could not prepare the run: {type(exc).__name__}: {exc}",
             fix="Fix the project configuration, then run `graphcheck debug` and try again.",
         )
-        if run_dir is None:
+        if runs_dir is None:
             _print_setup_error(error)
             raise typer.Exit(3) from exc
         results = failed_results(
@@ -435,8 +437,8 @@ def run_command(
                 typer.echo(f"Warning: Neo4j driver cleanup failed: {exc}", err=True)
 
     try:
-        assert run_dir is not None
-        results_path, report_path = _write_run_artifacts(results, run_dir)
+        assert runs_dir is not None
+        results_path, report_path = _write_run_artifacts(results, runs_dir)
     except Exception as exc:
         typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
         typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
@@ -545,11 +547,55 @@ def _project_path(root: Path, configured: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def _write_run_artifacts(results: Results, run_dir: Path) -> tuple[Path, Path]:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    results_path = write_results(results, run_dir / "results.json")
-    report_path = write_html_report(results, run_dir / "report.html")
-    return results_path, report_path
+def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    resolved_runs = runs_dir.resolve()
+    historical_dir = runs_dir / results.run.id
+    if (
+        historical_dir.name.casefold() == "latest"
+        or historical_dir.resolve().parent != resolved_runs
+    ):
+        raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
+
+    _publish_run_directory(results, historical_dir)
+    latest_dir = runs_dir / "latest"
+    _publish_run_directory(results, latest_dir)
+    return latest_dir / "results.json", latest_dir / "report.html"
+
+
+def _publish_run_directory(results: Results, directory: Path) -> None:
+    """Stage and swap a complete results/report pair without exposing a mixed pair."""
+
+    parent = directory.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    staging = parent / f".{directory.name}.staging-{token}"
+    backup = parent / f".{directory.name}.backup-{token}"
+    staging.mkdir()
+    previous_moved = False
+    try:
+        write_results(results, staging / "results.json")
+        write_html_report(results, staging / "report.html")
+
+        if directory.exists():
+            is_junction = getattr(directory, "is_junction", lambda: False)
+            if not directory.is_dir() or directory.is_symlink() or is_junction():
+                raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
+            directory.replace(backup)
+            previous_moved = True
+        staging.replace(directory)
+    except Exception:
+        if previous_moved and backup.exists():
+            if directory.exists():
+                shutil.rmtree(directory)
+            backup.replace(directory)
+        raise
+    else:
+        if backup.exists():
+            shutil.rmtree(backup)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _print_setup_error(error: CheckError) -> None:

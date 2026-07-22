@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from graphcheck.scoring import SEVERITY_WEIGHTS, calculate_score, calculate_suite_scores
 
@@ -50,6 +51,18 @@ class RedactionPolicy(StrEnum):
 
 
 WEIGHTS: dict[Severity, int] = {severity: SEVERITY_WEIGHTS[severity.value] for severity in Severity}
+
+
+def parse_utc_timestamp(value: str) -> datetime:
+    """Parse a frozen results timestamp and require an explicit UTC offset."""
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("timestamp must be a valid ISO 8601 datetime") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("timestamp must include an explicit UTC offset")
+    return parsed
 
 
 class _Strict(BaseModel):
@@ -263,6 +276,18 @@ class Run(_Strict):
     redaction: Redaction
     target: RunTarget | None  # present-but-nullable; null only for failed runs
     error: CheckError | None  # present-but-nullable; non-null only for failed runs
+
+    @field_validator("started_at", "finished_at")
+    @classmethod
+    def _timestamps_are_utc(cls, value: str) -> str:
+        parse_utc_timestamp(value)
+        return value
+
+    @model_validator(mode="after")
+    def _timestamps_are_ordered(self) -> Run:
+        if parse_utc_timestamp(self.finished_at) < parse_utc_timestamp(self.started_at):
+            raise ValueError("finished_at must not precede started_at")
+        return self
 
 
 class Suite(_Strict):

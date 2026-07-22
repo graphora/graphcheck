@@ -168,10 +168,15 @@ Within the same verdict, checks sort by severity, suite id, then check id.
 `graphcheck report` operates on report artifacts that already exist. It does not
 connect to Neo4j or create new run data.
 
+`graphcheck run` publishes every completed artifact below `runs/<run-id>/` and
+then refreshes the consistently staged `runs/latest` convenience copy. This is
+the history consumed by the commands below.
+
 History operations load and validate each run's `results.json`, including the
 schema 1.0 compatibility read described above. If `runs/latest` duplicates a
-historical run id, it appears only once in history. History is ordered by
-`run.finished_at`, newest first.
+historical run id, it appears only once in history. History is ordered
+chronologically by the validated UTC `run.finished_at`, newest first; ordering
+never compares timestamp strings lexically.
 
 ### Open and Select
 

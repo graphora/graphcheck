@@ -114,6 +114,8 @@ no coverage was lost.
 A prepared run writes:
 
 ```text
+<artifacts>/runs/<run-id>/results.json
+<artifacts>/runs/<run-id>/report.html
 <artifacts>/runs/latest/results.json
 <artifacts>/runs/latest/report.html
 ```
@@ -121,9 +123,15 @@ A prepared run writes:
 With the default project configuration these resolve to:
 
 ```text
+.graphcheck/runs/<run-id>/results.json
+.graphcheck/runs/<run-id>/report.html
 .graphcheck/runs/latest/results.json
 .graphcheck/runs/latest/report.html
 ```
+
+The run-id directory is the durable historical artifact. The `latest` directory is a convenience
+copy published only after both files have been staged, so readers never observe a new result paired
+with an older report.
 
 The JSON writer first normalizes through the SPEC-01 Pydantic model, then validates the structural
 JSON Schema, retains every frozen nullable key, and writes deterministic indented/sorted JSON with a
@@ -133,12 +141,13 @@ are ordered by their canonical JSON representation before becoming arrays.
 
 The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and
 JavaScript but no CDN, external font, image, stylesheet, link dependency, or runtime network call.
-It opens offline and shows run metadata, one normalized score, execution coverage, target
-fingerprint/version, partial/failed banners, per-suite coverage/totals and source SHAs, compiled
-Cypher, expected/measured values, estimates, errors, and evidence pointers. Its embedded script
-supports local filtering, detail expansion, panel reveal, and theme switching without loading or
-transmitting data. Checks are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then by severity,
-suite id, and check id.
+It opens offline and shows run metadata, per-suite independently calculated scores and execution
+coverage, target database/version/edition, partial/failed banners, per-suite verdict totals,
+compiled Cypher, expected/measured values, estimates, errors, and evidence pointers. Its embedded
+script supports local filtering, detail expansion, panel reveal, and theme switching without
+loading or transmitting data. Checks are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then
+by severity, suite id, and check id. The overall score and source/fingerprint metadata remain in
+`results.json`; point-deduction arithmetic is not presented in the HTML report.
 
 Configuration and connection failures also produce failed-run artifacts when the project artifact
 path can be resolved. A missing project root cannot produce an artifact because no authoritative

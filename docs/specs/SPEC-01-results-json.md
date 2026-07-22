@@ -12,7 +12,9 @@
 { schema_version, run, score, totals, suites[], checks[] }
 ```
 
-- `run` — `id`, `started_at`/`finished_at` (ISO 8601 UTC), `graphcheck_version`, `pack_version`, `status`, `partial_reason`, `exit_code`, `selection`, `redaction`, `target`, `error`.
+- `run` — `id`, `started_at`/`finished_at` (ISO 8601 with an explicit UTC offset, with finish
+  not preceding start), `graphcheck_version`, `pack_version`, `status`, `partial_reason`,
+  `exit_code`, `selection`, `redaction`, `target`, `error`.
 - `score` — `{ value, method: "weighted-by-severity", weights }` or `null`.
 - `totals` — a tally of `checks[]`: `checks`, `pass`, `fail`, `warn`, `errored`, `skipped`.
 - `suites[]` — `{ id, source_sha, score, totals }` per suite.

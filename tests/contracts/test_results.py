@@ -16,6 +16,7 @@ from graphcheck.contracts.results import (
     Pattern,
     RedactionPolicy,
     Results,
+    Run,
     RunStatus,
     Score,
     Severity,
@@ -263,8 +264,8 @@ def test_exit_code_precedence():
 def _run(**over):
     data = dict(
         id="r",
-        started_at="t",
-        finished_at="t",
+        started_at="2026-07-22T10:00:00Z",
+        finished_at="2026-07-22T10:00:01Z",
         graphcheck_version="0.1.0",
         pack_version="0.1.0",
         status=RunStatus.COMPLETE,
@@ -283,6 +284,25 @@ def _run(**over):
     )
     data.update(over)
     return data
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["not-a-time", "2026-07-22T10:00:00", "2026-07-22T12:00:00+02:00"],
+)
+def test_run_timestamps_must_be_iso_utc(timestamp):
+    with pytest.raises(ValidationError, match="timestamp must"):
+        Run.model_validate(_run(finished_at=timestamp))
+
+
+def test_run_finish_must_not_precede_start():
+    with pytest.raises(ValidationError, match="finished_at must not precede started_at"):
+        Run.model_validate(
+            _run(
+                started_at="2026-07-22T10:00:01Z",
+                finished_at="2026-07-22T10:00:00Z",
+            )
+        )
 
 
 def _results(checks, status=RunStatus.COMPLETE, **run_over):

@@ -39,7 +39,10 @@ def json_compatible(value: object) -> Any:
 
 def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
     if isinstance(data, Results):
-        return data
+        # Pydantic models are mutable and model_copy(update=...) does not validate updates.
+        # Rebuild from plain data so every public writer/renderer boundary rechecks the
+        # semantic score, totals, exit-code, and suite invariants.
+        data = data.model_dump(mode="python", by_alias=True, exclude_none=False)
     if isinstance(data, Path):
         data = data.read_text(encoding="utf-8")
     payload = json.loads(data) if isinstance(data, str) else data

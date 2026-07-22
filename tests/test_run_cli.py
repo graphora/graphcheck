@@ -6,15 +6,18 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from graphcheck.cli import app
+from graphcheck import cli as cli_module
+from graphcheck.cli import _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
-from graphcheck.reporting.writer import json_compatible
+from graphcheck.reporting.history import discover_report_runs
+from graphcheck.reporting.writer import json_compatible, load_results
 
 runner = CliRunner()
+FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
 TARGET = RunTarget(
     database="neo4j",
     server_version="5.18.0",
@@ -62,6 +65,53 @@ def test_artifact_value_normalization_is_deterministic_for_yaml_sets():
     assert json_compatible({"values": {"gamma", "alpha", "beta"}}) == {
         "values": ["alpha", "beta", "gamma"]
     }
+
+
+def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path):
+    first = load_results(FIXTURES / "results.complete.json")
+    first.run.id = "run-one"
+    second = load_results(FIXTURES / "results.complete.json")
+    second.run.id = "run-two"
+    runs_dir = tmp_path / "runs"
+
+    _write_run_artifacts(first, runs_dir)
+    latest_results, latest_report = _write_run_artifacts(second, runs_dir)
+
+    assert (runs_dir / "run-one" / "results.json").is_file()
+    assert (runs_dir / "run-one" / "report.html").is_file()
+    assert (runs_dir / "run-two" / "results.json").is_file()
+    assert (runs_dir / "run-two" / "report.html").is_file()
+    assert load_results(latest_results).run.id == "run-two"
+    assert latest_report.is_file()
+    assert {record.id for record in discover_report_runs(runs_dir)} == {"run-one", "run-two"}
+
+
+def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path, monkeypatch):
+    first = load_results(FIXTURES / "results.complete.json")
+    first.run.id = "run-one"
+    second = load_results(FIXTURES / "results.complete.json")
+    second.run.id = "run-two"
+    runs_dir = tmp_path / "runs"
+    latest_results, latest_report = _write_run_artifacts(first, runs_dir)
+    previous_results = latest_results.read_bytes()
+    previous_report = latest_report.read_bytes()
+    real_write_html_report = cli_module.write_html_report
+
+    def fail_latest_refresh(results, path, **kwargs):
+        if path.parent.name.startswith(".latest.staging-"):
+            raise OSError("simulated latest report failure")
+        return real_write_html_report(results, path, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_html_report", fail_latest_refresh)
+
+    with pytest.raises(OSError, match="simulated latest report failure"):
+        _write_run_artifacts(second, runs_dir)
+
+    assert latest_results.read_bytes() == previous_results
+    assert latest_report.read_bytes() == previous_report
+    assert (runs_dir / "run-two" / "results.json").is_file()
+    assert not list(runs_dir.glob(".*.staging-*"))
+    assert not list(runs_dir.glob(".*.backup-*"))
 
 
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
@@ -115,6 +165,9 @@ competency:
         "tags": ["production"],
         "fail_fast": True,
     }
+    historical = tmp_path / ".graphcheck" / "runs" / payload["run"]["id"]
+    assert (historical / "results.json").is_file()
+    assert (historical / "report.html").is_file()
     assert [check["id"] for check in payload["checks"]] == ["production"]
     report = tmp_path / ".graphcheck" / "runs" / "latest" / "report.html"
     html = report.read_text(encoding="utf-8")

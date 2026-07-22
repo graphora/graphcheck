@@ -39,9 +39,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
   the separate `--run ID` selector when opening a historical report.
-- Offline reports now present one normalized top-level score as a progress ring without a percent
-  glyph or weight arithmetic; a per-test deduction table reconciles every docked point to the
-  overall score and links it to the relevant issue, suite, result, and severity.
+- Offline reports now present each suite's independently calculated score alongside execution
+  coverage and verdict badges. The overall score remains in `results.json`; point-deduction and
+  earned/possible-weight arithmetic are intentionally not shown in the HTML report.
+- Every run is preserved below `runs/<run-id>/`, while `runs/latest` is refreshed from a fully
+  staged result/report pair so history commands work without exposing mixed-version artifacts.
 - Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
   measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).

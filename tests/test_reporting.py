@@ -49,6 +49,15 @@ def test_writer_rejects_invalid_results():
         results_json(raw)
 
 
+def test_writer_revalidates_mutated_results_instances():
+    model = load_results(_fixture("complete"))
+    assert model.score is not None
+    model.score.value = 99
+
+    with pytest.raises(ValidationError, match="score.value must be 43"):
+        results_json(model)
+
+
 @pytest.mark.parametrize("name", ["complete", "partial", "generated-only", "failed"])
 def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     report = render_html_report(_fixture(name))
@@ -121,6 +130,7 @@ def test_html_renderer_reports_partial_coverage():
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
+    assert "No issues found in the checks that were evaluated." in html
 
 
 def test_html_renderer_reports_all_checks_skipped():
@@ -299,6 +309,8 @@ def test_html_renderer_displays_failed_run_error():
     assert "connection.auth" in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
+    assert "Run failed before checks could be evaluated." in html
+    assert "All clear! No issues found." not in html
 
 
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
@@ -310,3 +322,15 @@ def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
     assert "Which accounts does a customer control" in html
     assert "Accounts are connected to a Customer" in html
     assert "Customer.tax_id is present" not in html
+
+
+def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
+    html = render_html_report(
+        _fixture("partial"),
+        verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
+    )
+
+    assert '<span class="suite-check-stats">1/2 checks run</span>' in html
+    assert '<span class="badge badge-score">SCORE: 100</span>' in html
+    assert "No matching issues" in html
+    assert "No checks executed" not in html

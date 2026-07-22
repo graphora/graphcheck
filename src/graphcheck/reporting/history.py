@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from graphcheck.contracts.results import CheckResult, Results, Severity, Verdict
+from graphcheck.contracts.results import (
+    CheckResult,
+    Results,
+    Severity,
+    Verdict,
+    parse_utc_timestamp,
+)
 from graphcheck.reporting.writer import load_results
 
 
@@ -32,6 +39,9 @@ def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
 
     by_id: dict[str, ReportRun] = {}
     for results_path in runs_dir.rglob("results.json"):
+        relative_parent = results_path.parent.relative_to(runs_dir)
+        if any(part.startswith(".") for part in relative_parent.parts):
+            continue
         record = _load_report_run(results_path)
         current = by_id.get(record.id)
         if current is None or _preferred_record(record) > _preferred_record(current):
@@ -128,7 +138,11 @@ def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
 
     candidates: list[ReportRun] = []
     for directory in runs_dir.iterdir():
-        if not directory.is_dir() or directory.name.casefold() == "latest":
+        if (
+            not directory.is_dir()
+            or directory.name.casefold() == "latest"
+            or directory.name.startswith(".")
+        ):
             continue
         results_path = directory / "results.json"
         if results_path.is_file():
@@ -179,8 +193,8 @@ def _preferred_record(record: ReportRun) -> tuple[bool, bool, int, str]:
     )
 
 
-def _recency(record: ReportRun) -> tuple[str, int, str]:
-    return (record.results.run.finished_at, record.modified_ns, record.id)
+def _recency(record: ReportRun) -> tuple[datetime, int, str]:
+    return (parse_utc_timestamp(record.results.run.finished_at), record.modified_ns, record.id)
 
 
 def _score(results: Results) -> str:
