@@ -206,14 +206,18 @@ Running `graphcheck report` without an action prints a concise command guide;
 - run id,
 - completion timestamp,
 - run status, and
-- score or `n/a`.
+- each named suite score as `suite-id=value`, using `n/a` for a suite with no
+  calculated score or a run with no suites. The overall machine score is not
+  shown in this human-facing view.
 
 ### Compare
 
 `graphcheck report --compare <run1> <run2>` compares two existing result artifacts
-in the stated direction. It reports status and score changes, outcome regressions
-and improvements for matching `(suite_id, check_id)` identities, other verdict
-changes, and added or removed checks.
+in the stated direction. It reports status and per-suite score changes across the
+union of suite ids, outcome regressions and improvements for matching
+`(suite_id, check_id)` identities, other verdict changes, and added or removed
+checks. It does not substitute the overall machine score for the suite scores
+shown by the run command and HTML report.
 
 A regression is a move toward a worse outcome in this order:
 
@@ -342,15 +346,16 @@ The tests assert:
 - missing reports and browser-launch failures exit non-zero,
 - report history is ordered and de-duplicates `runs/latest`,
 - a historical run can be selected and opened by id,
-- report comparisons classify outcome changes and show score movement,
+- history and comparisons show named per-suite scores rather than the hidden
+  overall machine score,
 - pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
 - diagnostic reports contain failures, warnings, and errors but omit passing checks,
 - scorer results are invariant to input order and use exact half-even rounding,
 - per-suite calculations use the same locked weights as the overall score,
 - reports show each suite score as the rightmost badge in its status card,
   distinguish errored checks from failed checks, derive run messaging from status
-  and issue totals, exclude skipped checks from the issue summary, and render
-  failure-first issue details.
+  and issue totals, state when no checks were evaluated, exclude skipped checks
+  from the issue summary, and render failure-first issue details.
 
 ## Deferred Work
 

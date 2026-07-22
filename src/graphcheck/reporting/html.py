@@ -302,6 +302,8 @@ def _details_rows(checks: Collection[CheckResult]) -> list[str]:
 def _empty_issue_summary(results: Results, *, filtered: bool) -> str:
     if results.run.status is RunStatus.FAILED:
         message = "Run failed before checks could be evaluated."
+    elif results.totals.checks == results.totals.skipped:
+        message = "No checks were evaluated."
     elif filtered:
         message = "No matching issues found."
     elif results.run.status is RunStatus.PARTIAL:

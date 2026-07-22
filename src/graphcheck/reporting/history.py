@@ -68,11 +68,11 @@ def format_report_history(records: list[ReportRun]) -> str:
             record.id,
             record.results.run.finished_at,
             record.results.run.status.value,
-            _score(record.results),
+            _suite_scores(record.results),
         )
         for record in records
     ]
-    headers = ("RUN ID", "FINISHED AT", "STATUS", "SCORE")
+    headers = ("RUN ID", "FINISHED AT", "STATUS", "SUITE SCORES")
     widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
     lines = [
         _format_row(headers, widths),
@@ -83,7 +83,7 @@ def format_report_history(records: list[ReportRun]) -> str:
 
 
 def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
-    """Render outcome changes from the first report to the second report."""
+    """Render suite-score and outcome changes from the first report to the second report."""
     first_checks = {_identity(check): check for check in first.results.checks}
     second_checks = {_identity(check): check for check in second.results.checks}
     shared = sorted(first_checks.keys() & second_checks.keys())
@@ -118,7 +118,8 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
     lines = [
         f"Comparing {first.id} -> {second.id}",
         f"Status: {first.results.run.status.value} -> {second.results.run.status.value}",
-        f"Score: {_score_change(first.results, second.results)}",
+        "Suite scores:",
+        *_suite_score_changes(first.results, second.results),
         "",
     ]
     _append_section(lines, "Regressions", regressions)
@@ -197,13 +198,28 @@ def _recency(record: ReportRun) -> tuple[datetime, int, str]:
     return (parse_utc_timestamp(record.results.run.finished_at), record.modified_ns, record.id)
 
 
-def _score(results: Results) -> str:
-    return "n/a" if results.score is None else str(results.score.value)
+def _suite_scores(results: Results) -> str:
+    if not results.suites:
+        return "n/a"
+    return ", ".join(
+        f"{suite.id}={'n/a' if suite.score is None else suite.score}"
+        for suite in sorted(results.suites, key=lambda suite: suite.id)
+    )
 
 
-def _score_change(first: Results, second: Results) -> str:
-    before = None if first.score is None else first.score.value
-    after = None if second.score is None else second.score.value
+def _suite_score_changes(first: Results, second: Results) -> list[str]:
+    before = {suite.id: suite.score for suite in first.suites}
+    after = {suite.id: suite.score for suite in second.suites}
+    suite_ids = sorted(before.keys() | after.keys())
+    if not suite_ids:
+        return ["  none"]
+    return [
+        f"  {suite_id}: {_score_change(before.get(suite_id), after.get(suite_id))}"
+        for suite_id in suite_ids
+    ]
+
+
+def _score_change(before: int | None, after: int | None) -> str:
     if before is None or after is None:
         return f"{'n/a' if before is None else before} -> {'n/a' if after is None else after}"
     delta = after - before

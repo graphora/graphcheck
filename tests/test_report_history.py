@@ -35,6 +35,47 @@ def _write_run(
     return run_dir
 
 
+def _write_multi_suite_run(root: Path, run_id: str, finished_at: str) -> Path:
+    run_dir = _write_run(root, run_id, finished_at)
+    results_path = run_dir / "results.json"
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    payload["run"]["selection"]["suites"] = ["alpha", "beta"]
+    payload["checks"][1]["suite_id"] = "alpha"
+    payload["checks"][0]["suite_id"] = "beta"
+    payload["checks"][2]["suite_id"] = "beta"
+    payload["suites"] = [
+        {
+            "id": "alpha",
+            "source_sha": "sha-alpha",
+            "score": 100,
+            "totals": {
+                "checks": 1,
+                "pass": 1,
+                "fail": 0,
+                "warn": 0,
+                "errored": 0,
+                "skipped": 0,
+            },
+        },
+        {
+            "id": "beta",
+            "source_sha": "sha-beta",
+            "score": 0,
+            "totals": {
+                "checks": 2,
+                "pass": 0,
+                "fail": 1,
+                "warn": 1,
+                "errored": 0,
+                "skipped": 0,
+            },
+        },
+    ]
+    results_path.write_text(json.dumps(payload), encoding="utf-8")
+    load_results(results_path)
+    return run_dir
+
+
 def _init_project(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     write_default_project(tmp_path)
@@ -50,10 +91,22 @@ def test_report_list_displays_newest_first_with_metadata(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "RUN ID" in result.stdout
     assert "FINISHED AT" in result.stdout
+    assert "SUITE SCORES" in result.stdout
     assert "run-new" in result.stdout
     assert "partial" in result.stdout
-    assert "100" in result.stdout
+    assert "customer-360=100" in result.stdout
     assert result.stdout.index("run-new") < result.stdout.index("run-old")
+
+
+def test_report_list_shows_suite_scores_instead_of_the_overall_score(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    _write_multi_suite_run(tmp_path, "run-multi", "2026-07-02T10:00:00Z")
+
+    result = runner.invoke(app, ["report", "--list"])
+
+    assert result.exit_code == 0
+    assert "alpha=100, beta=0" in result.stdout
+    assert "SUITE SCORES" in result.stdout
 
 
 def test_report_history_orders_fractional_utc_timestamps_chronologically(tmp_path, monkeypatch):
@@ -113,10 +166,28 @@ def test_report_compare_highlights_regressions_between_results(tmp_path, monkeyp
 
     assert result.exit_code == 0
     assert "Comparing run-before -> run-after" in result.stdout
-    assert "Score: 100 -> 43 (-57)" in result.stdout
+    assert "Suite scores:" in result.stdout
+    assert "customer-360: 100 -> 43 (-57)" in result.stdout
+    assert "Score:" not in result.stdout
     assert "Regressions (1)" in result.stdout
     assert "customer-360::account-no-orphans: skipped -> warn" in result.stdout
     assert "customer-360::cq-001: fail" in result.stdout
+
+
+def test_report_compare_includes_added_and_removed_suite_scores(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    _write_multi_suite_run(tmp_path, "run-before", "2026-07-01T10:00:00Z")
+    _write_run(tmp_path, "run-after", "2026-07-02T10:00:00Z")
+
+    result = runner.invoke(
+        app,
+        ["report", "--compare", "run-before", "run-after"],
+    )
+
+    assert result.exit_code == 0
+    assert "alpha: 100 -> n/a" in result.stdout
+    assert "beta: 0 -> n/a" in result.stdout
+    assert "customer-360: n/a -> 43" in result.stdout
 
 
 def test_report_prune_keeps_newest_history_and_latest_alias(tmp_path, monkeypatch):

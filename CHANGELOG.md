@@ -44,6 +44,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
   earned/possible-weight arithmetic are intentionally not shown in the HTML report.
 - Every run is preserved below `runs/<run-id>/`, while `runs/latest` is refreshed from a fully
   staged result/report pair so history commands work without exposing mixed-version artifacts.
+- Report history and comparisons now show named per-suite scores, matching the run summary and HTML
+  report; the overall machine score is no longer substituted in those later views.
+- Reports with zero evaluated checks now state that explicitly in both the run summary and issue
+  table instead of labeling the empty result as all clear.
 - Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
   measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).

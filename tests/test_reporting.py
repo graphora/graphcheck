@@ -148,6 +148,31 @@ def test_html_renderer_reports_all_checks_skipped():
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
     assert "Check did not pass" not in html
+    assert "No checks were evaluated." in html
+    assert "All clear! No issues found." not in html
+
+
+def test_html_renderer_does_not_call_an_empty_selection_all_clear():
+    raw = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
+    empty_totals = {
+        "checks": 0,
+        "pass": 0,
+        "fail": 0,
+        "warn": 0,
+        "errored": 0,
+        "skipped": 0,
+    }
+    raw["score"] = None
+    raw["checks"] = []
+    raw["totals"] = empty_totals
+    raw["suites"][0]["score"] = None
+    raw["suites"][0]["totals"] = empty_totals.copy()
+
+    html = render_html_report(raw)
+
+    assert '<span class="exit-2">No checks evaluated</span>' in html
+    assert "No checks were evaluated." in html
+    assert "All clear! No issues found." not in html
 
 
 def test_html_renderer_does_not_count_intentional_skips_as_issues():
