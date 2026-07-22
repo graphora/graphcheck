@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from graphcheck import __version__
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.contracts.profile import BaselineProfile
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
 from graphcheck.contracts.results import CheckError, Results, RunTarget
 from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
@@ -252,6 +252,15 @@ def diff_command(
             )
         current_baseline = BaselineProfile.model_validate_json(current_raw)
         latest_baseline = BaselineProfile.model_validate_json(latest_raw)
+        if (
+            current_baseline.status is ProfileStatus.PARTIAL
+            or latest_baseline.status is ProfileStatus.PARTIAL
+        ):
+            raise GraphCheckError(
+                "diff.partial_baseline",
+                "Comparison is inconclusive because one or more baselines are partial.",
+                "Generate complete baseline profiles before running `graphcheck diff`.",
+            )
     except GraphCheckError as exc:
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
@@ -331,6 +340,19 @@ def _print_profile_summary(
     baseline: BaselineProfile,
     baseline_path: Path,
 ) -> None:
+    if baseline.status is ProfileStatus.PARTIAL:
+        typer.echo("Profile completed with partial data.")
+        typer.echo()
+        typer.echo(f"Status: {baseline.status}")
+        typer.echo(f"Reason: {baseline.partial_reason}")
+        typer.echo(
+            f"Collected: {baseline.statistics.node_count} nodes, "
+            f"{baseline.statistics.relationship_count} relationships"
+        )
+        typer.echo()
+        typer.echo(f"Baseline written to:\n{baseline_path}")
+        return
+
     typer.echo("Profile completed.")
     typer.echo()
 

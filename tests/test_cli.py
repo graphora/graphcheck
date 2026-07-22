@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from graphcheck import __version__
@@ -315,8 +316,11 @@ def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
     paths = list((tmp_path / ".graphcheck" / "baselines").glob("*.json"))
     assert result.exit_code == 0
     assert len(paths) == 1
+    assert "Profile completed with partial data." in result.stdout
     assert "Status: partial" in result.stdout
     assert "Reason: test partial reason" in result.stdout
+    assert "Collected: 13 nodes, 7 relationships" in result.stdout
+    assert "Baseline written to:" in result.stdout
     for content in (
         "Nodes:",
         "Relationships:",
@@ -324,9 +328,10 @@ def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
         "Relationship Types:",
         "Constraints:",
         "Indexes:",
-        "Baseline written to:",
+        "Degree Distribution:",
+        "Property Coverage:",
     ):
-        assert content in result.stdout
+        assert content not in result.stdout
 
 
 def test_profile_handles_graphcheck_error(tmp_path, monkeypatch):
@@ -522,6 +527,65 @@ def test_diff_structurally_invalid_json_baseline_exits_through_usage_error(tmp_p
     assert result.exit_code == 2
     assert "baseline.invalid: Baseline JSON root must be an object." in result.output
     assert not isinstance(result.exception, AttributeError)
+
+
+@pytest.mark.parametrize(
+    ("current_status", "latest_status"),
+    [
+        (ProfileStatus.PARTIAL, ProfileStatus.COMPLETE),
+        (ProfileStatus.COMPLETE, ProfileStatus.PARTIAL),
+        (ProfileStatus.PARTIAL, ProfileStatus.PARTIAL),
+    ],
+)
+def test_diff_partial_baselines_are_inconclusive_before_target_prompt(
+    tmp_path,
+    monkeypatch,
+    current_status,
+    latest_status,
+):
+    fixture = Path(__file__).parent / "contracts" / "fixtures" / "baseline.json"
+    baseline = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+    current = baseline.model_copy(
+        update={
+            "status": current_status,
+            "partial_reason": "collection timed out"
+            if current_status is ProfileStatus.PARTIAL
+            else None,
+        }
+    )
+    latest = baseline.model_copy(
+        update={
+            "status": latest_status,
+            "partial_reason": "collection timed out"
+            if latest_status is ProfileStatus.PARTIAL
+            else None,
+            "target": baseline.target.model_copy(update={"database": "another-database"}),
+        }
+    )
+    current_path = tmp_path / "current.json"
+    latest_path = tmp_path / "latest.json"
+    current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
+    latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
+    monkeypatch.setattr(
+        "graphcheck.cli.resolve_diff_baselines",
+        lambda current_name, latest_name: (current_path, latest_path),
+    )
+    calls = []
+    monkeypatch.setattr(
+        "graphcheck.cli.compare_baselines",
+        lambda current_baseline, latest_baseline: calls.append((current_baseline, latest_baseline)),
+    )
+
+    result = runner.invoke(app, ["diff"])
+
+    assert result.exit_code == 2
+    assert "diff.partial_baseline" in result.output
+    assert "Comparison is inconclusive because one or more baselines are partial." in result.output
+    assert "Generate complete baseline profiles" in result.output
+    assert "Do you want to continue?" not in result.output
+    assert "WARNING" not in result.output
+    assert "drift detected" not in result.output.lower()
+    assert calls == []
 
 
 def test_diff_mutable_target_fields_do_not_trigger_identity_warning(tmp_path, monkeypatch):

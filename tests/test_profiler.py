@@ -453,6 +453,21 @@ def test_profile_returns_valid_baseline_from_probe_and_labels() -> None:
     assert baseline.fingerprint.startswith("sha256:")
 
 
+def test_profile_fails_when_core_counts_are_unavailable() -> None:
+    class UnavailableCountsClient(FakeNeo4jClient):
+        def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, object, Counts]:
+            target, metadata, _ = super().probe(timeout_s=timeout_s)
+            return target, metadata, Counts(nodes=None, relationships=None)
+
+    client = UnavailableCountsClient()
+
+    with pytest.raises(GraphCheckError) as caught:
+        profile(cast(Neo4jClient, client))
+
+    assert caught.value.error.code == "profile.counts_unavailable"
+    assert client.calls == []
+
+
 def test_profile_passes_remaining_budget_to_probe_and_queries() -> None:
     client = FakeNeo4jClient()
 

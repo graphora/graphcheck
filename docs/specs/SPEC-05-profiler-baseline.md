@@ -130,8 +130,10 @@ Optional or expensive measurements that could not be collected are emitted as `n
 allows nullable measurements.
 
 Consumers MUST NOT treat empty arrays or nullable measurements in a `partial` baseline as complete
-graph truth. Drift detection and generation may use partial baselines only with the partial status
-visible to the user.
+graph truth. `graphcheck profile` still writes partial baselines so incomplete collection remains
+explicit. Partial baselines are not comparable in v0. If either input baseline is partial,
+`graphcheck diff` returns a controlled `diff.partial_baseline` comparison-inconclusive error with
+exit code 2 and does not perform drift detection.
 
 ---
 
