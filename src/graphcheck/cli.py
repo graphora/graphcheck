@@ -1,4 +1,11 @@
 import json
+import logging
+import shutil
+import sys
+import uuid
+import webbrowser
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -6,7 +13,7 @@ import typer
 
 from graphcheck import __version__
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.contracts.results import CheckError, Results
+from graphcheck.contracts.results import CheckError, Results, Verdict
 from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
@@ -20,8 +27,20 @@ from graphcheck.project import (
     write_default_project,
     write_example_suite,
 )
-from graphcheck.reporting.html import write_html_report
-from graphcheck.reporting.writer import write_results
+from graphcheck.reporting import (
+    ReportHistoryError,
+    ReportRun,
+    discover_report_runs,
+    find_report_run,
+    format_report_comparison,
+    format_report_history,
+    prune_report_runs,
+    write_html_report,
+    write_results,
+)
+
+_DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
+_NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
 app = typer.Typer(
     name="graphcheck",
@@ -43,7 +62,12 @@ def main(
         False, "--version", callback=_version, is_eager=True, help="Show version and exit."
     ),
 ) -> None:
-    """GraphCheck — the command surface lands in Week 3 (C6)."""
+    """Run graph checks, diagnose Neo4j, and inspect offline reports."""
+
+    # Neo4j 6 logs every server notification at WARNING by default. These are query metadata,
+    # which the adapter consumes and promotes when GraphCheck needs to act on them; letting the
+    # driver's logger also write them to stderr overwhelms the CLI's stable human output.
+    logging.getLogger(_NEO4J_NOTIFICATION_LOGGER).setLevel(logging.ERROR)
 
 
 @app.command()
@@ -148,6 +172,187 @@ def debug(
         )
 
 
+@app.command()
+def report(
+    report_id: str | None = typer.Argument(
+        None,
+        metavar="[ID]",
+        help="Historical run ID to open; valid only with --open.",
+    ),
+    open_report: bool = typer.Option(
+        False,
+        "--open",
+        help="Open the latest report, or the selected ID when one is provided.",
+    ),
+    list_reports: bool = typer.Option(
+        False,
+        "--list",
+        help="List report history with timestamps, scores, and statuses.",
+    ),
+    compare: tuple[str, str] | None = typer.Option(
+        None,
+        "--compare",
+        metavar="RUN1 RUN2",
+        help="Compare the check outcomes in two historical reports.",
+    ),
+    prune: bool = typer.Option(
+        False,
+        "--prune",
+        help="Remove old historical report artifacts.",
+    ),
+    keep: int | None = typer.Option(
+        None,
+        "--keep",
+        metavar="COUNT",
+        help="Number of newest historical runs to retain with --prune.",
+    ),
+    failures_only: bool = typer.Option(
+        False,
+        "--failures-only",
+        help="Write a report containing only failures, warnings, and errors.",
+    ),
+) -> None:
+    """Open, list, compare, prune, or filter generated reports."""
+    _validate_report_options(
+        open_report=open_report,
+        report_id=report_id,
+        list_reports=list_reports,
+        compare=compare,
+        prune=prune,
+        keep=keep,
+        failures_only=failures_only,
+    )
+    if not any((open_report, list_reports, compare, prune, failures_only)):
+        _print_report_command_help()
+        return
+
+    try:
+        root = find_project_root()
+        config = load_project_config(root)
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+    runs_dir = root / config.artifacts / "runs"
+    try:
+        if list_reports:
+            typer.echo(format_report_history(discover_report_runs(runs_dir)))
+            return
+
+        if compare is not None:
+            records = discover_report_runs(runs_dir)
+            first = find_report_run(records, compare[0])
+            second = find_report_run(records, compare[1])
+            typer.echo(format_report_comparison(first, second))
+            return
+
+        if prune:
+            assert keep is not None
+            removed = prune_report_runs(runs_dir, keep)
+            if not removed:
+                typer.echo(f"No historical report runs needed pruning; keeping newest {keep}.")
+                return
+            typer.echo(f"Pruned {len(removed)} historical report run(s):")
+            for record in removed:
+                typer.echo(f"  {record.id}")
+            return
+
+        if failures_only:
+            records = discover_report_runs(runs_dir)
+            record = find_report_run(records, report_id) if report_id else _latest_run(records)
+            output = record.directory / "report.failures.html"
+            write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
+            typer.echo(f"Wrote {output}")
+            if open_report:
+                _open_html_report(output)
+            return
+
+        if open_report:
+            if report_id is not None:
+                record = find_report_run(discover_report_runs(runs_dir), report_id)
+                _open_html_report(record.report_path)
+            else:
+                _open_html_report(_latest_html_report(runs_dir))
+    except ReportHistoryError as exc:
+        typer.echo(f"report.error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+def _validate_report_options(
+    *,
+    open_report: bool,
+    report_id: str | None,
+    list_reports: bool,
+    compare: tuple[str, str] | None,
+    prune: bool,
+    keep: int | None,
+    failures_only: bool,
+) -> None:
+    if report_id is not None and not open_report:
+        _report_usage_error("A report ID requires --open.")
+    if keep is not None and not prune:
+        _report_usage_error("--keep requires --prune.")
+    if prune and keep is None:
+        _report_usage_error("--prune requires --keep COUNT.")
+    if keep is not None and keep < 1:
+        _report_usage_error("--keep must be at least 1.")
+
+    standalone = sum((list_reports, compare is not None, prune))
+    selection_actions = open_report or failures_only
+    if standalone > 1 or (standalone and selection_actions):
+        _report_usage_error(
+            "--list, --compare, and --prune are standalone actions and cannot be combined "
+            "with other report actions."
+        )
+
+
+def _report_usage_error(message: str) -> None:
+    typer.echo(f"report.usage: {message}", err=True)
+    raise typer.Exit(2)
+
+
+def _print_report_command_help() -> None:
+    typer.echo(
+        "Report commands:\n"
+        "  graphcheck report --open [ID]         Open the latest or a selected report.\n"
+        "  graphcheck report --list              List available report IDs.\n"
+        "  graphcheck report --compare ID1 ID2   Compare two report outcomes.\n"
+        "  graphcheck report --prune --keep N    Retain the newest N historical runs.\n"
+        "  graphcheck report --failures-only     Write a diagnostic-only report.\n"
+        "Use `graphcheck report --help` for option details."
+    )
+
+
+def _latest_run(records: list[ReportRun]) -> ReportRun:
+    if not records:
+        raise ReportHistoryError(
+            "No results.json found in report history. Run `graphcheck run` first."
+        )
+    return records[0]
+
+
+def _latest_html_report(runs_dir: Path) -> Path:
+    reports = list(runs_dir.rglob("report.html")) if runs_dir.is_dir() else []
+    if not reports:
+        raise ReportHistoryError(
+            f"No report.html found under {runs_dir}. Run `graphcheck run` to generate one first."
+        )
+    return max(reports, key=lambda path: (path.stat().st_mtime_ns, str(path)))
+
+
+def _open_html_report(path: Path) -> None:
+    if not path.is_file():
+        raise ReportHistoryError(f"No report.html found for the selected run at {path}.")
+    try:
+        opened = webbrowser.open(path.resolve().as_uri())
+    except (OSError, webbrowser.Error) as exc:
+        raise ReportHistoryError(f"Could not open {path} in the default browser: {exc}") from exc
+    if not opened:
+        raise ReportHistoryError(f"Could not open {path} in the default browser.")
+    typer.echo(f"Opened {path}")
+
+
 @app.command("run")
 def run_command(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
@@ -171,15 +376,15 @@ def run_command(
 
     requested_suites = list(dict.fromkeys(suite or []))
     root: Path | None = None
-    run_dir: Path | None = None
+    runs_dir: Path | None = None
     tags: list[str] = []
     client: Neo4jClient | None = None
     try:
         root = find_project_root()
-        run_dir = root / ARTIFACTS_DIR / "runs" / "latest"
+        runs_dir = root / ARTIFACTS_DIR / "runs"
         config = load_project_config(root)
         artifacts = _project_path(root, config.artifacts)
-        run_dir = artifacts / "runs" / "latest"
+        runs_dir = artifacts / "runs"
         tags = _selection_tags(select or [])
         suite_inputs = _load_suite_inputs(
             _project_path(root, config.checks),
@@ -188,17 +393,19 @@ def run_command(
         profiles = load_profiles(root)
         _, selected_profile = select_profile(profiles, profile)
         client = Neo4jClient(selected_profile)
-        results = Engine(
-            client,
-            baselines=DirectoryBaselineProvider(artifacts / "baselines"),
-        ).run(
-            suite_inputs,
-            tags=tags,
-            fail_fast=fail_fast,
-            selection_suites=requested_suites or None,
-        )
+        with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
+            results = Engine(
+                client,
+                baselines=DirectoryBaselineProvider(artifacts / "baselines"),
+                progress_callback=progress_callback,
+            ).run(
+                suite_inputs,
+                tags=tags,
+                fail_fast=fail_fast,
+                selection_suites=requested_suites or None,
+            )
     except GraphCheckError as exc:
-        if run_dir is None:
+        if runs_dir is None:
             _print_setup_error(exc.error)
             raise typer.Exit(3) from exc
         results = failed_results(
@@ -213,7 +420,7 @@ def run_command(
             message=f"GraphCheck could not prepare the run: {type(exc).__name__}: {exc}",
             fix="Fix the project configuration, then run `graphcheck debug` and try again.",
         )
-        if run_dir is None:
+        if runs_dir is None:
             _print_setup_error(error)
             raise typer.Exit(3) from exc
         results = failed_results(
@@ -230,8 +437,8 @@ def run_command(
                 typer.echo(f"Warning: Neo4j driver cleanup failed: {exc}", err=True)
 
     try:
-        assert run_dir is not None
-        results_path, report_path = _write_run_artifacts(results, run_dir)
+        assert runs_dir is not None
+        results_path, report_path = _write_run_artifacts(results, runs_dir)
     except Exception as exc:
         typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
         typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
@@ -239,6 +446,46 @@ def run_command(
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
+
+
+def _selected_check_count(suites: Sequence[SuiteInput], tags: Sequence[str]) -> int:
+    return sum(
+        1
+        for suite_input in suites
+        for check in suite_input.suite.checks
+        if not tags or any(tag in check.tags for tag in tags)
+    )
+
+
+def _interactive_stderr() -> bool:
+    return bool(getattr(sys.stderr, "isatty", lambda: False)())
+
+
+@contextmanager
+def _run_progress(
+    total_checks: int,
+) -> Iterator[Callable[[int, int, str], None] | None]:
+    if total_checks == 0 or not _interactive_stderr():
+        yield None
+        return
+
+    with typer.progressbar(
+        length=total_checks,
+        label="Running graph checks",
+        file=sys.stderr,
+        show_eta=True,
+        show_percent=True,
+        show_pos=True,
+        fill_char="=",
+        empty_char="-",
+        width=28,
+    ) as bar:
+
+        def update(completed: int, total: int, check_name: str) -> None:
+            bar.label = "Checks complete" if completed == total else f"Completed {check_name}"
+            bar.update(1)
+
+        yield update
 
 
 def _selection_tags(selectors: list[str]) -> list[str]:
@@ -300,11 +547,55 @@ def _project_path(root: Path, configured: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def _write_run_artifacts(results: Results, run_dir: Path) -> tuple[Path, Path]:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    results_path = write_results(results, run_dir / "results.json")
-    report_path = write_html_report(results, run_dir / "report.html")
-    return results_path, report_path
+def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    resolved_runs = runs_dir.resolve()
+    historical_dir = runs_dir / results.run.id
+    if (
+        historical_dir.name.casefold() == "latest"
+        or historical_dir.resolve().parent != resolved_runs
+    ):
+        raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
+
+    _publish_run_directory(results, historical_dir)
+    latest_dir = runs_dir / "latest"
+    _publish_run_directory(results, latest_dir)
+    return latest_dir / "results.json", latest_dir / "report.html"
+
+
+def _publish_run_directory(results: Results, directory: Path) -> None:
+    """Stage and swap a complete results/report pair without exposing a mixed pair."""
+
+    parent = directory.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    staging = parent / f".{directory.name}.staging-{token}"
+    backup = parent / f".{directory.name}.backup-{token}"
+    staging.mkdir()
+    previous_moved = False
+    try:
+        write_results(results, staging / "results.json")
+        write_html_report(results, staging / "report.html")
+
+        if directory.exists():
+            is_junction = getattr(directory, "is_junction", lambda: False)
+            if not directory.is_dir() or directory.is_symlink() or is_junction():
+                raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
+            directory.replace(backup)
+            previous_moved = True
+        staging.replace(directory)
+    except Exception:
+        if previous_moved and backup.exists():
+            if directory.exists():
+                shutil.rmtree(directory)
+            backup.replace(directory)
+        raise
+    else:
+        if backup.exists():
+            shutil.rmtree(backup)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _print_setup_error(error: CheckError) -> None:
@@ -316,12 +607,23 @@ def _print_run_summary(results: Results, results_path: Path, report_path: Path) 
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
     typer.echo(f"GraphCheck run {results.run.id}: {results.run.status.value}")
-    typer.echo(
-        "Checks: "
-        f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
-        f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
-    )
-    typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
+    if len(results.suites) > 1:
+        for suite in results.suites:
+            suite_score = "n/a" if suite.score is None else str(suite.score)
+            typer.echo(
+                f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
+                f"passed {suite.totals.passed} | failed {suite.totals.fail} | "
+                f"warnings {suite.totals.warn} | errored {suite.totals.errored} | "
+                f"skipped {suite.totals.skipped}"
+            )
+        typer.echo(f"Exit code: {results.run.exit_code}")
+    else:
+        typer.echo(
+            "Checks: "
+            f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
+            f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
+        )
+        typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
     if results.run.error is not None:

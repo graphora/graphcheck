@@ -16,6 +16,7 @@ from graphcheck.contracts.results import (
     Pattern,
     RedactionPolicy,
     Results,
+    Run,
     RunStatus,
     Score,
     Severity,
@@ -40,7 +41,19 @@ def test_verdict_values():
 
 def test_evidence_forbids_unknown_keys():
     with pytest.raises(ValidationError):
-        Evidence(message="x", elements=[], truncated=False, cap=50, total_count=0, bogus=1)
+        Evidence(
+            message="x",
+            elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
+            truncated=False,
+            cap=50,
+            total_count=1,
+            bogus=1,
+        )
+
+
+def test_evidence_requires_at_least_one_pointer():
+    with pytest.raises(ValidationError):
+        Evidence(message="x", elements=[], truncated=False, cap=50, total_count=0)
 
 
 def test_check_error_shape():
@@ -76,7 +89,7 @@ def _full_check(verdict, severity):
     if verdict in (Verdict.FAIL, Verdict.WARN):
         data["evidence"] = Evidence(
             message="m",
-            elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+            elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
             truncated=False,
             cap=50,
             total_count=1,
@@ -120,11 +133,6 @@ def test_fail_requires_evidence():
         CheckResult(**_base(verdict=Verdict.FAIL, evidence=None))
 
 
-def test_evidence_requires_at_least_one_pointer():
-    with pytest.raises(ValidationError):
-        Evidence(message="m", elements=[], truncated=False, cap=50, total_count=0)
-
-
 def test_aggregate_measurement_pointer_is_in_typed_and_json_schema_contracts():
     pointer = EvidenceElement(kind="aggregate", id="node_count:label=Customer")
 
@@ -137,7 +145,7 @@ def test_aggregate_measurement_pointer_is_in_typed_and_json_schema_contracts():
 def test_pass_forbids_evidence():
     ev = Evidence(
         message="m",
-        elements=[{"kind": "node", "id": "node-1", "labels": ["Customer"], "type": None}],
+        elements=[{"kind": "node", "id": "n1", "labels": ["Customer"], "type": None}],
         truncated=False,
         cap=50,
         total_count=1,
@@ -256,8 +264,8 @@ def test_exit_code_precedence():
 def _run(**over):
     data = dict(
         id="r",
-        started_at="t",
-        finished_at="t",
+        started_at="2026-07-22T10:00:00Z",
+        finished_at="2026-07-22T10:00:01Z",
         graphcheck_version="0.1.0",
         pack_version="0.1.0",
         status=RunStatus.COMPLETE,
@@ -276,6 +284,25 @@ def _run(**over):
     )
     data.update(over)
     return data
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["not-a-time", "2026-07-22T10:00:00", "2026-07-22T12:00:00+02:00"],
+)
+def test_run_timestamps_must_be_iso_utc(timestamp):
+    with pytest.raises(ValidationError, match="timestamp must"):
+        Run.model_validate(_run(finished_at=timestamp))
+
+
+def test_run_finish_must_not_precede_start():
+    with pytest.raises(ValidationError, match="finished_at must not precede started_at"):
+        Run.model_validate(
+            _run(
+                started_at="2026-07-22T10:00:01Z",
+                finished_at="2026-07-22T10:00:00Z",
+            )
+        )
 
 
 def _results(checks, status=RunStatus.COMPLETE, **run_over):

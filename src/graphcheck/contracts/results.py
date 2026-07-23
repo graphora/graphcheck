@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from graphcheck.scoring import SEVERITY_WEIGHTS, calculate_score, calculate_suite_scores
 
 SCHEMA_VERSION = "1.1"
 
@@ -47,7 +50,19 @@ class RedactionPolicy(StrEnum):
     HASH = "hash"
 
 
-WEIGHTS: dict[Severity, int] = {Severity.ERROR: 3, Severity.WARN: 1}
+WEIGHTS: dict[Severity, int] = {severity: SEVERITY_WEIGHTS[severity.value] for severity in Severity}
+
+
+def parse_utc_timestamp(value: str) -> datetime:
+    """Parse a frozen results timestamp and require an explicit UTC offset."""
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("timestamp must be a valid ISO 8601 datetime") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("timestamp must include an explicit UTC offset")
+    return parsed
 
 
 class _Strict(BaseModel):
@@ -163,11 +178,9 @@ class CheckResult(_Strict):
 
 
 def score_value(checks: list[CheckResult]) -> int | None:
-    denominator = sum(WEIGHTS[c.severity] for c in checks if c.executed)
-    if denominator == 0:
-        return None
-    numerator = sum(WEIGHTS[c.severity] for c in checks if c.verdict is Verdict.PASS)
-    return round(100 * numerator / denominator)
+    """Compatibility wrapper for the canonical scorer."""
+
+    return calculate_score(checks).value
 
 
 def totals(checks: list[CheckResult]) -> dict[str, int]:
@@ -220,8 +233,9 @@ class Score(_Strict):
 
     @model_validator(mode="after")
     def _weights_locked(self) -> Score:
-        if self.weights != {"error": 3, "warn": 1}:
-            raise ValueError("score.weights are hard-coded in v0: {'error': 3, 'warn': 1}")
+        expected_weights = dict(SEVERITY_WEIGHTS)
+        if self.weights != expected_weights:
+            raise ValueError(f"score.weights are hard-coded in v0: {expected_weights}")
         return self
 
 
@@ -263,6 +277,18 @@ class Run(_Strict):
     target: RunTarget | None  # present-but-nullable; null only for failed runs
     error: CheckError | None  # present-but-nullable; non-null only for failed runs
 
+    @field_validator("started_at", "finished_at")
+    @classmethod
+    def _timestamps_are_utc(cls, value: str) -> str:
+        parse_utc_timestamp(value)
+        return value
+
+    @model_validator(mode="after")
+    def _timestamps_are_ordered(self) -> Run:
+        if parse_utc_timestamp(self.finished_at) < parse_utc_timestamp(self.started_at):
+            raise ValueError("finished_at must not precede started_at")
+        return self
+
 
 class Suite(_Strict):
     id: str
@@ -300,7 +326,7 @@ class Results(_Strict):
         if self.totals.model_dump(by_alias=True) != expected_totals:
             raise ValueError(f"totals must equal the tally of checks: {expected_totals}")
 
-        expected_score = score_value(self.checks)
+        expected_score = calculate_score(self.checks).value
         if expected_score is None:
             if self.score is not None:
                 raise ValueError("score must be null when no check executed")
@@ -330,9 +356,14 @@ class Results(_Strict):
         for suite_id in by_suite:
             if suite_id not in suite_ids:
                 raise ValueError(f"check suite_id {suite_id!r} has no matching suites[] entry")
+        suite_scores = calculate_suite_scores(self.checks)
         for suite in self.suites:
             members = by_suite.get(suite.id, [])
-            if suite.score != score_value(members):
+            expected_suite_score = suite_scores.get(suite.id)
+            expected_suite_value = (
+                None if expected_suite_score is None else expected_suite_score.value
+            )
+            if suite.score != expected_suite_value:
                 raise ValueError(f"suite {suite.id!r} score is inconsistent with its checks")
             if suite.totals.model_dump(by_alias=True) != totals(members):
                 raise ValueError(f"suite {suite.id!r} totals are inconsistent with its checks")

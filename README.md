@@ -148,6 +148,9 @@ inconsistent expectations fail loudly before execution.
 graphcheck run
 ```
 
+Interactive terminals show a per-check progress bar while the run is in flight. The bar is omitted
+when output is redirected or captured, keeping CI logs and shell pipelines clean.
+
 Useful selections include:
 
 ```console
@@ -164,12 +167,16 @@ explicitly not run.
 Every prepared run writes:
 
 ```text
+.graphcheck/runs/<run-id>/results.json
+.graphcheck/runs/<run-id>/report.html
 .graphcheck/runs/latest/results.json
 .graphcheck/runs/latest/report.html
 ```
 
-`results.json` follows the versioned SPEC-01 contract. `report.html` has inline styling and no
-external assets, so it can be opened and shared offline.
+`results.json` follows the versioned SPEC-01 contract. `report.html` embeds its styling and
+interaction script and has no external assets or network calls, so it can be opened and shared
+offline. The run-id directory preserves history; `latest` is a consistently published convenience
+copy of the newest run.
 
 ## Exit codes
 
