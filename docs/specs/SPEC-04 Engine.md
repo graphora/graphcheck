@@ -21,7 +21,8 @@ The implementation is split by responsibility:
 | Pure verdict evaluation and evidence extraction | `src/graphcheck/engine/evaluator.py` |
 | Seeded sampling policy | `src/graphcheck/engine/sampling.py` |
 | C4-compatible baseline resolution | `src/graphcheck/engine/baseline.py` |
-| Run isolation, deadlines, metadata, score inputs, and result assembly | `src/graphcheck/engine/runner.py` |
+| Deterministic severity-weighted scoring | `src/graphcheck/scoring.py` and SPEC-06 |
+| Run isolation, deadlines, metadata, and result assembly | `src/graphcheck/engine/runner.py` |
 | Project-facing `graphcheck run` command | `src/graphcheck/cli.py` |
 | SPEC-01 JSON and offline HTML serialization | `src/graphcheck/reporting/` |
 
@@ -113,6 +114,8 @@ no coverage was lost.
 A prepared run writes:
 
 ```text
+<artifacts>/runs/<run-id>/results.json
+<artifacts>/runs/<run-id>/report.html
 <artifacts>/runs/latest/results.json
 <artifacts>/runs/latest/report.html
 ```
@@ -120,9 +123,15 @@ A prepared run writes:
 With the default project configuration these resolve to:
 
 ```text
+.graphcheck/runs/<run-id>/results.json
+.graphcheck/runs/<run-id>/report.html
 .graphcheck/runs/latest/results.json
 .graphcheck/runs/latest/report.html
 ```
+
+The run-id directory is the durable historical artifact. The `latest` directory is a convenience
+copy published only after both files have been staged, so readers never observe a new result paired
+with an older report.
 
 The JSON writer first normalizes through the SPEC-01 Pydantic model, then validates the structural
 JSON Schema, retains every frozen nullable key, and writes deterministic indented/sorted JSON with a
@@ -130,11 +139,15 @@ trailing newline. The JSON and HTML writers share one JSON-compatible value norm
 dates and datetimes use Pydantic's ISO representation, binary values use URL-safe base64, and sets
 are ordered by their canonical JSON representation before becoming arrays.
 
-The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and no
-JavaScript, CDN, external font, image, stylesheet, or link dependency. It opens offline and shows
-run metadata, score, target fingerprint/version, partial/failed banners, suite totals and source
-SHAs, compiled Cypher, expected/measured values, estimates, errors, and evidence pointers. Checks
-are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then by severity, suite id, and check id.
+The HTML report is rendered only from a validated SPEC-01 result. It contains inline CSS and
+JavaScript but no CDN, external font, image, stylesheet, link dependency, or runtime network call.
+It opens offline and shows run metadata, per-suite independently calculated scores and execution
+coverage, target database/version/edition, partial/failed banners, per-suite verdict totals,
+compiled Cypher, expected/measured values, estimates, errors, and evidence pointers. Its embedded
+script supports local filtering, detail expansion, panel reveal, and theme switching without
+loading or transmitting data. Checks are ordered `fail`, `warn`, `errored`, `skipped`, `pass`, then
+by severity, suite id, and check id. The overall score and source/fingerprint metadata remain in
+`results.json`; point-deduction arithmetic is not presented in the HTML report.
 
 Configuration and connection failures also produce failed-run artifacts when the project artifact
 path can be resolved. A missing project root cannot produce an artifact because no authoritative
@@ -144,8 +157,10 @@ filesystem fix.
 ### Console summary and exit codes
 
 The command prints run id/status, verdict totals, score, exit code, partial reason or structured
-error when present, and both artifact paths. The process returns the already-validated
-`run.exit_code`; the CLI does not derive a second result.
+error when present, and both artifact paths. When multiple suites run, it first prints each
+suite's independent score and verdict totals instead of an aggregate score/totals block, then
+prints the run exit code. The process returns the already-validated `run.exit_code`; the CLI does
+not derive a second result.
 
 Exit precedence is the frozen SPEC-01 contract:
 

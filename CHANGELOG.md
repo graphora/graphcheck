@@ -11,6 +11,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - SPEC-03 for the neo4j connector.
 - Neo4j connector foundation: project discovery, `graphcheck init`, strict connection profile loading, env-var password override, structured adapter errors, read-only Neo4j driver wrapper, capability probe, and `graphcheck debug` with stable JSON output.
 - Connector tests covering profile validation, debug JSON shape, count-store plan detection, and opt-in Neo4j 4.4 / 5.x testcontainers integration.
+- `graphcheck report` can open or list historical reports, select a run by id, compare
+  two result artifacts, prune old runs with a retention count, and generate a focused
+  failures/warnings/errors report.
 - C1 core engine: strict suite semantics, parameterized Cypher compilation, read-only execution,
   isolated check errors, conformance/competency/drift verdict evaluation, pointer evidence,
   deterministic sampling, baseline resolution, and SPEC-01 run metadata.
@@ -22,21 +25,43 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `graphcheck run` with suite/tag selection, explicit fail-fast partial results, C4 baseline lookup,
   C5-compatible `results.json` and self-contained offline HTML artifacts, console summaries, and
   the frozen CI exit-code contract.
+- Interactive `graphcheck run` progress with exact per-check completion and clean redirected output.
 - SPEC-04 Engine, consolidating the C1 and run-command contracts into one detailed source for
   compilation, execution, evaluation, evidence, sampling, baselines, artifacts, and CI behavior.
 - Core and PII pack metadata/schema slice: eleven additional core conformance `with` schemas, strictly typed `core.yml` and `pii.yml` metadata, a generated metadata JSON Schema, SPEC-09, and validation-parity tests.
 - Complete built-in C3 runtime: manifest-driven compiler/capability binding for every registered
   check plus executable, deterministically sampled PII name/value scans with Luhn/Verhoeff
   validation, redacted findings, mandatory node evidence, and confidence intervals.
+- A pure deterministic severity-weighted scorer with exact half-even rounding, execution
+  coverage, and independently calculated per-suite scores for the machine-readable contract.
 
 ### Changed
 
+- `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
+  the separate `--run ID` selector when opening a historical report.
+- Offline reports now present each suite's independently calculated score alongside execution
+  coverage and verdict badges. The overall score remains in `results.json`; point-deduction and
+  earned/possible-weight arithmetic are intentionally not shown in the HTML report.
+- Every run is preserved below `runs/<run-id>/`, while `runs/latest` is refreshed from a fully
+  staged result/report pair so history commands work without exposing mixed-version artifacts.
+- Report history and comparisons now show named per-suite scores, matching the run summary and HTML
+  report; the overall machine score is no longer substituted in those later views.
+- Reports with zero evaluated checks now state that explicitly in both the run summary and issue
+  table instead of labeling the empty result as all clear.
 - Bumped the independently versioned `results.json` contract to schema 1.1 to add honest aggregate
   measurement-scope evidence for count drift when removed graph elements cannot be selected.
 - Raised the Python floor to **3.12** (`requires-python = ">=3.12"`, ruff `target-version = "py312"`, CI matrix `3.12`–`3.13`). Dropping 3.10/3.11 is a deliberate decision (3.10 reaches end-of-life Oct 2026), and lets the contracts use modern-Python idioms (`StrEnum`).
 
 ### Fixed
 
+- Neo4j driver deprecation notifications no longer flood GraphCheck CLI output; GraphCheck still
+  consumes the notification metadata needed to reject missing schema references.
+- Report history and rendering now read schema 1.0 artifacts by upgrading them to schema 1.1 in
+  memory; newly written `results.json` files continue to use the current 1.1 contract.
+- Corrected the C1/C5 merge resolution so human-readable visibility and blocker diagnostics remain
+  in `graphcheck debug`, report opening no longer references an undefined debug trace, HTML reports
+  retain deterministic check ordering and aggregate-scope labels, and results/HTML artifacts share
+  temporal- and binary-safe JSON normalization.
 - Contract validators now reject shapes the frozen specs disallow: severity/verdict mismatches (which could downgrade the CI exit code), the `passed`/`with_` field-name aliases, and check-result / run records that omit a frozen present-but-nullable key.
 - Count-store detection now inspects the Neo4j `EXPLAIN` summary plan instead of stringifying result rows.
 - The connector's rich read path now preserves result columns, graph entities, and notifications;

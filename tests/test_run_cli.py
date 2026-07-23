@@ -1,19 +1,23 @@
 import json
+import logging
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from graphcheck.cli import app
+from graphcheck import cli as cli_module
+from graphcheck.cli import _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
-from graphcheck.reporting.writer import json_compatible
+from graphcheck.reporting.history import discover_report_runs
+from graphcheck.reporting.writer import json_compatible, load_results
 
 runner = CliRunner()
+FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
 TARGET = RunTarget(
     database="neo4j",
     server_version="5.18.0",
@@ -61,6 +65,53 @@ def test_artifact_value_normalization_is_deterministic_for_yaml_sets():
     assert json_compatible({"values": {"gamma", "alpha", "beta"}}) == {
         "values": ["alpha", "beta", "gamma"]
     }
+
+
+def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path):
+    first = load_results(FIXTURES / "results.complete.json")
+    first.run.id = "run-one"
+    second = load_results(FIXTURES / "results.complete.json")
+    second.run.id = "run-two"
+    runs_dir = tmp_path / "runs"
+
+    _write_run_artifacts(first, runs_dir)
+    latest_results, latest_report = _write_run_artifacts(second, runs_dir)
+
+    assert (runs_dir / "run-one" / "results.json").is_file()
+    assert (runs_dir / "run-one" / "report.html").is_file()
+    assert (runs_dir / "run-two" / "results.json").is_file()
+    assert (runs_dir / "run-two" / "report.html").is_file()
+    assert load_results(latest_results).run.id == "run-two"
+    assert latest_report.is_file()
+    assert {record.id for record in discover_report_runs(runs_dir)} == {"run-one", "run-two"}
+
+
+def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path, monkeypatch):
+    first = load_results(FIXTURES / "results.complete.json")
+    first.run.id = "run-one"
+    second = load_results(FIXTURES / "results.complete.json")
+    second.run.id = "run-two"
+    runs_dir = tmp_path / "runs"
+    latest_results, latest_report = _write_run_artifacts(first, runs_dir)
+    previous_results = latest_results.read_bytes()
+    previous_report = latest_report.read_bytes()
+    real_write_html_report = cli_module.write_html_report
+
+    def fail_latest_refresh(results, path, **kwargs):
+        if path.parent.name.startswith(".latest.staging-"):
+            raise OSError("simulated latest report failure")
+        return real_write_html_report(results, path, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_html_report", fail_latest_refresh)
+
+    with pytest.raises(OSError, match="simulated latest report failure"):
+        _write_run_artifacts(second, runs_dir)
+
+    assert latest_results.read_bytes() == previous_results
+    assert latest_report.read_bytes() == previous_report
+    assert (runs_dir / "run-two" / "results.json").is_file()
+    assert not list(runs_dir.glob(".*.staging-*"))
+    assert not list(runs_dir.glob(".*.backup-*"))
 
 
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
@@ -114,17 +165,182 @@ competency:
         "tags": ["production"],
         "fail_fast": True,
     }
+    historical = tmp_path / ".graphcheck" / "runs" / payload["run"]["id"]
+    assert (historical / "results.json").is_file()
+    assert (historical / "report.html").is_file()
     assert [check["id"] for check in payload["checks"]] == ["production"]
     report = tmp_path / ".graphcheck" / "runs" / "latest" / "report.html"
     html = report.read_text(encoding="utf-8")
     assert "<!doctype html>" in html
     assert "http://" not in html and "https://" not in html
-    assert "<script" not in html
+    assert html.count("<script>") == 1
+    assert "function filterChecks()" in html
     assert ' src="' not in html and ' href="' not in html
     assert "Checks: 1 | passed 1" in result.stdout
     assert "exit code: 0" in result.stdout
+    assert "Suite selected:" not in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
+
+
+def test_run_prints_each_suite_summary_without_multi_suite_aggregate(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "alpha.yml": """\
+suite: alpha
+competency:
+  - id: passing
+    question: Does alpha return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+            "beta.yml": """\
+suite: beta
+competency:
+  - id: warning
+    severity: warn
+    question: Is beta empty?
+    query: RETURN 2 AS value
+    expect: {empty: true}
+""",
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult(
+                [
+                    {
+                        "value": 2,
+                        "evidence": {
+                            "kind": "node",
+                            "id": "node-2",
+                            "labels": ["Example"],
+                        },
+                    }
+                ],
+                ("value", "evidence"),
+                (),
+            ),
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    assert (
+        "Suite alpha: score 100 | checks 1 | passed 1 | failed 0 | warnings 0 | "
+        "errored 0 | skipped 0"
+    ) in result.stdout
+    assert (
+        "Suite beta: score 0 | checks 1 | passed 0 | failed 0 | warnings 1 | errored 0 | skipped 0"
+    ) in result.stdout
+    assert "Overall:" not in result.stdout
+    assert "Checks: 2" not in result.stdout
+    assert "Score: 75" not in result.stdout
+    assert "Exit code: 2" in result.stdout
+    payload = _payload(tmp_path)
+    assert [(suite["id"], suite["score"]) for suite in payload["suites"]] == [
+        ("alpha", 100),
+        ("beta", 0),
+    ]
+
+
+def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: quiet
+competency:
+  - id: value
+    question: Does the graph return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+
+    class NoisyClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            logging.getLogger("neo4j.notifications").warning(
+                "Received notification from DBMS server: deprecated query"
+            )
+            return super().run_read_result(query, params, timeout_s=timeout_s)
+
+    client = NoisyClient([QueryResult([{"value": 1}], ("value",), ())])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    caplog.set_level(logging.WARNING, logger="neo4j.notifications")
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    assert "Received notification from DBMS server" not in caplog.text
+    assert "Checks: 1 | passed 1" in result.stdout
+
+
+def test_run_shows_interactive_progress_for_each_selected_check(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: progress
+competency:
+  - id: first
+    question: Does the first query return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+  - id: second
+    question: Does the second query return a value?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult([{"value": 2}], ("value",), ()),
+        ]
+    )
+    progress: dict[str, object] = {"updates": []}
+
+    class FakeProgressBar:
+        label = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, amount):
+            progress["updates"].append((amount, self.label))
+
+    def progressbar(**kwargs):
+        progress["options"] = kwargs
+        bar = FakeProgressBar()
+        bar.label = kwargs["label"]
+        return bar
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
+    monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    assert progress["options"]["length"] == 2
+    assert progress["options"]["label"] == "Running graph checks"
+    assert progress["updates"] == [
+        (1, "Completed progress/first"),
+        (1, "Checks complete"),
+    ]
 
 
 def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(

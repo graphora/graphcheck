@@ -1,0 +1,369 @@
+# SPEC-06 - Scorer + HTML Report
+
+*Draft for C5.* This component writes `results.json` and renders a self-contained
+HTML report from that file. `results.json` remains the single contract: the HTML
+report, MCP responses, and any future cloud surface must consume SPEC-01 results
+rather than bypassing them.
+
+## Scope
+
+Implemented in this slice:
+
+- SPEC-01 `results.json` writer.
+- Deterministic severity-weighted scorer.
+- Offline HTML report renderer.
+- Report history listing, selection, comparison, retention, and diagnostic filtering.
+- Regression tests over the existing SPEC-01 fixture results.
+
+Deferred:
+
+- C1 engine-output adapter.
+- Fixture graph full-pipeline coverage.
+- Browser-level network interception test.
+
+## Results Writer
+
+The writer lives in `src/graphcheck/reporting/writer.py`.
+
+### Inputs
+
+The writer accepts:
+
+- a `Results` model,
+- a plain `dict`,
+- a JSON string,
+- or a `Path` to a `results.json` file.
+
+All inputs are normalized through the SPEC-01 source-of-truth model. Historical
+schema 1.0 artifacts are upgraded in memory by changing their version marker to
+the current 1.1 contract before validation; this compatibility read does not
+rewrite the source file. Newly written artifacts always use schema 1.1.
+
+Current inputs are validated through:
+
+```python
+Results.model_validate(...)
+Results.model_validate_json(...)
+```
+
+### Validation
+
+Before writing, the writer validates twice:
+
+1. Pydantic validation through `Results`, which enforces SPEC-01 semantic
+   invariants such as evidence presence, verdict field presence, status shape,
+   totals, score consistency, exit code, suite identity, and partial-run rules.
+2. Structural JSON Schema validation through `results_schema()`.
+
+The writer serializes with all frozen nullable keys present. It uses
+`exclude_none=False` and deterministic JSON formatting.
+
+### Responsibilities
+
+The writer is responsible for refusing malformed results. It does not compute
+engine metadata itself.
+
+It preserves:
+
+- run status and `partial_reason`,
+- `pass`, `fail`, `warn`, `errored`, and `skipped` verdicts as distinct states,
+- graph target metadata including fingerprint and database version,
+- suite `source_sha`,
+- run timestamps,
+- check `compiled_query`,
+- check `params`, `measured`, `expected`, and `estimate`,
+- evidence pointers for failing/warning checks,
+- structured run/check errors.
+
+### Evidence Pointers
+
+SPEC-01 requires failing and warning checks to carry evidence. The model also
+requires `evidence.elements` to contain at least one pointer, so a fail/warn
+cannot be written with an empty evidence list.
+
+Evidence elements carry node/relationship IDs with labels/types, or an aggregate
+measurement-scope ID for aggregate drift findings. Property values must not be
+placed in evidence pointers.
+
+## HTML Renderer
+
+The renderer lives in `src/graphcheck/reporting/html.py`.
+
+### Inputs
+
+The renderer accepts the same input shapes as the writer and normalizes them
+through `load_results()`. It renders from a validated SPEC-01 `Results` object
+only.
+
+### Output
+
+The renderer emits one self-contained HTML document:
+
+- inline CSS,
+- inline JavaScript for report-local interactions,
+- no CDN,
+- no external fonts,
+- no external images,
+- no external links or asset references, and
+- no runtime network API usage.
+
+The current automated offline check is static: tests assert the rendered HTML
+contains exactly one inline script, contains the expected interaction functions,
+contains no `http://`, `https://`, `src="`, or `href="` references, and does not
+use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
+`EventSource`. A browser-level network-disabled test is deferred.
+
+### Report Contents
+
+The report shows:
+
+- run id,
+- a grey `RUN COMPLETE`, `RUN PARTIAL`, or `RUN FAILED` metadata label,
+- an outcome-and-timing summary beneath that label; its issue/no-issue text uses
+  the exit-code color while any appended skipped-check count remains neutral,
+- target database, version, and edition when available,
+- run error banner for failed runs,
+- partial-run banner when `partial_reason` is present,
+- run start time and duration,
+- GraphCheck version,
+- pack version,
+- per-suite executed/selected counts,
+- per-suite outcome badges that distinguish failed, warning, errored, and skipped
+  checks, use singular `WARNING` for a count of one, and show skipped counts in
+  grey rather than treating them as failures,
+- each suite's `SCORE: <value>` badge, or `SCORE: N/A` when that suite has no
+  calculated score, always as the rightmost badge in its status card,
+- a colored status marker for every rendered check,
+- an issue summary containing `fail`, `warn`, and `errored` checks; intentional
+  `skipped` checks are not issues,
+- checks sorted failures-first,
+- compiled Cypher when present,
+- expected and measured values,
+- estimate details when present,
+- check errors when present,
+- evidence message and node/relationship or aggregate-scope IDs.
+
+The embedded script reveals the checks explorer, navigates from suite status
+markers to checks, filters checks by verdict or search text, sorts the issue
+summary, toggles check details, and switches the inline CSS theme. Event handlers
+are registered with `addEventListener`; check identities are read from escaped
+data attributes and matched directly rather than interpolated into JavaScript or
+CSS selectors. These interactions operate only on the already-rendered document
+and do not load or transmit data.
+
+### Ordering
+
+Checks are rendered in this order:
+
+1. `fail`
+2. `warn`
+3. `errored`
+4. `skipped`
+5. `pass`
+
+Within the same verdict, checks sort by severity, suite id, then check id.
+
+## CLI Command Boundary
+
+`graphcheck report` operates on report artifacts that already exist. It does not
+connect to Neo4j or create new run data.
+
+`graphcheck run` publishes every completed artifact below `runs/<run-id>/` and
+then refreshes the consistently staged `runs/latest` convenience copy. This is
+the history consumed by the commands below.
+
+History operations load and validate each run's `results.json`, including the
+schema 1.0 compatibility read described above. If `runs/latest` duplicates a
+historical run id, it appears only once in history. History is ordered
+chronologically by the validated UTC `run.finished_at`, newest first; ordering
+never compares timestamp strings lexically.
+
+### Open and Select
+
+`graphcheck report --open [<id>]`:
+
+1. discovers the project root and configured artifacts directory,
+2. when `<id>` is omitted, finds `report.html` files below `<artifacts>/runs/`
+   and selects the most recently modified report,
+3. when `<id>` is present, resolves it against `results.json.run.id` or the run
+   directory name and selects that run's `report.html`, and
+4. opens its local file URI in the default browser.
+
+If no report exists or the browser cannot be launched, the command exits non-zero
+with an actionable error.
+
+A missing id or HTML artifact is an error that points the user to
+`graphcheck report --list`. A positional report ID without `--open` is a usage
+error. The former `--run <id>` selector is not part of the command surface.
+
+Running `graphcheck report` without an action prints a concise command guide;
+`graphcheck report --help` provides argument and option details.
+
+### List
+
+`graphcheck report --list` prints every unique historical run with:
+
+- run id,
+- completion timestamp,
+- run status, and
+- each named suite score as `suite-id=value`, using `n/a` for a suite with no
+  calculated score or a run with no suites. The overall machine score is not
+  shown in this human-facing view.
+
+### Compare
+
+`graphcheck report --compare <run1> <run2>` compares two existing result artifacts
+in the stated direction. It reports status and per-suite score changes across the
+union of suite ids, outcome regressions and improvements for matching
+`(suite_id, check_id)` identities, other verdict changes, and added or removed
+checks. It does not substitute the overall machine score for the suite scores
+shown by the run command and HTML report.
+
+A regression is a move toward a worse outcome in this order:
+
+```text
+pass < skipped < warn < errored(warn) < fail/errored(error)
+```
+
+The comparison reads artifacts only and does not connect to Neo4j.
+
+### Retention
+
+`graphcheck report --prune --keep <count>` retains the newest `<count>` historical
+run directories and removes older ones. `<count>` must be at least 1. The
+`runs/latest` convenience artifact is always preserved and is not counted against
+the retention limit. Directories that do not contain a valid immediate
+`results.json` run artifact are not removed.
+
+### Diagnostic Report
+
+`graphcheck report --failures-only` reads the newest result and writes
+`report.failures.html` beside it. The diagnostic contains only `fail`, `warn`, and
+`errored` checks while preserving the original run summary; it does not modify
+`results.json` or `report.html`.
+
+Combining `--failures-only` with `--open` generates the diagnostic for the newest
+run and opens it. `--open <id> --failures-only` selects a historical run, generates
+its diagnostic, and opens the generated file.
+
+`--list`, `--compare`, and `--prune` are standalone actions. Invalid combinations
+exit 2 without changing artifacts.
+
+## Scorer
+
+The scorer lives in `src/graphcheck/scoring.py`. It is the single implementation
+used by the engine and the `Results` consistency validator. The renderer consumes
+the validated per-suite scores stored in `results.suites[].score`. The scorer
+computes the SPEC-01 contract:
+
+```text
+round(100 * sum(weight(pass)) / sum(weight(pass|fail|warn|errored)))
+```
+
+with hard-coded weights:
+
+```text
+error = 3
+warn = 1
+```
+
+For each selected check:
+
+| Verdict | Possible weight | Earned weight |
+| --- | ---: | ---: |
+| `pass` | severity weight | severity weight |
+| `fail` | severity weight | 0 |
+| `warn` | severity weight | 0 |
+| `errored` | severity weight | 0 |
+| `skipped` | excluded | excluded |
+
+An empty or all-skipped input has a `null` score.
+
+### Determinism
+
+Scoring uses integer arithmetic only. The exact rational percentage is rounded
+half-to-even without an intermediate floating-point value. Check order does not
+affect the calculation, weights are immutable, duplicate check identities are
+rejected by `Results`, and invalid severities or verdict/execution combinations
+fail loudly.
+
+### Per-suite Breakdown
+
+Each suite is scored from its own member checks with the same algorithm. The
+overall score is computed directly from all checks; it is never an average of
+rounded suite scores. This preserves check-level weighting and prevents a tiny
+suite from receiving the same influence as a large suite.
+
+The `Results` model validates the stored overall and per-suite score values against
+fresh calculations. The HTML report presents each independently calculated suite
+score as the rightmost badge in that suite's status card. The overall
+`results.score` remains part of the machine-readable SPEC-01 contract but is not
+repeated in Graph Health Overview. The report does not expose earned/possible
+weights. Users drill into the failure-first check list to identify issues.
+
+### Point Deduction Calculation
+
+The scorer can attribute `100 - score` integer points to individual `fail`,
+`warn`, and `errored` tests. Deductions are proportional to the same locked
+severity weights used by the scorer. Integer remainders are assigned by largest
+remainder, with suite id and check id as stable tie-breakers. Therefore:
+
+- the deduction rows always sum exactly to `100 - score`,
+- error-severity issues dock three times the points of warning-severity issues
+  before integer rounding,
+- input order cannot change a test's deduction, and
+- passing and skipped tests dock no points.
+
+Point deductions and earned/possible weight arithmetic are not presented in the
+current HTML report.
+
+## Tests
+
+Reporting tests live in `tests/test_reporting.py`; report-command tests live in
+`tests/test_cli.py`.
+
+They use the existing SPEC-01 fixtures:
+
+- `results.complete.json`
+- `results.partial.json`
+- `results.generated-only.json`
+- `results.failed.json`
+
+The tests assert:
+
+- writer round-trips all existing fixtures,
+- writer output validates against `results_schema()`,
+- malformed fail-without-evidence is rejected,
+- renderer output is self-contained,
+- failures render before warnings and passes,
+- compiled Cypher is visible,
+- evidence IDs are visible,
+- failed-run errors are visible,
+- `report --open` selects the newest HTML report,
+- `report --open <id>` selects a historical report and a bare ID is rejected,
+- schema 1.0 historical artifacts load without being rewritten,
+- the configured artifacts directory is honored,
+- missing reports and browser-launch failures exit non-zero,
+- report history is ordered and de-duplicates `runs/latest`,
+- a historical run can be selected and opened by id,
+- history and comparisons show named per-suite scores rather than the hidden
+  overall machine score,
+- pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
+- diagnostic reports contain failures, warnings, and errors but omit passing checks,
+- scorer results are invariant to input order and use exact half-even rounding,
+- per-suite calculations use the same locked weights as the overall score,
+- reports show each suite score as the rightmost badge in its status card,
+  distinguish errored checks from failed checks, derive run messaging from status
+  and issue totals, state when no checks were evaluated, exclude skipped checks
+  from the issue summary, and render failure-first issue details.
+
+## Deferred Work
+
+The following require C1, the fixture graph, or additional tooling:
+
+- Convert raw C1 engine output into `Results`.
+- Guarantee every real run writes `results.json`.
+- Compute graph fingerprint, DB version, suite SHA, and timestamps at runtime.
+- Full pipeline fixture graph coverage.
+- Browser-level offline asset/network test.
+- MCP/C7 consumption tests.

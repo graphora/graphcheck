@@ -26,7 +26,6 @@ from graphcheck.contracts.results import (
     SkipReason,
     Verdict,
     exit_code,
-    score_value,
     totals,
 )
 from graphcheck.engine.baseline import (
@@ -51,6 +50,9 @@ from graphcheck.engine.parameters import (
 from graphcheck.engine.sampling import SamplingPolicy
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs import PACK_VERSION
+from graphcheck.scoring import calculate_score, calculate_suite_scores
+
+_ProgressCallback = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ class Engine:
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
         id_factory: Callable[[], object] | None = None,
+        progress_callback: _ProgressCallback | None = None,
     ) -> None:
         self.client = client
         self.config = config or EngineConfig()
@@ -130,6 +133,7 @@ class Engine:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic = monotonic or time.monotonic
         self._id_factory = id_factory or uuid.uuid4
+        self._progress_callback = progress_callback
 
     def run_yaml(
         self,
@@ -268,17 +272,33 @@ class Engine:
             )
 
         check_results: list[CheckResult] = []
+        total_checks = sum(len(item.suite.checks) for item in inputs)
+        completed_checks = 0
+
+        def record_result(result: CheckResult, suite_id: str, check_id: str) -> None:
+            nonlocal completed_checks
+            check_results.append(result)
+            completed_checks += 1
+            if self._progress_callback is not None:
+                self._progress_callback(
+                    completed_checks,
+                    total_checks,
+                    f"{suite_id}/{check_id}",
+                )
+
         partial_reasons: list[str] = list(dict.fromkeys(_initial_partial_reasons))
         fail_fast_after: str | None = None
         for suite_input in inputs:
             for check in suite_input.suite.checks:
                 if fail_fast_after is not None:
-                    check_results.append(
+                    record_result(
                         _skipped_result(
                             check,
                             suite_input.suite.suite,
                             SkipReason.NOT_RUN,
-                        )
+                        ),
+                        suite_input.suite.suite,
+                        check.id,
                     )
                     _append_once(
                         partial_reasons,
@@ -286,12 +306,14 @@ class Engine:
                     )
                     continue
                 if check.generated:
-                    check_results.append(
+                    record_result(
                         _skipped_result(
                             check,
                             suite_input.suite.suite,
                             SkipReason.GENERATED,
-                        )
+                        ),
+                        suite_input.suite.suite,
+                        check.id,
                     )
                     continue
                 capability_check = getattr(self.compiler, "missing_capabilities", None)
@@ -301,12 +323,14 @@ class Engine:
                     else ()
                 )
                 if missing_capabilities:
-                    check_results.append(
+                    record_result(
                         _skipped_result(
                             check,
                             suite_input.suite.suite,
                             SkipReason.UNSUPPORTED,
-                        )
+                        ),
+                        suite_input.suite.suite,
+                        check.id,
                     )
                     rendered = ", ".join(missing_capabilities)
                     _append_once(
@@ -316,12 +340,14 @@ class Engine:
                     )
                     continue
                 if self._monotonic() >= deadline:
-                    check_results.append(
+                    record_result(
                         _skipped_result(
                             check,
                             suite_input.suite.suite,
                             SkipReason.NOT_RUN,
-                        )
+                        ),
+                        suite_input.suite.suite,
+                        check.id,
                     )
                     _append_once(
                         partial_reasons,
@@ -335,7 +361,7 @@ class Engine:
                     target=resolved_target,
                     deadline=deadline,
                 )
-                check_results.append(result)
+                record_result(result, suite_input.suite.suite, check.id)
                 if partial_reason is not None:
                     _append_once(partial_reasons, partial_reason)
                 if fail_fast and _is_hard_result(result):
@@ -587,7 +613,8 @@ class Engine:
         tags: list[str],
         fail_fast: bool,
     ) -> Results:
-        score = score_value(checks)
+        score = calculate_score(checks)
+        suite_scores = calculate_suite_scores(checks)
         run_totals = totals(checks)
         suites = []
         for suite_input in inputs:
@@ -596,7 +623,11 @@ class Engine:
                 {
                     "id": suite_input.suite.suite,
                     "source_sha": suite_input.source_sha,
-                    "score": score_value(members),
+                    "score": (
+                        None
+                        if suite_input.suite.suite not in suite_scores
+                        else suite_scores[suite_input.suite.suite].value
+                    ),
                     "totals": totals(members),
                 }
             )
@@ -622,9 +653,9 @@ class Engine:
             },
             score=(
                 None
-                if score is None
+                if score.value is None
                 else {
-                    "value": score,
+                    "value": score.value,
                     "method": "weighted-by-severity",
                     "weights": {severity.value: weight for severity, weight in WEIGHTS.items()},
                 }
