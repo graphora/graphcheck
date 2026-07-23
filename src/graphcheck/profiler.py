@@ -29,6 +29,18 @@ from graphcheck.neo4j_adapter import Neo4jClient
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
 
 
+class _LabelCollectionError(GraphCheckError):
+    def __init__(self, cause: GraphCheckError, labels: list[LabelProfile]) -> None:
+        super().__init__(cause.error.code, cause.error.message, cause.error.fix)
+        self.labels = labels
+
+
+class _DegreeDistributionError(GraphCheckError):
+    def __init__(self, cause: GraphCheckError, label: LabelProfile) -> None:
+        super().__init__(cause.error.code, cause.error.message, cause.error.fix)
+        self.label = label
+
+
 def profile(client: Neo4jClient) -> BaselineProfile:
     deadline = time.monotonic() + DEFAULT_PROFILE_BUDGET_SECONDS
     target, _, counts = client.probe(timeout_s=_remaining_budget(deadline))
@@ -58,6 +70,18 @@ def profile(client: Neo4jClient) -> BaselineProfile:
 
     try:
         labels = collect_labels(client, _deadline=deadline)
+    except _LabelCollectionError as exc:
+        labels = exc.labels
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            f"Failed collecting labels: {exc}",
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -266,7 +290,19 @@ def collect_labels(
         str(row["label"])
         for row in _run_read(client, "CALL db.labels() YIELD label RETURN label", deadline=deadline)
     )
-    return [_collect_label(client, label, deadline) for label in labels]
+    collected: list[LabelProfile] = []
+    failure: GraphCheckError | None = None
+    for label in labels:
+        try:
+            collected.append(_collect_label(client, label, deadline))
+        except _DegreeDistributionError as exc:
+            collected.append(exc.label)
+            failure = failure or exc
+        except GraphCheckError as exc:
+            failure = failure or exc
+    if failure is not None:
+        raise _LabelCollectionError(failure, collected) from failure
+    return collected
 
 
 def collect_relationship_types(
@@ -360,15 +396,27 @@ def _collect_label(client: Neo4jClient, label: str, deadline: float | None) -> L
         _collect_property(client, label_ref, property_name, deadline)
         for property_name in _label_properties(client, label_ref, deadline)
     ]
+    try:
+        degree_distribution = _collect_degree_distribution(
+            client,
+            label_ref,
+            _deadline=deadline,
+        )
+    except GraphCheckError as exc:
+        raise _DegreeDistributionError(
+            exc,
+            LabelProfile(
+                name=label,
+                count=count,
+                properties=properties,
+                degree_distribution=None,
+            ),
+        ) from exc
     return LabelProfile(
         name=label,
         count=count,
         properties=properties,
-        degree_distribution=_collect_degree_distribution(
-            client,
-            label_ref,
-            _deadline=deadline,
-        ),
+        degree_distribution=degree_distribution,
     )
 
 
@@ -403,7 +451,7 @@ def _percentile(sorted_values: list[int], percentile: float) -> float:
     fraction = rank - lower_index
     lower = sorted_values[lower_index]
     upper = sorted_values[upper_index]
-    return lower + (upper - lower) * fraction
+    return round(lower + (upper - lower) * fraction, 2)
 
 
 def _label_count(client: Neo4jClient, label_ref: str, deadline: float | None) -> int:

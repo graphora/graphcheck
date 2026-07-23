@@ -255,6 +255,81 @@ def test_profile_is_partial_when_property_type_measurement_fails() -> None:
     assert "type query failed" in baseline.partial_reason
 
 
+class FailedLabelProbeClient(FakeNeo4jClient):
+    def __init__(self, failed_query: str, code: str = "neo4j.query_failed") -> None:
+        super().__init__()
+        self.failed_query = failed_query
+        self.code = code
+
+    def run_read(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> list[dict[str, Any]]:
+        if query == self.failed_query:
+            raise GraphCheckError(self.code, "simulated label probe failure", "retry")
+        return super().run_read(query, params, timeout_s=timeout_s)
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["neo4j.query_failed", "profile.budget_exceeded"],
+)
+def test_profile_preserves_label_when_only_degree_distribution_fails(code: str) -> None:
+    baseline = profile(
+        cast(
+            Neo4jClient,
+            FailedLabelProbeClient(
+                "MATCH (n:`Account`) RETURN COUNT { (n)--() } AS degree",
+                code,
+            ),
+        )
+    )
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert "simulated label probe failure" in baseline.partial_reason
+    assert baseline.graph_schema.labels[0] == LabelProfile(
+        name="Account",
+        count=2,
+        properties=[ProfileProperty(name="id", type="STRING")],
+        degree_distribution=None,
+    )
+    assert baseline.graph_schema.labels[1].name == "Customer"
+    assert baseline.graph_schema.labels[1].degree_distribution is not None
+
+
+def test_profile_omits_label_when_label_count_fails() -> None:
+    baseline = profile(
+        cast(
+            Neo4jClient,
+            FailedLabelProbeClient("MATCH (n:`Account`) RETURN count(n) AS count"),
+        )
+    )
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert [label.name for label in baseline.graph_schema.labels] == ["Customer"]
+
+
+def test_profile_omits_label_when_label_property_collection_fails() -> None:
+    baseline = profile(
+        cast(
+            Neo4jClient,
+            FailedLabelProbeClient(
+                "MATCH (n:`Account`) UNWIND keys(n) AS property "
+                "RETURN DISTINCT property ORDER BY property"
+            ),
+        )
+    )
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.partial_reason
+    assert [label.name for label in baseline.graph_schema.labels] == ["Customer"]
+
+
 class DegreeClient:
     def __init__(self, degrees: list[int]) -> None:
         self.degrees = degrees

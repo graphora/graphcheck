@@ -5,6 +5,7 @@ import pytest
 
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
 from graphcheck.diff import compare, diff, render_human, render_json
+from graphcheck.errors import GraphCheckError
 
 
 def _profile() -> BaselineProfile:
@@ -151,18 +152,10 @@ def test_degree_distribution_json_uses_model_shape_and_not_a_list() -> None:
     }
 
 
-def test_degree_distribution_json_is_null_when_either_side_is_missing() -> None:
-    degree = json.loads(render_json(compare(_profile(), _changed_profile(degree_missing=True))))[
-        "statistics"
-    ]["degree_distribution"]
-
-    assert degree["Account"] is None
-
-
-def test_missing_degree_distribution_is_not_counted_as_drift() -> None:
+def _partial_profile() -> BaselineProfile:
     baseline = _profile()
     account, customer = baseline.graph_schema.labels
-    partial = baseline.model_copy(
+    return baseline.model_copy(
         update={
             "status": ProfileStatus.PARTIAL,
             "partial_reason": "degree probe timed out",
@@ -177,19 +170,41 @@ def test_missing_degree_distribution_is_not_counted_as_drift() -> None:
         }
     )
 
-    report = compare(baseline, partial)
 
-    assert report.statistics["degree_distribution"]["Account"] is None
-    assert report.drift_detected is False
-    assert report.summary["statistics"]["changed"] == 0
-    assert "Account degree distribution" not in render_human(report)
+@pytest.mark.parametrize(
+    ("baseline_a", "baseline_b"),
+    [
+        (_partial_profile(), _profile()),
+        (_profile(), _partial_profile()),
+        (_partial_profile(), _partial_profile()),
+    ],
+)
+def test_compare_rejects_partial_baselines(
+    baseline_a: BaselineProfile, baseline_b: BaselineProfile
+) -> None:
+    with pytest.raises(GraphCheckError) as exc:
+        compare(baseline_a, baseline_b)
+
+    assert exc.value.error.code == "diff.partial_baseline"
+    assert "comparison is inconclusive" in exc.value.error.message.lower()
+    assert "complete baseline" in exc.value.error.fix.lower()
 
 
-def test_partial_warning_explains_suppressed_removals() -> None:
-    output = render_human(compare(_profile(), _changed_profile(degree_missing=True)))
+@pytest.mark.parametrize(
+    ("current", "latest"),
+    [
+        (_partial_profile(), _profile()),
+        (_profile(), _partial_profile()),
+        (_partial_profile(), _partial_profile()),
+    ],
+)
+def test_compatibility_diff_rejects_partial_baselines(
+    current: BaselineProfile, latest: BaselineProfile
+) -> None:
+    with pytest.raises(GraphCheckError) as exc:
+        diff(current, latest)
 
-    assert "warning: baseline_b is PARTIAL" in output
-    assert "Collections missing due to partial status are not reported as removed." in output
+    assert exc.value.error.code == "diff.partial_baseline"
 
 
 def test_human_count_formatting_and_statistics_labels() -> None:

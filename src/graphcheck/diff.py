@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+from graphcheck.errors import GraphCheckError
 
 
 class SchemaVersionMismatch(ValueError):
@@ -97,6 +98,12 @@ def compare(
     baseline_b_name: str = "baseline_b",
 ) -> DiffReport:
     """Compare profiles without formatting or recomputing their fingerprints."""
+    if baseline_a.status is ProfileStatus.PARTIAL or baseline_b.status is ProfileStatus.PARTIAL:
+        raise GraphCheckError(
+            "diff.partial_baseline",
+            "Comparison is inconclusive because one or more baselines are partial.",
+            "Generate complete baseline profiles before running `graphcheck diff`.",
+        )
     if baseline_a.schema_version != baseline_b.schema_version:
         raise SchemaVersionMismatch(
             "cannot diff baselines with different schema_version "
