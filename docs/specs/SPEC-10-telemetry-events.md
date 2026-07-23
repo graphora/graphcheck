@@ -26,6 +26,11 @@ Telemetry must not answer:
 - Whether an individual check passed, warned, or failed.
 - What query, parameter, expected value, measured value, or evidence GraphCheck processed.
 
+Run-level terminal status (`complete`, `partial`, `failed`) and early termination *are* collected as
+aggregate reliability signals. These reveal that a run — never a named check — failed or stopped
+early. Per-check verdicts, the identity of any check, and all measured or expected values remain
+excluded.
+
 Opt-in telemetry is subject to selection bias. PostHog metrics describe opted-in installations, not
 the entire user base.
 
@@ -36,7 +41,7 @@ GraphCheck has two event layers:
 | Layer | Events | Destination |
 | --- | --- | --- |
 | Engine events | `RunStarted`, `TargetProbeFinished`, `QueryFinished`, `CheckProcessed`, `RunFinished`, `EngineFaulted` | In-process telemetry collector |
-| PostHog events | `graphcheck_run_started`, `graphcheck_check_processed`, `graphcheck_run_completed`, `graphcheck_engine_faulted`, `graphcheck_command_completed` | PostHog, when opted in |
+| PostHog events | `graphcheck_run_started`, `graphcheck_check_processed`, `graphcheck_run_completed`, `graphcheck_engine_faulted`, `graphcheck_command_completed`, `graphcheck_profile_completed` | PostHog, when opted in |
 
 `TargetProbeFinished` and `QueryFinished` are internal measurement events. They are folded into
 check and run aggregates and are not uploaded separately in v0.
@@ -63,6 +68,11 @@ arbitrary strings.
 
 `telemetry_run_id` provides short-lived correlation within one run. It must not be derived from a
 project path, database, profile, machine identifier, result artifact, or check definition.
+
+For cross-layer correlation, engine-derived PostHog events forward this `telemetry_run_id`, and the
+CLI attaches a separate `telemetry_command_id` to every PostHog event of one invocation (see
+*Common PostHog properties*). Together they join a command to its engine run and expose pre/post-engine
+overhead without any stable identity.
 
 ## Engine event catalog
 
@@ -128,15 +138,13 @@ Emitted after each database operation known to the engine. There is intentionall
 | `server_available_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `server_consumed_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `read_guard_outcome` | `allowed`, `rejected`, `error`, or `not_run` | Result of the read-only guard. |
-| `row_count_bucket` | count bucket or null | Bucketed result size. |
 | `notification_count` | non-negative integer or null | Count only. |
 | `error_code` | safe error code or null | Stable allowlisted code. |
 
-Allowed count buckets are:
-
-```
-0 | 1 | 2-10 | 11-100 | 101-1k | 1k-10k | 10k+
-```
+Coarse result-size buckets are intentionally omitted in v0. The goals forbid telemetry from
+answering *what is in the graph*, and a bucketed row count is coarse graph cardinality. Any
+cardinality signal (row, sample, or population size) requires an expanded consent tier before it may
+be added — the same bar as verdict telemetry.
 
 The event must not contain Cypher text, compiled queries, parameters, returned columns, records,
 notification text, notification positions, plans, evidence, labels, relationship types, property
@@ -167,8 +175,6 @@ emitted when no further engine work will occur for that check.
 | `evaluation_ms` | non-negative integer or null | Result evaluation time. |
 | `query_count` | non-negative integer | Database operations attributable to this check. |
 | `sampled` | boolean | Whether sampling was used. |
-| `sample_size_bucket` | count bucket or null | Bucketed sample size. |
-| `population_bucket` | count bucket or null | Bucketed population size. |
 | `error_code` | safe error code or null | Stable allowlisted engine error code. |
 
 `processing_outcome:completed` means the engine compiled, executed, and evaluated the check. It does
@@ -179,6 +185,7 @@ The following result fields are explicitly excluded:
 - check ID, check name, suite ID, severity, tags, question, and provenance;
 - verdict, measured value, expected value, tolerance, baseline value, and evidence;
 - compiled query, parameters, exact sample size, and exact population size;
+- coarse sample-size or population buckets (removed in v0 as graph cardinality);
 - arbitrary error messages, fixes, stack traces, or exception representations.
 
 Check verdict telemetry would reveal graph quality and is outside v0 consent. Adding it requires a
@@ -204,7 +211,7 @@ Expected failed runs use `outcome:failed`; they do not emit `EngineFaulted`.
 | `query_max_ms` | non-negative integer or null | Slowest query duration. |
 | `probe_ms` | non-negative integer or null | Target-probe duration. |
 | `budget_remaining_ms` | non-negative integer or null | Engine budget remaining at completion. |
-| `fail_fast_triggered` | boolean | Early stop caused by fail-fast. |
+| `early_stopped` | boolean | The run terminated before all selected checks were processed. Combined with `fail_fast_enabled` and `deadline_exhausted` this permits inferring a fail-fast stop at the run level (invariant 18); it never identifies the check or its verdict. |
 | `deadline_exhausted` | boolean | Engine budget was exhausted. |
 | `partial_reason_codes` | array of safe reason codes | Codes only; never the human-readable `partial_reason`. |
 | `run_error_code` | safe error code or null | Set for expected failed runs. |
@@ -216,9 +223,13 @@ suite_input_invalid
 unsupported_check
 partial_baseline
 baseline_measurement_missing
-fail_fast
 deadline_exhausted
 ```
+
+There is no dedicated `fail_fast` reason code. Early termination is reported through the
+`early_stopped` and `deadline_exhausted` flags; at the run level this permits inferring a fail-fast
+stop (invariant 18), which is accepted as aggregate reliability data. `fail_fast_enabled` on
+`RunStarted` records adoption. Telemetry still never identifies the stopping check or any verdict.
 
 New codes require a schema update and privacy review. Unknown reasons map to `unknown`; arbitrary
 reason strings must not be forwarded.
@@ -230,9 +241,9 @@ terminal event and is mutually exclusive with `RunFinished`.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `engine_stage` | safe stage enum | Last known stage, such as `probe`, `compile`, `resolve_params`, `sample`, `baseline`, `query`, `evaluate`, or `finalize`. |
-| `exception_type` | safe exception enum | Allowlisted standard type; unknown types map to `unknown`. |
-| `safe_error_code` | safe error code | Stable classification, defaulting to `engine.unexpected`. |
+| `engine_stage` | safe stage enum | Last known engine stage; closed set in *Safe allowlists*. |
+| `exception_type` | safe exception enum | Allowlisted standard-library type; unknown types map to `unknown`. Closed set in *Safe allowlists*. |
+| `safe_error_code` | safe error code | Stable classification, defaulting to `engine.unexpected`. Closed set in *Safe allowlists*. |
 | `elapsed_ms` | non-negative integer | Time since the matching `RunStarted`. |
 
 The event must not contain an exception message, traceback, local variables, file path, query,
@@ -281,22 +292,97 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `command` | `init`, `debug`, `run`, `report`, `telemetry`, or `other` | Command name only. |
-| `action` | safe action enum or null | Required for multi-action commands; arbitrary arguments are excluded. |
-| `process_outcome` | `success`, `user_error`, `engine_error`, or `unexpected_error` | CLI boundary result. |
-| `duration_ms` | non-negative integer | Command duration. |
+| `command` | `init`, `debug`, `run`, `report`, `profile`, `diff`, `baseline`, `telemetry`, or `other` | Command name only. `profile`, `diff`, and `baseline` are first-class and are never folded into `other`. |
+| `action` | safe action enum or null | Per-command action from the *Safe allowlists* set; null for commands with no sub-action. Arbitrary arguments are never included. |
+| `process_outcome` | `success`, `user_error`, `engine_error`, or `unexpected_error` | CLI boundary result, defined by operational failure — not by exit code (see the semantic rule below). |
+| `failure_stage` | safe stage enum or null | Set if and only if `process_outcome` is not `success`; the pipeline stage that failed. Null on success. |
+| `duration_ms` | non-negative integer | Total command duration. |
+| `setup_ms` | non-negative integer or null | Time before the engine ran (discovery, config, suite/profile load, client setup). |
+| `artifact_write_ms` | non-negative integer or null | Time spent writing result or baseline artifacts. |
+| `render_ms` | non-negative integer or null | Time spent rendering the HTML report. |
+| `output_mode` | `human` or `json` | Selected output mode. |
+| `results_artifact` | `not_requested`, `written`, or `error` | Outcome of the `results.json` write. |
+| `report_artifact` | `not_requested`, `written`, or `error` | Outcome of the HTML report write. |
+| `baseline_artifact` | `not_requested`, `written`, or `error` | Outcome of the baseline write. |
+| `telemetry_command_id` | UUID | Random UUID v4 for this invocation; correlates every PostHog event from this command. |
+| `telemetry_run_id` | UUID or null | Equal to the engine run's `telemetry_run_id` when a run occurred; null otherwise. A non-null value is the definitive signal that the engine ran. |
+| `probe_outcome` | `success`, `error`, `timeout`, or null | For `init` and `debug`: connection-probe result outside a run; null when no probe occurred. |
+| `probe_duration_ms` | non-negative integer or null | Probe duration for `init`/`debug`. |
+| `server_version_major` | integer or null | Neo4j major version from the probe. |
+| `server_version_minor` | integer or null | Neo4j minor version from the probe. |
+| `apoc_available` | boolean or null | Coarse capability from the probe. |
+| `count_store_available` | boolean or null | Coarse capability from the probe. |
 | `interactive` | boolean | Whether standard input/output were interactive. |
 | `ci` | boolean | Derived from a fixed allowlist of common CI indicator variables; variable values are excluded. |
 | `os_family` | `windows`, `macos`, `linux`, or `other` | Coarse operating-system family. |
 | `python_minor` | string | Major and minor only, for example `"3.12"`. |
 | `graphcheck_version` | string | Released GraphCheck version. |
-| `safe_error_code` | safe error code or null | Stable classification. |
-| `engine_started` | boolean | Distinguishes setup failure from an engine outcome. |
+| `safe_error_code` | safe error code or null | Stable classification; null on success. |
+
+**`process_outcome` measures operational failure, not exit code.** It answers "did GraphCheck
+operate correctly?", never "what did the checks find?".
+
+- `success` means **no operational failure occurred**: every requested stage — setup, the engine
+  run (if any), and all requested artifact writes and report rendering — completed. A completed run
+  is `success` regardless of exit code: exit 1 (checks failed) and exit 2 (partial or warn) are
+  *completed runs*, not CLI errors. Reporting them as `*_error` would indirectly encode check
+  verdicts in telemetry.
+- A non-success outcome means an **operational failure** occurred at some stage, classified by
+  cause: bad input → `user_error`, engine fault → `engine_error`, anything else →
+  `unexpected_error`. `failure_stage` records where, and `safe_error_code` classifies it.
+
+Crucially, an operational failure can occur **after** the engine returns a valid result — for
+example, the run completes but the `results.json` or report write fails. Such a command is **not**
+`success` even though `telemetry_run_id` is present: the run outcome is captured by the engine
+events, while `process_outcome` reflects that the invocation failed to write its artifact
+(`failure_stage:artifact_write` or `report_render`, with the matching `*_artifact:error`). The
+completed-run-is-success rule applies only to exit codes 1/2; it does not override an independent
+post-run operational failure.
+
+Whether the engine ran is read from `telemetry_run_id` (non-null ⇒ ran), which replaces a separate
+`engine_started` flag. It is independent of `process_outcome`: a run can complete (non-null
+`telemetry_run_id`) while the command still fails operationally on a later stage.
 
 This event captures failures during project discovery, configuration parsing, suite loading,
 profile loading, client construction, engine setup, artifact writing, and report rendering. It
 must not contain command-line arguments, working directory, project name, profile name, paths,
 filenames, shell, environment-variable names or values, artifact IDs, or report contents.
+
+### `graphcheck_profile_completed`
+
+One event emitted by the CLI when `graphcheck profile` finishes. Profiling has meaningful partial
+states and stage timings that a generic command event cannot express, so it gets a dedicated event.
+`graphcheck profile` also emits `graphcheck_command_completed` (correlated by `telemetry_command_id`);
+`diff`, `baseline`, and `report` remain command actions and do not get dedicated events.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `outcome` | `complete`, `partial`, or `error` | Profiler result. Never a graph content signal. |
+| `duration_ms` | non-negative integer | Total invocation duration (CLI entry to exit), so it is always defined — including a setup failure before profiling starts. The per-stage `*_ms` fields below are null when their stage did not run. |
+| `schema_ms` | non-negative integer or null | Time collecting schema (labels, relationship types, constraints, indexes). |
+| `property_coverage_ms` | non-negative integer or null | Time collecting property coverage. |
+| `degree_distribution_ms` | non-negative integer or null | Time collecting degree distribution. |
+| `deadline_exhausted` | boolean | The wall-clock budget was exhausted. |
+| `last_completed_stage` | safe profiler stage enum or null | Last profiler stage that completed (see *Safe allowlists → Profiler stages*). Null when the profiler never started (setup failure). |
+| `partial_reason` | safe profile partial-reason code or null | Set only when `outcome:partial`; null otherwise. |
+| `probe_outcome` | `success`, `error`, `timeout`, or null | Connection-probe result. |
+| `probe_duration_ms` | non-negative integer or null | Probe duration. |
+| `server_version_major` | integer or null | Neo4j major version. |
+| `server_version_minor` | integer or null | Neo4j minor version. |
+| `apoc_available` | boolean or null | Coarse capability. |
+| `count_store_available` | boolean or null | Coarse capability. |
+| `safe_error_code` | safe error code or null | Set when `outcome:error`. |
+
+The event must not contain label or relationship counts, property coverage, fingerprints, database
+identity, or any profiled graph content. It records that a profile ran and how it went — never what
+it found.
+
+`graphcheck_profile_completed` is emitted exactly once per `graphcheck profile` invocation, at the
+CLI boundary. It is emitted even when profiling never starts: a setup failure (project discovery,
+config or profile load, client setup, or a failed probe) is reported as `outcome:error` with the
+matching `safe_error_code`, `last_completed_stage:null`, and null stage timings. A `partial` outcome
+carries a `partial_reason` and whatever stages completed before the budget or a non-fatal probe ran
+out. The invocation also emits `graphcheck_command_completed`, correlated by `telemetry_command_id`.
 
 ## Common PostHog properties
 
@@ -307,10 +393,18 @@ The adapter adds:
 | `telemetry_schema_version` | Initially `"1.0"`. |
 | `consent_version` | Version of the consent text accepted by the user. |
 | `graphcheck_version` | Released GraphCheck version. |
-| `distinct_id` | Random installation UUID generated only after opt-in. |
+| `distinct_id` | Persisted installation UUID after `telemetry enable`. Under process-only `GRAPHCHECK_TELEMETRY=1` with no stored opt-in, a fresh per-process UUID is generated and never persisted. |
 | `session_id` | Random process UUID; not persisted. |
+| `telemetry_command_id` | Random UUID v4 per CLI invocation. Correlates every PostHog event emitted by one command; not persisted and not derived from any identity. |
 | `process_person_profile` | Disabled. GraphCheck must not create or update PostHog person profiles. |
 | `geoip_enrichment` | Disabled. No location properties are added to payloads. |
+
+Engine-derived events (`graphcheck_run_started`, `graphcheck_check_processed`,
+`graphcheck_run_completed`, `graphcheck_engine_faulted`) also carry the engine `telemetry_run_id`.
+`graphcheck_command_completed` carries `telemetry_run_id` when a run occurred. Joining on
+`telemetry_command_id` (whole invocation) and `telemetry_run_id` (the engine run) lets analysis
+connect setup/artifact failures to their run and measure pre/post-engine overhead — with no stable
+identity involved.
 
 GraphCheck never calls PostHog `identify`, aliasing, autocapture, session replay, surveys, feature
 flags, or automatic exception capture in v0.
@@ -321,12 +415,19 @@ PostHog project not to retain or derive location data from it.
 
 ## Consent and controls
 
-1. Telemetry is disabled by default for every installation, project, and upgrade.
+1. Telemetry is disabled until a user-level opt-in is recorded; that opt-in applies to all projects
+   for the user. A recorded opt-in **persists across ordinary upgrades**; GraphCheck must not
+   silently re-disable telemetry on upgrade.
 2. Opt-in must be an explicit user action. A repository or project configuration file cannot enable
    telemetry on behalf of a user.
 3. `DO_NOT_TRACK=1` and `GRAPHCHECK_TELEMETRY=0` always disable telemetry.
-4. `GRAPHCHECK_TELEMETRY=1` may enable telemetry for the current process and is treated as explicit
-   operator consent.
+4. `GRAPHCHECK_TELEMETRY=1` may enable telemetry for the **current process only** and is treated as
+   explicit operator consent for that process. It does not persist consent and does not change the
+   stored user-wide opt-in state. Whenever there is no **active** stored opt-in, the process uses a
+   fresh process-scoped `distinct_id` (a random UUID generated at start and discarded at exit) — even
+   if an **inactive** installation UUID remains on disk from a prior, since-disabled opt-in. A
+   disabled installation's identifier is never reused. This keeps process-only runs unlinkable to
+   each other and to any earlier installation.
 5. The CLI should expose:
 
    ```
@@ -338,13 +439,105 @@ PostHog project not to retain or derive location data from it.
    ```
 
 6. `preview` prints representative sanitized payloads without sending them.
-7. Enabling telemetry stores a random installation UUID and the accepted `consent_version` in the
-   user-level GraphCheck configuration. It does not use a MAC address, hostname, OS account,
-   repository identity, cloud identity, or hash of any machine attribute.
+7. `graphcheck telemetry enable` stores a random installation UUID and the accepted `consent_version`
+   in the **user-level** GraphCheck configuration — a single user-wide opt-in, not per-project. It
+   does not use a MAC address, hostname, OS account, repository identity, cloud identity, or hash of
+   any machine attribute.
 8. Disabling telemetry stops collection before engine event models are constructed. Resetting the
    ID breaks linkage to earlier events.
-9. A materially expanded data category requires renewed consent. Schema evolution within the
-   existing allowlisted categories does not silently expand consent.
+9. Renewed consent is required **only when `consent_version` changes** — that is, when a materially
+   expanded data category is introduced. Ordinary upgrades and schema evolution within the existing
+   allowlisted categories keep the stored opt-in and do not silently expand consent.
+10. The telemetry control command must not itself emit telemetry for `preview`, `disable`, `status`,
+    or `reset-id`. Only `enable` may emit a single `graphcheck_command_completed` — the invocation at
+    which consent is first granted.
+
+## Safe allowlists
+
+Every enumerated field is a closed set. A value outside its allowlist maps to `unknown` (or `custom`
+for templates); arbitrary strings are never forwarded. Allowlists grow only through a schema update
+and privacy review.
+
+### Command actions (`action`)
+
+| Command | Allowed actions |
+| --- | --- |
+| `report` | `open`, `list`, `compare`, `prune`, `failures-only` |
+| `baseline` | `set`, `list` |
+| `telemetry` | `enable`, `disable`, `status`, `preview`, `reset-id` |
+| `init`, `debug`, `run`, `diff`, `profile` | none — `action` is null |
+
+### Check templates (`template`)
+
+`template` is a **broad family**, never a one-to-one identity for a specific built-in or user check.
+Built-in checks are grouped so the value cannot act as a check identifier:
+
+```
+existence | uniqueness | cardinality | relationship-shape | value-domain |
+referential-integrity | connectivity | pii | competency-shape |
+competency-regression | drift | custom
+```
+
+Any check that does not map to a built-in family is `custom`. A finer template that could identify
+an individual check is prohibited without a consent review.
+
+### Safe error codes (`error_code`, `safe_error_code`, `run_error_code`)
+
+```
+neo4j.unreachable | neo4j.auth_failed | neo4j.permission_denied |
+neo4j.database_not_found | neo4j.query_failed |
+project.missing | config.invalid | suite.invalid |
+profile.missing | profile.invalid | profile.collection_failed |
+baseline.missing | baseline.invalid | baseline.partial |
+baseline.load_failed | baseline.write_failed |
+diff.incomparable | diff.failed |
+engine.compile_failed | engine.parameter_resolution_failed |
+engine.evaluate_failed | engine.unexpected |
+read_guard.rejected | artifact.write_failed |
+report.render_failed | report.open_failed | unknown
+```
+
+### Exception types (`exception_type`)
+
+Standard-library types only; any other type maps to `unknown`:
+
+```
+TimeoutError | ConnectionError | OSError | ValueError |
+KeyError | TypeError | RuntimeError | MemoryError | unknown
+```
+
+### Stages
+
+Engine stages (`engine_stage`):
+
+```
+probe | compile | resolve_params | sample | baseline | query | evaluate | finalize
+```
+
+Profiler stages (`last_completed_stage`) — profiling has its own stages, distinct from engine
+execution:
+
+```
+probe | labels | relationship_types | constraints | indexes |
+property_coverage | degree_distribution
+```
+
+CLI failure stages (`failure_stage`):
+
+```
+project_discovery | config_load | suite_load | profile_load | client_setup |
+probe | engine | profile_collection | baseline_load | baseline_write |
+diff_compare | artifact_write | report_render | report_open
+```
+
+### Related closed enums (defined at their events)
+
+- `query_role`: `target_probe`, `parameter_resolution`, `sampling_population`, `check_measurement`, `evidence_collection`.
+- `pattern`: `conformance`, `competency-shape`, `competency-regression`, `drift`.
+- `skip_reason`: `generated`, `unsupported`, `not_run`.
+- `partial_reason_codes` (run): `suite_input_invalid`, `unsupported_check`, `partial_baseline`, `baseline_measurement_missing`, `deadline_exhausted`, `unknown`.
+- `partial_reason` (profile): `deadline_exhausted`, `property_coverage_incomplete`, `degree_distribution_incomplete`, `schema_incomplete`, `probe_incomplete`, `unknown`.
+- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`): `not_requested`, `written`, `error`.
 
 ## Privacy denylist
 
@@ -432,6 +625,22 @@ that GraphCheck already performs.
     the engine may disable that sink for the remainder of the run.
 14. Telemetry-disabled execution constructs no telemetry collector, performs no PostHog calls, and
     produces no persistent telemetry identifier.
+15. `process_outcome:success` means no operational failure at any stage. Exit codes 1 and 2 with a
+    completed run are `success` (never CLI errors), but an independent operational failure after the
+    run — such as a failed artifact write or report render — is non-success even though
+    `telemetry_run_id` is non-null. `process_outcome` is therefore independent of exit code and
+    independent of whether the engine ran.
+16. `failure_stage` is non-null if and only if `process_outcome` is not `success`, and when a
+    requested artifact fails its corresponding `*_artifact` field is `error`.
+17. Every PostHog event from one CLI invocation shares a `telemetry_command_id`. When a run
+    occurred, `graphcheck_command_completed.telemetry_run_id` equals the engine events'
+    `telemetry_run_id`; when no run occurred it is null.
+18. Run-level terminal status (`complete`/`partial`/`failed`) and early termination are collected as
+    aggregate reliability data. Because `outcome:failed` already reveals, at the run level, that a
+    check failed, combining `fail_fast_enabled`, `early_stopped`, and `deadline_exhausted` permits
+    inferring that a fail-fast stop occurred. This run-level inference is **permitted**. Telemetry
+    still never reveals which check stopped the run, its verdict, its measured or expected values, or
+    its evidence.
 
 ## Events deliberately excluded
 
@@ -444,9 +653,12 @@ The following events are not justified for telemetry-only v0:
 - `QueryStarted` and `QueryNotificationObserved`;
 - cancellation, worker, concurrency, cache, observer-delivery, and UI events.
 
-Their useful dimensions are represented as fields or counters on the six engine events. Adding
-start/end pairs for every operation would increase code paths, volume, ordering complexity, and
-privacy risk without improving the planned PostHog metrics.
+Their useful dimensions are represented as fields or counters on the six engine events. Fail-fast
+has no dedicated event or field; at the run level it remains inferable from `early_stopped`,
+`deadline_exhausted`, and `fail_fast_enabled`, which is accepted as aggregate reliability data
+(invariant 18) — telemetry still never names the stopping check or its verdict. Adding start/end
+pairs for every operation would increase code paths, volume, ordering complexity, and privacy risk
+without improving the planned PostHog metrics.
 
 ## Metrics and PostHog dashboards
 
@@ -463,7 +675,10 @@ privacy risk without improving the planned PostHog metrics.
 - complete, partial, failed, and faulted run rates;
 - check engine-error and unsupported rates by safe pattern/template and GraphCheck version;
 - safe error-code frequency by engine stage and version;
-- artifact/report failures from `graphcheck_command_completed`.
+- CLI failure rate by `failure_stage`;
+- artifact/report failures from `graphcheck_command_completed`;
+- connection-probe outcomes and versions outside runs (`init`, `debug`, `profile`);
+- profile completion split (complete/partial/error) from `graphcheck_profile_completed`.
 
 ### Performance
 
@@ -472,14 +687,18 @@ privacy risk without improving the planned PostHog metrics.
 - query time as a proportion of run and check duration;
 - target-probe duration and error rate;
 - sampling-population overhead versus sampled check query duration;
-- deadline-exhaustion rate by configured budget band.
+- deadline-exhaustion rate by configured budget band;
+- setup / artifact-write / render time versus engine duration (pre/post-engine overhead);
+- profile duration, per-stage timings (schema, property-coverage, degree-distribution), and
+  deadline-exhaustion rate from `graphcheck_profile_completed`.
 
 ### Feature adoption
 
 - conformance, competency, and drift usage;
 - sampling and baseline usage;
 - fail-fast, suite-filter, and tag-filter usage;
-- command usage split across `init`, `debug`, `run`, and `report`;
+- command usage split across `init`, `debug`, `run`, `report`, `profile`, `diff`, and `baseline`;
+- output-mode split (human vs JSON);
 - Neo4j major/minor version and coarse capability availability.
 
 The dashboards must not calculate or display graph-quality pass/fail rates because those outcomes
@@ -490,7 +709,10 @@ are intentionally absent from telemetry.
 1. Event-model tests reject unknown keys, invalid enums, negative durations, and inconsistent
    outcome/error combinations.
 2. Engine tests assert exact event order and cardinality for complete, partial, failed, skipped,
-   fail-fast, deadline, query-error, and unexpected-fault paths.
+   early-stop, deadline, query-error, and unexpected-fault paths, and assert that no dedicated field
+   or event identifies the fail-fast trigger or the stopping check (run-level inference from the
+   combination of `fail_fast_enabled`, `early_stopped`, and `deadline_exhausted` is permitted per
+   invariant 18).
 3. Collector tests reconcile per-query, per-check, and per-run counts and timings.
 4. Snapshot tests lock every PostHog payload shape and schema version.
 5. Privacy tests recursively reject denylisted field names and representative sensitive values.
@@ -499,23 +721,43 @@ are intentionally absent from telemetry.
 7. Default-off tests assert zero PostHog imports/client construction, zero network calls, and no
    persistent installation ID.
 8. Consent tests cover explicit enable/disable, `DO_NOT_TRACK`, environment overrides, reset ID,
-   and consent-version changes.
+   opt-in persistence across upgrades, re-consent only on `consent_version` change, and that
+   `preview`, `disable`, `status`, and `reset-id` emit no telemetry. A process-only
+   `GRAPHCHECK_TELEMETRY=1` test asserts that a fresh `distinct_id` is used whenever there is no
+   active stored opt-in — including when an inactive installation UUID remains on disk from a
+   since-disabled opt-in — that this `distinct_id` is not persisted, and that it changes between
+   processes.
 9. Failure-isolation tests make the sink and transport raise exceptions and assert identical
    results, artifacts, output, and exit codes.
 10. Transport tests enforce a bounded final flush and tolerate offline, timeout, rate-limit, and
     malformed-response cases.
 11. Integration tests use a fake PostHog transport; the test suite never sends real telemetry.
+12. Command-boundary tests assert that a completed run exiting 1 or 2 reports
+    `process_outcome:success`; that a post-run artifact-write or report-render failure reports a
+    non-success outcome with the matching `failure_stage` and `*_artifact:error` even though
+    `telemetry_run_id` is non-null; and that `failure_stage` is set exactly when the outcome is not
+    success.
+13. Correlation tests assert every event of one invocation shares `telemetry_command_id`, and that
+    `telemetry_run_id` links `graphcheck_command_completed` to its engine run.
+14. Allowlist tests assert that unknown actions, templates, error codes, exception types, and stages
+    map to `unknown`/`custom`, and that no coarse cardinality bucket appears in any payload.
+15. A `graphcheck_profile_completed` test covers complete, partial, and error outcomes — including a
+    setup failure before profiling starts — asserts profiler-specific stages and `partial_reason`,
+    exercises the per-stage timings, and asserts no profiled graph content leaves the process.
 
 ## Acceptance criteria
 
 The specification is satisfied when:
 
 - the engine emits the six event types with the invariants above;
-- only the five allowlisted PostHog event names can leave the process;
-- telemetry is off by default and cannot be enabled by a checked-in project;
+- only the six allowlisted PostHog event names can leave the process;
+- telemetry is off by default, persists its opt-in across upgrades, and cannot be enabled by a
+  checked-in project;
 - the PostHog SDK is absent from the engine dependency boundary;
-- no graph content, stable project/check identity, check verdict, credentials, path, query, or
-  free-form diagnostic text appears in telemetry;
+- no graph content, coarse graph cardinality, stable project/check identity, check verdict,
+  credentials, path, query, or free-form diagnostic text appears in telemetry;
+- `process_outcome` reflects operational failure only: a completed run exiting 1 or 2 is `success`,
+  while an independent post-run artifact/report failure is non-success even with a run present;
 - telemetry failure has no observable effect except optional local debug output;
 - the proposed reliability, performance, adoption, activation, and retention dashboards can be
   built exclusively from the allowlisted fields.
@@ -529,5 +771,6 @@ The specification is satisfied when:
 - `src/graphcheck/telemetry/posthog.py` — optional, best-effort PostHog adapter.
 - engine instrumentation at the run, probe, query, check, terminal, and unexpected-fault
   boundaries.
-- CLI instrumentation for `graphcheck_command_completed` and telemetry controls.
-- unit, property, snapshot, failure-isolation, and integration tests described above.
+- CLI instrumentation for `graphcheck_command_completed`, `graphcheck_profile_completed`, and
+  telemetry controls.
+- unit, property, snapshot, failure-isolation, and integration tests described above
