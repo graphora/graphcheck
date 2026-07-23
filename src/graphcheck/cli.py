@@ -2,11 +2,14 @@ import json
 import logging
 import shutil
 import sys
+import time
 import uuid
 import webbrowser
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 
 import typer
@@ -38,6 +41,24 @@ from graphcheck.reporting import (
     write_html_report,
     write_results,
 )
+from graphcheck.telemetry.events import EventOutcome
+from graphcheck.telemetry.policy import (
+    ArtifactOutcome,
+    CliFailureStage,
+    CommandAction,
+    CommandName,
+    OutputMode,
+    ProcessOutcome,
+    SafeErrorCode,
+    assert_private_payload,
+    disable_telemetry,
+    enable_telemetry,
+    reset_installation_id,
+    resolve_consent,
+    safe_command,
+)
+from graphcheck.telemetry.posthog import telemetry_delivery_configured
+from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 
 _DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
@@ -48,6 +69,104 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+telemetry_app = typer.Typer(
+    name="telemetry",
+    help="Manage anonymous opt-in product telemetry.",
+    no_args_is_help=True,
+)
+app.add_typer(telemetry_app, name="telemetry")
+
+_COMMAND_TELEMETRY: ContextVar[CommandTelemetryRuntime | None] = ContextVar(
+    "graphcheck_command_telemetry",
+    default=None,
+)
+
+
+def _telemetry_command(command: CommandName):
+    def decorate(function):
+        @wraps(function)
+        def instrumented(*args, **kwargs):
+            runtime = _command_telemetry()
+            owns_runtime = runtime is None
+            token = None
+            if runtime is None:
+                output_mode = (
+                    OutputMode.JSON if kwargs.get("json_output") is True else OutputMode.HUMAN
+                )
+                runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+                token = _COMMAND_TELEMETRY.set(runtime)
+            runtime.mark_callback_entered()
+            try:
+                return function(*args, **kwargs)
+            except typer.Exit:
+                raise
+            except Exception:
+                if runtime.process_outcome is ProcessOutcome.SUCCESS:
+                    runtime.fail(
+                        ProcessOutcome.UNEXPECTED_ERROR,
+                        CliFailureStage.PROJECT_DISCOVERY,
+                        SafeErrorCode.UNKNOWN,
+                    )
+                raise
+            finally:
+                if owns_runtime:
+                    with suppress(Exception):
+                        runtime.finish()
+                    assert token is not None
+                    _COMMAND_TELEMETRY.reset(token)
+
+        return instrumented
+
+    return decorate
+
+
+def _command_telemetry() -> CommandTelemetryRuntime | None:
+    return _COMMAND_TELEMETRY.get()
+
+
+def cli() -> None:
+    """Run Typer behind the true command boundary, including argument-parsing failures."""
+
+    arguments = tuple(sys.argv[1:])
+    command = _command_from_argv(arguments)
+    if command is CommandName.TELEMETRY:
+        app()
+        return
+
+    output_mode = OutputMode.JSON if "--json" in arguments else OutputMode.HUMAN
+    runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+    token = _COMMAND_TELEMETRY.set(runtime)
+    try:
+        app()
+    except SystemExit as exc:
+        if not runtime.callback_entered and exc.code not in {None, 0}:
+            runtime.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.CONFIG_LOAD,
+                SafeErrorCode.CONFIG_INVALID,
+            )
+        raise
+    except Exception:
+        if runtime.process_outcome is ProcessOutcome.SUCCESS:
+            runtime.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                CliFailureStage.CONFIG_LOAD,
+                SafeErrorCode.UNKNOWN,
+            )
+        raise
+    finally:
+        with suppress(Exception):
+            runtime.finish()
+        _COMMAND_TELEMETRY.reset(token)
+
+
+def _command_from_argv(arguments: Sequence[str]) -> CommandName:
+    for argument in arguments:
+        if argument == "--":
+            break
+        if not argument.startswith("-"):
+            return safe_command(argument)
+    return CommandName.OTHER
 
 
 def _version(value: bool) -> None:
@@ -70,7 +189,74 @@ def main(
     logging.getLogger(_NEO4J_NOTIFICATION_LOGGER).setLevel(logging.ERROR)
 
 
+@telemetry_app.command("enable")
+def telemetry_enable() -> None:
+    """Enable anonymous telemetry for this user."""
+
+    started = time.monotonic()
+    before = resolve_consent()
+    enable_telemetry()
+    state = resolve_consent()
+    typer.echo("Anonymous GraphCheck telemetry is enabled.")
+    if not telemetry_delivery_configured():
+        typer.echo("Telemetry delivery is not configured in this build; consent remains stored.")
+    # This is the single telemetry control action that may emit: consent exists only after the
+    # state has been stored, so construct the command runtime at that point.
+    try:
+        if before.enabled or not state.enabled:
+            return
+        runtime = CommandTelemetryRuntime.start(
+            CommandName.TELEMETRY,
+            action=CommandAction.ENABLE,
+            consent=state,
+        )
+        runtime.started_perf = started
+        runtime.finish()
+    except Exception:
+        pass
+
+
+@telemetry_app.command("disable")
+def telemetry_disable() -> None:
+    """Disable telemetry without sending an event."""
+
+    disable_telemetry()
+    typer.echo("Anonymous GraphCheck telemetry is disabled.")
+
+
+@telemetry_app.command("status")
+def telemetry_status() -> None:
+    """Show the effective user/process telemetry state."""
+
+    state = resolve_consent()
+    typer.echo(f"Telemetry: {'enabled' if state.enabled else 'disabled'}")
+    typer.echo(f"Source: {state.source.value}")
+    typer.echo(f"Delivery: {'configured' if telemetry_delivery_configured() else 'not configured'}")
+    if state.renewal_required:
+        typer.echo("Consent renewal is required for the current telemetry consent version.")
+
+
+@telemetry_app.command("preview")
+def telemetry_preview() -> None:
+    """Print representative sanitized payloads without sending them."""
+
+    payload = _telemetry_preview_payload()
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@telemetry_app.command("reset-id")
+def telemetry_reset_id() -> None:
+    """Break installation linkage by replacing or clearing the stored ID."""
+
+    state = reset_installation_id()
+    if state.enabled:
+        typer.echo("Telemetry installation ID was reset; telemetry remains enabled.")
+    else:
+        typer.echo("Inactive telemetry installation ID was cleared.")
+
+
 @app.command()
+@_telemetry_command(CommandName.INIT)
 def init() -> None:
     """Scaffold a new GraphCheck project in the current directory."""
     root = Path.cwd()
@@ -85,19 +271,32 @@ def init() -> None:
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
+    probe_started = time.monotonic()
     try:
         trace = init_trace(profile_name, profile)
     except GraphCheckError as exc:
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.record_probe(
+                started_perf=probe_started,
+                outcome=EventOutcome.ERROR,
+            )
         typer.echo(f"Neo4j was not detected: {exc.error.code}")
         typer.echo(exc.error.message)
         typer.echo(f"Fix: {exc.error.fix}")
     else:
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.record_probe(
+                started_perf=probe_started,
+                outcome=EventOutcome.SUCCESS,
+                target=trace.target,
+            )
         typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
         typer.echo(f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}")
     typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
 
 
 @app.command()
+@_telemetry_command(CommandName.DEBUG)
 def debug(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
     json_output: bool = typer.Option(False, "--json", help="Emit the stable debug JSON trace."),
@@ -108,7 +307,14 @@ def debug(
         root = find_project_root()
         profiles = load_profiles(root)
         profile_name, selected = select_profile(profiles, profile)
+        probe_started = time.monotonic()
         trace = debug_trace(profile_name, selected)
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.record_probe(
+                started_perf=probe_started,
+                outcome=EventOutcome.SUCCESS,
+                target=trace.target,
+            )
         trace = replace(
             trace,
             blocked_checks=tuple(
@@ -119,6 +325,17 @@ def debug(
             ),
         )
     except GraphCheckError as exc:
+        if (telemetry := _command_telemetry()) is not None:
+            if "probe_started" in locals():
+                telemetry.record_probe(
+                    started_perf=probe_started,
+                    outcome=EventOutcome.ERROR,
+                )
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
         payload = error_json(profile_name, exc.error)
         if json_output:
             typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -173,6 +390,7 @@ def debug(
 
 
 @app.command()
+@_telemetry_command(CommandName.REPORT)
 def report(
     report_id: str | None = typer.Argument(
         None,
@@ -213,6 +431,17 @@ def report(
     ),
 ) -> None:
     """Open, list, compare, prune, or filter generated reports."""
+    telemetry = _command_telemetry()
+    if telemetry is not None:
+        telemetry.set_action(
+            _report_action(
+                open_report=open_report,
+                list_reports=list_reports,
+                compare=compare,
+                prune=prune,
+                failures_only=failures_only,
+            )
+        )
     _validate_report_options(
         open_report=open_report,
         report_id=report_id,
@@ -230,6 +459,12 @@ def report(
         root = find_project_root()
         config = load_project_config(root)
     except GraphCheckError as exc:
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
@@ -262,7 +497,29 @@ def report(
             records = discover_report_runs(runs_dir)
             record = find_report_run(records, report_id) if report_id else _latest_run(records)
             output = record.directory / "report.failures.html"
-            write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
+            render_started = time.monotonic()
+            try:
+                write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
+            except Exception as exc:
+                if telemetry is not None:
+                    telemetry.render_ms = max(
+                        0,
+                        round((time.monotonic() - render_started) * 1000),
+                    )
+                    telemetry.report_artifact = ArtifactOutcome.ERROR
+                    telemetry.fail(
+                        ProcessOutcome.UNEXPECTED_ERROR,
+                        CliFailureStage.REPORT_RENDER,
+                        SafeErrorCode.REPORT_RENDER_FAILED,
+                    )
+                typer.echo(f"report.error: Could not render {output}: {exc}", err=True)
+                raise typer.Exit(1) from exc
+            if telemetry is not None:
+                telemetry.render_ms = max(
+                    0,
+                    round((time.monotonic() - render_started) * 1000),
+                )
+                telemetry.report_artifact = ArtifactOutcome.WRITTEN
             typer.echo(f"Wrote {output}")
             if open_report:
                 _open_html_report(output)
@@ -275,6 +532,23 @@ def report(
             else:
                 _open_html_report(_latest_html_report(runs_dir))
     except ReportHistoryError as exc:
+        if telemetry is not None:
+            render_failed = (
+                failures_only and telemetry.report_artifact is not ArtifactOutcome.WRITTEN
+            )
+            if render_failed:
+                telemetry.report_artifact = ArtifactOutcome.ERROR
+            stage = (
+                CliFailureStage.REPORT_RENDER
+                if render_failed or not open_report
+                else CliFailureStage.REPORT_OPEN
+            )
+            code = (
+                SafeErrorCode.REPORT_RENDER_FAILED
+                if stage is CliFailureStage.REPORT_RENDER
+                else SafeErrorCode.REPORT_OPEN_FAILED
+            )
+            telemetry.fail(ProcessOutcome.USER_ERROR, stage, code)
         typer.echo(f"report.error: {exc}", err=True)
         raise typer.Exit(1) from exc
 
@@ -308,8 +582,141 @@ def _validate_report_options(
 
 
 def _report_usage_error(message: str) -> None:
+    if (telemetry := _command_telemetry()) is not None:
+        telemetry.fail(
+            ProcessOutcome.USER_ERROR,
+            CliFailureStage.CONFIG_LOAD,
+            SafeErrorCode.CONFIG_INVALID,
+        )
     typer.echo(f"report.usage: {message}", err=True)
     raise typer.Exit(2)
+
+
+def _report_action(
+    *,
+    open_report: bool,
+    list_reports: bool,
+    compare: tuple[str, str] | None,
+    prune: bool,
+    failures_only: bool,
+) -> CommandAction | None:
+    if list_reports:
+        return CommandAction.LIST
+    if compare is not None:
+        return CommandAction.COMPARE
+    if prune:
+        return CommandAction.PRUNE
+    if failures_only:
+        return CommandAction.FAILURES_ONLY
+    if open_report:
+        return CommandAction.OPEN
+    return None
+
+
+def _cli_stage_for_error(code: str) -> CliFailureStage:
+    if code == "project.missing":
+        return CliFailureStage.PROJECT_DISCOVERY
+    if code.startswith("profile."):
+        return CliFailureStage.PROFILE_LOAD
+    if "suite" in code or "checks_" in code:
+        return CliFailureStage.SUITE_LOAD
+    if code.startswith("neo4j."):
+        return CliFailureStage.PROBE
+    if code.startswith("report."):
+        return CliFailureStage.REPORT_RENDER
+    return CliFailureStage.CONFIG_LOAD
+
+
+def _telemetry_preview_payload() -> dict[str, object]:
+    common = {
+        "telemetry_schema_version": "1.0",
+        "consent_version": "1.0",
+        "graphcheck_version": __version__,
+        "distinct_id": "<installation-uuid>",
+        "session_id": "<process-uuid>",
+        "telemetry_command_id": "<command-uuid>",
+        "process_person_profile": False,
+        "geoip_enrichment": False,
+        "$process_person_profile": False,
+        "$geoip_disable": True,
+    }
+    events = [
+        {
+            "event": "graphcheck_run_started",
+            "properties": {
+                **common,
+                "telemetry_run_id": "<run-uuid>",
+                "suite_count": 1,
+                "selected_check_count": 3,
+                "uses_sampling": True,
+                "uses_baselines": False,
+                "fail_fast_enabled": False,
+            },
+        },
+        {
+            "event": "graphcheck_check_processed",
+            "properties": {
+                **common,
+                "telemetry_run_id": "<run-uuid>",
+                "check_sequence": 1,
+                "pattern": "conformance",
+                "template": "existence",
+                "processing_outcome": "completed",
+                "query_count": 1,
+            },
+        },
+        {
+            "event": "graphcheck_run_completed",
+            "properties": {
+                **common,
+                "telemetry_run_id": "<run-uuid>",
+                "terminal_kind": "finished",
+                "outcome": "complete",
+                "selected_check_count": 3,
+                "query_count": 3,
+            },
+        },
+        {
+            "event": "graphcheck_engine_faulted",
+            "properties": {
+                **common,
+                "telemetry_run_id": "<run-uuid>",
+                "engine_stage": "finalize",
+                "exception_type": "RuntimeError",
+                "safe_error_code": "engine.unexpected",
+                "elapsed_ms": 125,
+            },
+        },
+        {
+            "event": "graphcheck_command_completed",
+            "properties": {
+                **common,
+                "command": "run",
+                "action": None,
+                "process_outcome": "success",
+                "failure_stage": None,
+                "telemetry_run_id": "<run-uuid>",
+            },
+        },
+        {
+            "event": "graphcheck_profile_completed",
+            "properties": {
+                **common,
+                "outcome": "complete",
+                "duration_ms": 900,
+                "schema_ms": 200,
+                "property_coverage_ms": 400,
+                "degree_distribution_ms": 200,
+                "deadline_exhausted": False,
+                "last_completed_stage": "degree_distribution",
+                "partial_reason": None,
+                "safe_error_code": None,
+            },
+        },
+    ]
+    for event in events:
+        assert_private_payload(event["properties"])
+    return {"sent": False, "events": events}
 
 
 def _print_report_command_help() -> None:
@@ -354,6 +761,7 @@ def _open_html_report(path: Path) -> None:
 
 
 @app.command("run")
+@_telemetry_command(CommandName.RUN)
 def run_command(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
     select: list[str] | None = typer.Option(  # noqa: B008 - Typer declaration
@@ -379,6 +787,8 @@ def run_command(
     runs_dir: Path | None = None
     tags: list[str] = []
     client: Neo4jClient | None = None
+    setup_started = time.monotonic()
+    telemetry = _command_telemetry()
     try:
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
@@ -393,11 +803,14 @@ def run_command(
         profiles = load_profiles(root)
         _, selected_profile = select_profile(profiles, profile)
         client = Neo4jClient(selected_profile)
+        if telemetry is not None:
+            telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
             results = Engine(
                 client,
                 baselines=DirectoryBaselineProvider(artifacts / "baselines"),
                 progress_callback=progress_callback,
+                event_sink=telemetry.event_sink if telemetry is not None else None,
             ).run(
                 suite_inputs,
                 tags=tags,
@@ -405,6 +818,14 @@ def run_command(
                 selection_suites=requested_suites or None,
             )
     except GraphCheckError as exc:
+        if telemetry is not None:
+            if telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
         if runs_dir is None:
             _print_setup_error(exc.error)
             raise typer.Exit(3) from exc
@@ -415,6 +836,26 @@ def run_command(
             fail_fast=fail_fast,
         )
     except Exception as exc:
+        if telemetry is not None:
+            if telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+            telemetry.fail(
+                (
+                    ProcessOutcome.ENGINE_ERROR
+                    if telemetry.telemetry_run_id is not None
+                    else ProcessOutcome.UNEXPECTED_ERROR
+                ),
+                (
+                    CliFailureStage.ENGINE
+                    if telemetry.telemetry_run_id is not None
+                    else CliFailureStage.CONFIG_LOAD
+                ),
+                (
+                    SafeErrorCode.ENGINE_UNEXPECTED
+                    if telemetry.telemetry_run_id is not None
+                    else SafeErrorCode.CONFIG_INVALID
+                ),
+            )
         error = CheckError(
             code="run.configuration",
             message=f"GraphCheck could not prepare the run: {type(exc).__name__}: {exc}",
@@ -436,13 +877,66 @@ def run_command(
             except Exception as exc:  # a close failure must not discard a completed run artifact
                 typer.echo(f"Warning: Neo4j driver cleanup failed: {exc}", err=True)
 
+    if (
+        results.run.status.value == "failed"
+        and telemetry is not None
+        and telemetry.process_outcome is ProcessOutcome.SUCCESS
+    ):
+        telemetry.fail(
+            ProcessOutcome.ENGINE_ERROR,
+            CliFailureStage.ENGINE,
+            results.run.error.code if results.run.error is not None else None,
+        )
+
+    artifact_started = time.monotonic()
+    render_times: list[int] = []
+    render_failed = False
+
+    def observe_render(duration_ms: int, succeeded: bool) -> None:
+        nonlocal render_failed
+        render_times.append(duration_ms)
+        render_failed = render_failed or not succeeded
+
     try:
         assert runs_dir is not None
-        results_path, report_path = _write_run_artifacts(results, runs_dir)
+        results_path, report_path = _write_run_artifacts(
+            results,
+            runs_dir,
+            render_observer=observe_render if telemetry is not None else None,
+        )
     except Exception as exc:
+        if telemetry is not None:
+            telemetry.render_ms = sum(render_times) if render_times else None
+            telemetry.mark_artifacts(
+                artifact_started,
+                results=ArtifactOutcome.ERROR,
+                report=ArtifactOutcome.ERROR,
+                exclude_ms=sum(render_times),
+            )
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                (
+                    CliFailureStage.REPORT_RENDER
+                    if render_failed
+                    else CliFailureStage.ARTIFACT_WRITE
+                ),
+                (
+                    SafeErrorCode.REPORT_RENDER_FAILED
+                    if render_failed
+                    else SafeErrorCode.ARTIFACT_WRITE_FAILED
+                ),
+            )
         typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
         typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
         raise typer.Exit(3) from exc
+    if telemetry is not None:
+        telemetry.render_ms = sum(render_times)
+        telemetry.mark_artifacts(
+            artifact_started,
+            results=ArtifactOutcome.WRITTEN,
+            report=ArtifactOutcome.WRITTEN,
+            exclude_ms=sum(render_times),
+        )
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
@@ -547,7 +1041,12 @@ def _project_path(root: Path, configured: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
+def _write_run_artifacts(
+    results: Results,
+    runs_dir: Path,
+    *,
+    render_observer: Callable[[int, bool], None] | None = None,
+) -> tuple[Path, Path]:
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
     historical_dir = runs_dir / results.run.id
@@ -557,13 +1056,18 @@ def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
     ):
         raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
 
-    _publish_run_directory(results, historical_dir)
+    _publish_run_directory(results, historical_dir, render_observer=render_observer)
     latest_dir = runs_dir / "latest"
-    _publish_run_directory(results, latest_dir)
+    _publish_run_directory(results, latest_dir, render_observer=render_observer)
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
-def _publish_run_directory(results: Results, directory: Path) -> None:
+def _publish_run_directory(
+    results: Results,
+    directory: Path,
+    *,
+    render_observer: Callable[[int, bool], None] | None = None,
+) -> None:
     """Stage and swap a complete results/report pair without exposing a mixed pair."""
 
     parent = directory.parent
@@ -575,7 +1079,21 @@ def _publish_run_directory(results: Results, directory: Path) -> None:
     previous_moved = False
     try:
         write_results(results, staging / "results.json")
-        write_html_report(results, staging / "report.html")
+        render_started = time.monotonic()
+        try:
+            write_html_report(results, staging / "report.html")
+        except Exception:
+            if render_observer is not None:
+                render_observer(
+                    max(0, round((time.monotonic() - render_started) * 1000)),
+                    False,
+                )
+            raise
+        if render_observer is not None:
+            render_observer(
+                max(0, round((time.monotonic() - render_started) * 1000)),
+                True,
+            )
 
         if directory.exists():
             is_junction = getattr(directory, "is_junction", lambda: False)

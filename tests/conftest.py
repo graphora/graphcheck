@@ -22,6 +22,16 @@ _NEO4J_PASSWORD = "graphora-test"
 _NEO4J_RESTRICTED_PASSWORD = "graphora-restricted-test"
 
 
+@pytest.fixture(autouse=True)
+def prevent_real_posthog_delivery(monkeypatch):
+    """Tests may inject a fake transport, but never inherit a release/operator project key."""
+
+    from graphcheck.telemetry import posthog
+
+    monkeypatch.delenv("GRAPHCHECK_POSTHOG_API_KEY", raising=False)
+    monkeypatch.setattr(posthog, "POSTHOG_PROJECT_API_KEY", None)
+
+
 @pytest.fixture(params=NEO4J_IMAGES)
 def neo4j_profile(request):
     from testcontainers.neo4j import Neo4jContainer
