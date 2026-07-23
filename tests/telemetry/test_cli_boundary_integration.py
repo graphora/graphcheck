@@ -1,8 +1,11 @@
 import sys
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
 
+from graphcheck import __version__
 from graphcheck import cli as cli_module
 from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
@@ -10,6 +13,7 @@ from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.writer import load_results
+from graphcheck.telemetry.policy import enable_telemetry
 from graphcheck.telemetry.posthog import PostHogAdapter
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
@@ -187,3 +191,43 @@ def test_report_render_failure_marks_requested_artifact_and_stage(
     assert command["report_artifact"] == "error"
     assert command["render_ms"] is not None
     assert "private render failure" not in repr(command)
+
+
+@pytest.mark.parametrize(
+    "network_error",
+    [
+        OSError("network disabled: private air-gapped host"),
+        TimeoutError("private PostHog request timed out"),
+        ConnectionError("private PostHog connection refused"),
+    ],
+    ids=["offline", "timeout", "connection-refused"],
+)
+def test_posthog_network_failure_is_silent_and_does_not_change_cli_behavior(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    network_error,
+):
+    config = tmp_path / "telemetry.json"
+    enable_telemetry(path=config)
+    monkeypatch.setenv("GRAPHCHECK_TELEMETRY_CONFIG", str(config))
+    monkeypatch.setenv("GRAPHCHECK_POSTHOG_API_KEY", "phc_test")
+    calls = []
+
+    def fail_network(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise network_error
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_network)
+    started = time.monotonic()
+    exit_code = _invoke_entrypoint(monkeypatch, "--version")
+    elapsed = time.monotonic() - started
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out.strip() == f"graphcheck {__version__}"
+    assert captured.err == ""
+    assert len(calls) == 1
+    assert elapsed < 1.0
+    assert str(network_error) not in captured.out
+    assert str(network_error) not in captured.err
