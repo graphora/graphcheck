@@ -401,6 +401,7 @@ def debug(
 
 
 @app.command()
+@_telemetry_command(CommandName.PROFILE)
 def profile(
     profile: str | None = typer.Option(
         None,
@@ -415,29 +416,110 @@ def profile(
 ) -> None:
     """Generate a baseline profile for the connected Neo4j graph."""
 
+    telemetry = _command_telemetry()
+    setup_started = time.monotonic()
+    profiling_started = False
+    unexpected_stage = CliFailureStage.PROJECT_DISCOVERY
     try:
         root = find_project_root()
+        unexpected_stage = CliFailureStage.PROFILE_LOAD
         profiles = load_profiles(root)
         _, selected = select_profile(profiles, profile)
 
+        unexpected_stage = CliFailureStage.CLIENT_SETUP
         client = Neo4jClient(selected)
+        if telemetry is not None:
+            telemetry.mark_setup(setup_started)
         try:
-            baseline = build_profile(client)
+            profiling_started = True
+            unexpected_stage = CliFailureStage.PROFILE_COLLECTION
+            observer = (
+                telemetry.record_profile_stage
+                if telemetry is not None and telemetry.enabled
+                else None
+            )
+            result_observer = (
+                telemetry.record_profile_result
+                if telemetry is not None and telemetry.enabled
+                else None
+            )
+            baseline = (
+                build_profile(
+                    client,
+                    telemetry_observer=observer,
+                    telemetry_result_observer=result_observer,
+                )
+                if observer is not None
+                else build_profile(client)
+            )
         finally:
             client.close()
-
-        path = write_baseline(baseline)
-        if json_output:
-            typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
-        else:
-            _print_profile_summary(
-                baseline,
-                path,
-            )
     except GraphCheckError as exc:
+        if telemetry is not None:
+            if telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                (
+                    CliFailureStage.PROFILE_COLLECTION
+                    if profiling_started
+                    else _cli_stage_for_error(exc.error.code)
+                ),
+                exc.error.code,
+            )
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
+    except Exception:
+        if telemetry is not None and telemetry.process_outcome is ProcessOutcome.SUCCESS:
+            if telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                unexpected_stage,
+                (
+                    SafeErrorCode.PROFILE_COLLECTION_FAILED
+                    if unexpected_stage is CliFailureStage.PROFILE_COLLECTION
+                    else SafeErrorCode.UNKNOWN
+                ),
+            )
+        raise
+
+    if telemetry is not None and not telemetry.profile_result_recorded:
+        telemetry.record_profile_result(
+            baseline.status,
+            None if baseline.status is ProfileStatus.COMPLETE else "unknown",
+        )
+    artifact_started = time.monotonic()
+    try:
+        path = write_baseline(baseline)
+    except OSError as exc:
+        if telemetry is not None:
+            telemetry.baseline_artifact = ArtifactOutcome.ERROR
+            telemetry.artifact_write_ms = max(
+                0,
+                round((time.monotonic() - artifact_started) * 1000),
+            )
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                CliFailureStage.BASELINE_WRITE,
+                SafeErrorCode.BASELINE_WRITE_FAILED,
+            )
+        typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if telemetry is not None:
+        telemetry.baseline_artifact = ArtifactOutcome.WRITTEN
+        telemetry.artifact_write_ms = max(
+            0,
+            round((time.monotonic() - artifact_started) * 1000),
+        )
+    if json_output:
+        typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
+    else:
+        _print_profile_summary(
+            baseline,
+            path,
+        )
 
 
 @app.command()

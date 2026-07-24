@@ -217,6 +217,9 @@ class TelemetryCollector:
             elif isinstance(event, RunFinished):
                 properties = _event_properties(event)
                 properties["terminal_kind"] = "finished"
+                properties["probe_outcome"] = (
+                    self._probe.outcome.value if self._probe is not None else None
+                )
                 output.append(PostHogEvent("graphcheck_run_completed", properties))
             elif isinstance(event, EngineFaulted):
                 fault = _event_properties(event)

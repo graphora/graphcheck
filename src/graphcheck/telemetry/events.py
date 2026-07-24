@@ -54,6 +54,7 @@ class Pattern(StrEnum):
     COMPETENCY_SHAPE = "competency-shape"
     COMPETENCY_REGRESSION = "competency-regression"
     DRIFT = "drift"
+    UNKNOWN = "unknown"
 
 
 class Template(StrEnum):

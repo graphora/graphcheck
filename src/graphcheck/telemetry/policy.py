@@ -344,6 +344,7 @@ _ERROR_CODE_MAP.update(
     {
         "profile.not_found": SafeErrorCode.PROFILE_INVALID,
         "profile.password_missing": SafeErrorCode.PROFILE_INVALID,
+        "profile.counts_unavailable": SafeErrorCode.PROFILE_COLLECTION_FAILED,
         "run.suite_invalid": SafeErrorCode.SUITE_INVALID,
         "run.checks_missing": SafeErrorCode.SUITE_INVALID,
         "run.checks_unreadable": SafeErrorCode.SUITE_INVALID,
@@ -470,6 +471,7 @@ _RUN_FINISHED_PROPERTY_KEYS = _ENGINE_ENVELOPE_PROPERTY_KEYS | {
     "query_total_ms",
     "query_max_ms",
     "probe_ms",
+    "probe_outcome",
     "budget_remaining_ms",
     "early_stopped",
     "deadline_exhausted",
@@ -845,7 +847,7 @@ def safe_pattern(value: object) -> Pattern:
     except ValueError:
         # Engine pattern inputs are already strict. This fallback can only be reached by an
         # integration bug and must still avoid forwarding the arbitrary value.
-        return Pattern.CONFORMANCE
+        return Pattern.UNKNOWN
 
 
 def safe_template(value: object) -> Template:

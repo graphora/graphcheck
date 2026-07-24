@@ -210,6 +210,7 @@ Expected failed runs use `outcome:failed`; they do not emit `EngineFaulted`.
 | `query_total_ms` | non-negative integer | Sum of query durations. |
 | `query_max_ms` | non-negative integer or null | Slowest query duration. |
 | `probe_ms` | non-negative integer or null | Target-probe duration. |
+| `probe_outcome` | `success`, `error`, `timeout`, or null | Target-probe outcome. |
 | `budget_remaining_ms` | non-negative integer or null | Engine budget remaining at completion. |
 | `early_stopped` | boolean | The run terminated before all selected checks were processed. Combined with `fail_fast_enabled` and `deadline_exhausted` this permits inferring a fail-fast stop at the run level (invariant 18); it never identifies the check or its verdict. |
 | `deadline_exhausted` | boolean | Engine budget was exhausted. |
@@ -533,7 +534,7 @@ diff_compare | artifact_write | report_render | report_open
 ### Related closed enums (defined at their events)
 
 - `query_role`: `target_probe`, `parameter_resolution`, `sampling_population`, `check_measurement`, `evidence_collection`.
-- `pattern`: `conformance`, `competency-shape`, `competency-regression`, `drift`.
+- `pattern`: `conformance`, `competency-shape`, `competency-regression`, `drift`, `unknown`.
 - `skip_reason`: `generated`, `unsupported`, `not_run`.
 - `partial_reason_codes` (run): `suite_input_invalid`, `unsupported_check`, `partial_baseline`, `baseline_measurement_missing`, `deadline_exhausted`, `unknown`.
 - `partial_reason` (profile): `deadline_exhausted`, `property_coverage_incomplete`, `degree_distribution_incomplete`, `schema_incomplete`, `probe_incomplete`, `unknown`.

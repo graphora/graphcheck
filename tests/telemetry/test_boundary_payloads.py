@@ -104,6 +104,20 @@ def test_artifact_write_timing_excludes_separately_reported_render_time(monkeypa
     assert runtime.artifact_write_ms == 60
 
 
+def test_per_label_degree_timing_does_not_complete_the_aggregate_stage():
+    runtime = CommandTelemetryRuntime.start(
+        CommandName.PROFILE,
+        consent=ConsentState(False, ConsentSource.DEFAULT),
+    )
+
+    runtime.record_profile_stage("probe", "success", 5)
+    runtime.record_profile_stage("degree_distribution", "success", 10)
+    runtime.record_profile_stage("labels", "error", 20)
+
+    assert runtime.profile_degree_distribution_ms == 10
+    assert runtime.profile_last_completed_stage is ProfilerStage.PROBE
+
+
 @pytest.mark.parametrize(
     ("outcome", "partial_reason", "error_code", "last_stage"),
     [

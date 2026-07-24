@@ -155,6 +155,7 @@ field in the code allowlist differs from this document.
         "outcome",
         "partial_reason_codes",
         "probe_ms",
+        "probe_outcome",
         "query_count",
         "query_max_ms",
         "query_total_ms",

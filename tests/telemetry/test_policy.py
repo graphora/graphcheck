@@ -3,7 +3,7 @@ from uuid import UUID
 
 import pytest
 
-from graphcheck.telemetry.events import SafeErrorCode, Template
+from graphcheck.telemetry.events import Pattern, SafeErrorCode, Template
 from graphcheck.telemetry.policy import (
     CONSENT_VERSION,
     ConsentSource,
@@ -14,6 +14,7 @@ from graphcheck.telemetry.policy import (
     resolve_consent,
     safe_error_code,
     safe_exception_type,
+    safe_pattern,
     safe_template,
 )
 
@@ -91,6 +92,8 @@ def test_reset_breaks_linkage_and_allowlists_map_unknown_values(tmp_path):
 
     assert reset.distinct_id == SECOND_ID
     assert safe_template("single-customer-secret-check") is Template.CUSTOM
+    assert safe_pattern("future-private-pattern") is Pattern.UNKNOWN
+    assert safe_error_code("profile.counts_unavailable") is SafeErrorCode.PROFILE_COLLECTION_FAILED
     assert safe_error_code("customer.secret.failure") is SafeErrorCode.UNKNOWN
 
 

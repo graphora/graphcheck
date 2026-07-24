@@ -9,6 +9,7 @@ from graphcheck import __version__
 from graphcheck import cli as cli_module
 from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
@@ -164,6 +165,182 @@ def test_completed_nonzero_run_is_success_and_correlates_all_events(
     assert "verdict" not in repr(recording_transport.calls)
     assert "private-database" not in repr(recording_transport.calls)
     assert "private-check" not in repr(recording_transport.calls)
+
+
+def test_profile_emits_dedicated_completion_with_probe_and_stage_timings(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    write_default_project(tmp_path)
+    write_default_profiles(tmp_path)
+    baseline = BaselineProfile.model_validate_json(
+        (FIXTURES / "baseline.json").read_text(encoding="utf-8")
+    )
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+
+    def profiled(
+        client,
+        *,
+        telemetry_observer=None,
+        telemetry_result_observer=None,
+    ):
+        assert telemetry_observer is not None
+        assert telemetry_result_observer is not None
+        telemetry_observer("probe", "success", 7, TARGET)
+        telemetry_observer("degree_distribution", "success", 3, None)
+        telemetry_observer("labels", "success", 10, None)
+        telemetry_observer("relationship_types", "success", 2, None)
+        telemetry_observer("constraints", "success", 1, None)
+        telemetry_observer("indexes", "success", 1, None)
+        telemetry_observer("property_coverage", "success", 4, None)
+        telemetry_result_observer("complete", None, False)
+        return baseline
+
+    monkeypatch.setattr(cli_module, "build_profile", profiled)
+
+    exit_code = _invoke_entrypoint(monkeypatch, "profile")
+
+    assert exit_code == 0
+    matches = [
+        properties
+        for name, properties in recording_transport.calls
+        if name == "graphcheck_profile_completed"
+    ]
+    assert len(matches) == 1
+    completion = matches[0]
+    assert completion["outcome"] == "complete"
+    assert completion["probe_outcome"] == "success"
+    assert completion["probe_duration_ms"] == 7
+    assert completion["schema_ms"] == 11
+    assert completion["property_coverage_ms"] == 4
+    assert completion["degree_distribution_ms"] == 3
+    assert completion["last_completed_stage"] == "property_coverage"
+    assert completion["server_version_major"] == 5
+    assert completion["server_version_minor"] == 18
+    assert client.closed is True
+    command = _command_event(recording_transport)
+    assert command["baseline_artifact"] == "written"
+    assert completion["telemetry_command_id"] == command["telemetry_command_id"]
+
+
+def test_profile_partial_uses_structured_reason_and_deadline_state(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    write_default_project(tmp_path)
+    write_default_profiles(tmp_path)
+    baseline = BaselineProfile.model_validate_json(
+        (FIXTURES / "baseline.json").read_text(encoding="utf-8")
+    ).model_copy(
+        update={
+            "status": ProfileStatus.PARTIAL,
+            "partial_reason": "private human diagnostic that must not be parsed or sent",
+        }
+    )
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+
+    def profiled(
+        client,
+        *,
+        telemetry_observer=None,
+        telemetry_result_observer=None,
+    ):
+        assert telemetry_observer is not None
+        assert telemetry_result_observer is not None
+        telemetry_observer("probe", "success", 7, TARGET)
+        telemetry_observer("labels", "timeout", 20, None)
+        telemetry_result_observer("partial", "deadline_exhausted", True)
+        return baseline
+
+    monkeypatch.setattr(cli_module, "build_profile", profiled)
+
+    exit_code = _invoke_entrypoint(monkeypatch, "profile")
+
+    assert exit_code == 0
+    completion = next(
+        properties
+        for name, properties in recording_transport.calls
+        if name == "graphcheck_profile_completed"
+    )
+    assert completion["outcome"] == "partial"
+    assert completion["partial_reason"] == "deadline_exhausted"
+    assert completion["deadline_exhausted"] is True
+    assert completion["last_completed_stage"] == "probe"
+    assert "private human diagnostic" not in repr(recording_transport.calls)
+
+
+def test_successful_profile_help_does_not_emit_profile_completion(
+    monkeypatch,
+    recording_transport,
+):
+    exit_code = _invoke_entrypoint(monkeypatch, "profile", "--help")
+
+    assert exit_code == 0
+    assert not any(name == "graphcheck_profile_completed" for name, _ in recording_transport.calls)
+    assert _command_event(recording_transport)["process_outcome"] == "success"
+
+
+def test_unexpected_profile_failure_is_classified_as_profile_collection(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    write_default_project(tmp_path)
+    write_default_profiles(tmp_path)
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+
+    def fail_profile(*args, **kwargs):
+        raise RuntimeError("private unexpected profiler failure")
+
+    monkeypatch.setattr(cli_module, "build_profile", fail_profile)
+    monkeypatch.setattr(sys, "argv", ["graphcheck", "profile"])
+
+    with pytest.raises(RuntimeError, match="private unexpected profiler failure"):
+        cli()
+
+    command = _command_event(recording_transport)
+    assert command["process_outcome"] == "unexpected_error"
+    assert command["failure_stage"] == "profile_collection"
+    assert command["safe_error_code"] == "profile.collection_failed"
+    completion = next(
+        properties
+        for name, properties in recording_transport.calls
+        if name == "graphcheck_profile_completed"
+    )
+    assert completion["outcome"] == "error"
+    assert completion["safe_error_code"] == "profile.collection_failed"
+    assert "private unexpected profiler failure" not in repr(recording_transport.calls)
+    assert client.closed is True
+
+
+def test_profile_setup_failure_still_emits_dedicated_completion(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = _invoke_entrypoint(monkeypatch, "profile")
+
+    assert exit_code == 1
+    matches = [
+        properties
+        for name, properties in recording_transport.calls
+        if name == "graphcheck_profile_completed"
+    ]
+    assert len(matches) == 1
+    completion = matches[0]
+    assert completion["outcome"] == "error"
+    assert completion["last_completed_stage"] is None
+    assert completion["safe_error_code"] == "project.missing"
 
 
 def test_report_render_failure_marks_requested_artifact_and_stage(

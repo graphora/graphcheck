@@ -60,7 +60,11 @@ def test_engine_emits_ordered_reconciled_events_without_content():
     terminal = collector.events[-1]
     assert terminal.query_count == 1
     assert terminal.selected_check_count == 1
-    payload_text = repr([event.properties for event in collector.posthog_events()])
+    outbound = collector.posthog_events()
+    completion = next(event for event in outbound if event.name == "graphcheck_run_completed")
+    assert completion.properties["probe_ms"] == 0
+    assert completion.properties["probe_outcome"] == "success"
+    payload_text = repr([event.properties for event in outbound])
     for secret in (
         "secret-database",
         "secret-fingerprint",
