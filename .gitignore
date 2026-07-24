@@ -51,6 +51,7 @@ coverage.xml
 .pytest_cache/
 .test-tmp
 cover/
+.test-tmp/
 
 # Translations
 *.mo
@@ -222,3 +223,6 @@ __marimo__/
 profiles.yml
 .graphcheck/
 .superpowers/
+
+
+.test-tmp/
