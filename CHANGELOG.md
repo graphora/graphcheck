@@ -34,6 +34,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
   validation, redacted findings, mandatory node evidence, and confidence intervals.
 - A pure deterministic severity-weighted scorer with exact half-even rounding, execution
   coverage, and independently calculated per-suite scores for the machine-readable contract.
+- `graphcheck generate` with disclosed, allow-listed baseline/document transmission; pinned
+  Instructor adapters for Anthropic, OpenAI, and explicit-endpoint Ollama; one correction request;
+  candidate and final SPEC-02 validation; inert generated markers; atomic exclusive YAML
+  publication; stable human/JSON output; and network-free fake-provider integration coverage.
 
 ### Changed
 

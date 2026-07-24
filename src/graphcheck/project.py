@@ -6,6 +6,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from graphcheck.errors import GraphCheckError, profile_invalid
+from graphcheck.generation.config import GenerateConfig
 
 PROJECT_FILE = "graphcheck.yml"
 PROFILES_FILE = "profiles.yml"
@@ -19,6 +20,7 @@ class ProjectConfig(BaseModel):
     project: str
     checks: str
     artifacts: str
+    generate: GenerateConfig | None = None
 
 
 def default_project_config() -> ProjectConfig:
@@ -51,7 +53,7 @@ def load_project_config(root: Path) -> ProjectConfig:
 def write_default_project(root: Path) -> None:
     config = default_project_config()
     (root / PROJECT_FILE).write_text(
-        yaml.safe_dump(config.model_dump(), sort_keys=False),
+        yaml.safe_dump(config.model_dump(exclude_none=True), sort_keys=False),
         encoding="utf-8",
     )
     (root / config.checks).mkdir(exist_ok=True)

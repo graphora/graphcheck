@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from pydantic import ValidationError
@@ -21,11 +22,18 @@ from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_p
 from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
+from graphcheck.generation.disclosure import GenerateDisclosure
+from graphcheck.generation.service import (
+    DroppedCandidate,
+    GenerateResult,
+    GenerationService,
+)
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
     ARTIFACTS_DIR,
     PROJECT_FILE,
+    default_project_config,
     ensure_gitignore_entries,
     find_project_root,
     load_project_config,
@@ -49,6 +57,7 @@ _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
 # Kept as an injection point for integrations that patched the original comparator.
 compare_baselines = compare
+generation_service_factory = GenerationService
 
 app = typer.Typer(
     name="graphcheck",
@@ -199,6 +208,11 @@ def profile(
 
     try:
         root = find_project_root()
+        config = (
+            load_project_config(root)
+            if (root / PROJECT_FILE).is_file()
+            else default_project_config()
+        )
         profiles = load_profiles(root)
         _, selected = select_profile(profiles, profile)
 
@@ -208,7 +222,7 @@ def profile(
         finally:
             client.close()
 
-        path = write_baseline(baseline)
+        path = write_baseline(baseline, root, config.artifacts)
         if json_output:
             typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
         else:
@@ -220,6 +234,95 @@ def profile(
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
+
+
+@app.command()
+def generate(
+    from_: Annotated[
+        Path | None,
+        typer.Option("--from", help="Baseline JSON; defaults to the latest valid snapshot."),
+    ] = None,
+    docs: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--docs",
+            help="UTF-8 domain document sent verbatim. Repeat for multiple files.",
+        ),
+    ] = None,
+    count: Annotated[
+        int,
+        typer.Option("--count", min=1, max=20, help="Approximate number of checks to propose."),
+    ] = 5,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a stable machine-readable result."),
+    ] = False,
+) -> None:
+    """Generate non-deterministic, inert check suggestions for human review."""
+
+    def disclose(event: GenerateDisclosure) -> None:
+        if json_output:
+            typer.echo(
+                json.dumps(event.as_json(), separators=(",", ":"), ensure_ascii=False),
+                err=True,
+            )
+        else:
+            typer.echo(event.render_human(), err=True)
+
+    def warn(candidate: DroppedCandidate) -> None:
+        if not json_output:
+            typer.echo(
+                f"Warning [{candidate.code}] {candidate.candidate}: {candidate.reason}",
+                err=True,
+            )
+
+    try:
+        root = find_project_root()
+        result = generation_service_factory().generate(
+            project_root=root,
+            baseline_from=from_,
+            document_paths=docs,
+            requested_count=count,
+            disclosure_sink=disclose,
+            warning_sink=warn,
+            invocation_dir=Path.cwd(),
+        )
+    except GraphCheckError as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "command": "generate",
+                        "status": "error",
+                        "error": exc.error.model_dump(mode="json"),
+                    },
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            typer.echo(f"Error [{exc.error.code}]: {exc.error.message}", err=True)
+            typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+    _render_generate_result(result, json_output=json_output)
+
+
+def _render_generate_result(result: GenerateResult, *, json_output: bool) -> None:
+    if json_output:
+        typer.echo(
+            json.dumps(
+                result.model_dump(mode="json"),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+        return
+    dropped = f" ({result.dropped} dropped)" if result.dropped else ""
+    typer.echo(
+        f"Wrote {result.written} generated checks to {result.path}{dropped}; "
+        "review them and remove generated: true to activate."
+    )
 
 
 @app.command()

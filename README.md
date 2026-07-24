@@ -200,10 +200,51 @@ baseline JSON from `<artifacts>/baselines/`, which is `.graphcheck/baselines/` b
 - `baseline: release-2026-07` resolves `release-2026-07.json`.
 - `baseline: latest` selects the lexicographically newest `.json` filename.
 
-The current CLI consumes compatible baseline/profile JSON but does not capture baselines itself. A
-missing, invalid, or incomplete requested measurement is an explicit check error, never a pass. See
+`graphcheck profile` captures timestamped baselines in that directory. A missing, invalid, or
+incomplete requested measurement is an explicit check error, never a pass. See
 [SPEC-04](docs/specs/SPEC-04%20Engine.md#baselines) for the accepted baseline shapes and resolution
 rules.
+
+## Generate check suggestions
+
+`graphcheck generate` turns the latest baseline profile and optional, explicitly named domain
+documents into non-deterministic check suggestions. The command discloses the destination and exact
+data categories before calling the configured provider. It never sends graph records, property
+values, credentials, target metadata, fingerprints, or profiler failure text.
+
+Generation is opt-in. Add one of these strict blocks to `graphcheck.yml`:
+
+```yaml
+generate:
+  provider: openai
+  model: gpt-5-mini
+  api_key_env: OPENAI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: ollama
+  model: qwen3:8b
+  api_key_env: null
+  base_url: http://localhost:11434/v1
+  temperature: 0
+```
+
+Anthropic and OpenAI require a populated environment variable named by `api_key_env`. Ollama
+requires an explicit `base_url` and may omit the key. Then run:
+
+```console
+graphcheck generate
+graphcheck generate --from .graphcheck/baselines/20260724T120000.000000.json \
+  --docs docs/domain-rules.md --count 5
+graphcheck generate --json
+```
+
+Documents must be regular UTF-8 files, are sent verbatim, and are limited to 256 KiB each and 1 MiB
+in total. Generated suites carry `generated: true` at both file and check level, so the engine
+validates but skips them without querying Neo4j. Review identifiers, Cypher, expectations,
+thresholds, and cost before removing both applicable markers to activate a check.
 
 ## Reliability and safety
 
@@ -221,7 +262,7 @@ rules.
 
 ## Configuration reference
 
-`graphcheck.yml` has three strict fields:
+`graphcheck.yml` has three required strict fields and an optional `generate` block:
 
 ```yaml
 project: graphcheck
