@@ -1,0 +1,419 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "apoc": {
+          "title": "Apoc",
+          "type": "boolean"
+        },
+        "count_store": {
+          "title": "Count Store",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "apoc",
+        "count_store"
+      ],
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "ConstraintProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "labels_or_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels Or Types",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Properties",
+          "type": "array"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "labels_or_types",
+        "properties"
+      ],
+      "title": "ConstraintProfile",
+      "type": "object"
+    },
+    "DegreeDistribution": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum": {
+          "minimum": 0,
+          "title": "Maximum",
+          "type": "integer"
+        },
+        "median": {
+          "minimum": 0,
+          "title": "Median",
+          "type": "number"
+        },
+        "p95": {
+          "minimum": 0,
+          "title": "P95",
+          "type": "number"
+        },
+        "p99": {
+          "minimum": 0,
+          "title": "P99",
+          "type": "number"
+        }
+      },
+      "required": [
+        "median",
+        "p95",
+        "p99",
+        "maximum"
+      ],
+      "title": "DegreeDistribution",
+      "type": "object"
+    },
+    "GraphSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "constraints": {
+          "items": {
+            "$ref": "#/$defs/ConstraintProfile"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "indexes": {
+          "items": {
+            "$ref": "#/$defs/IndexProfile"
+          },
+          "title": "Indexes",
+          "type": "array"
+        },
+        "labels": {
+          "items": {
+            "$ref": "#/$defs/LabelProfile"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "relationship_types": {
+          "items": {
+            "$ref": "#/$defs/RelationshipTypeProfile"
+          },
+          "title": "Relationship Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "labels",
+        "relationship_types",
+        "constraints",
+        "indexes"
+      ],
+      "title": "GraphSchema",
+      "type": "object"
+    },
+    "IndexProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "labels_or_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels Or Types",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Properties",
+          "type": "array"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "labels_or_types",
+        "properties"
+      ],
+      "title": "IndexProfile",
+      "type": "object"
+    },
+    "LabelProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "degree_distribution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DegreeDistribution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/ProfileProperty"
+          },
+          "title": "Properties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "count",
+        "properties",
+        "degree_distribution"
+      ],
+      "title": "LabelProfile",
+      "type": "object"
+    },
+    "ProfileMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "title": "Generated At",
+          "type": "string"
+        },
+        "graphcheck_version": {
+          "title": "Graphcheck Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "generated_at",
+        "graphcheck_version"
+      ],
+      "title": "ProfileMetadata",
+      "type": "object"
+    },
+    "ProfileProperty": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "ProfileProperty",
+      "type": "object"
+    },
+    "ProfileStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "node_count": {
+          "minimum": 0,
+          "title": "Node Count",
+          "type": "integer"
+        },
+        "property_coverage": {
+          "items": {
+            "$ref": "#/$defs/PropertyCoverage"
+          },
+          "title": "Property Coverage",
+          "type": "array"
+        },
+        "relationship_count": {
+          "minimum": 0,
+          "title": "Relationship Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node_count",
+        "relationship_count",
+        "property_coverage"
+      ],
+      "title": "ProfileStatistics",
+      "type": "object"
+    },
+    "ProfileStatus": {
+      "enum": [
+        "complete",
+        "partial"
+      ],
+      "title": "ProfileStatus",
+      "type": "string"
+    },
+    "PropertyCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Coverage",
+          "type": "number"
+        },
+        "owner": {
+          "enum": [
+            "node",
+            "relationship"
+          ],
+          "title": "Owner",
+          "type": "string"
+        },
+        "owner_name": {
+          "title": "Owner Name",
+          "type": "string"
+        },
+        "property": {
+          "title": "Property",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "owner_name",
+        "property",
+        "coverage"
+      ],
+      "title": "PropertyCoverage",
+      "type": "object"
+    },
+    "RelationshipTypeProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "count"
+      ],
+      "title": "RelationshipTypeProfile",
+      "type": "object"
+    },
+    "RunTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "database": {
+          "title": "Database",
+          "type": "string"
+        },
+        "edition": {
+          "title": "Edition",
+          "type": "string"
+        },
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "server_version": {
+          "title": "Server Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "database",
+        "server_version",
+        "edition",
+        "fingerprint",
+        "capabilities"
+      ],
+      "title": "RunTarget",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "fingerprint": {
+      "title": "Fingerprint",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/ProfileMetadata"
+    },
+    "partial_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Partial Reason"
+    },
+    "schema": {
+      "$ref": "#/$defs/GraphSchema"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "statistics": {
+      "$ref": "#/$defs/ProfileStatistics"
+    },
+    "status": {
+      "$ref": "#/$defs/ProfileStatus"
+    },
+    "target": {
+      "$ref": "#/$defs/RunTarget"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "partial_reason",
+    "target",
+    "metadata",
+    "schema",
+    "statistics",
+    "fingerprint"
+  ],
+  "title": "BaselineProfile",
+  "type": "object"
+}

@@ -13,14 +13,19 @@ from functools import wraps
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
 from graphcheck import __version__
+from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.contracts.results import CheckError, Results, Verdict
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+from graphcheck.contracts.results import CheckError, Results, RunTarget, Verdict
 from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
+from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
+from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
     ARTIFACTS_DIR,
     PROJECT_FILE,
@@ -63,6 +68,9 @@ from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 _DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
+# Kept as an injection point for integrations that patched the original comparator.
+compare_baselines = compare
+
 app = typer.Typer(
     name="graphcheck",
     help="Semantic observability for property graphs.",
@@ -75,6 +83,9 @@ telemetry_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(telemetry_app, name="telemetry")
+
+baseline_app = typer.Typer(help="Manage baseline snapshots.")
+app.add_typer(baseline_app, name="baseline")
 
 _COMMAND_TELEMETRY: ContextVar[CommandTelemetryRuntime | None] = ContextVar(
     "graphcheck_command_telemetry",
@@ -390,6 +401,46 @@ def debug(
 
 
 @app.command()
+def profile(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Connection profile to use.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the complete baseline profile as JSON.",
+    ),
+) -> None:
+    """Generate a baseline profile for the connected Neo4j graph."""
+
+    try:
+        root = find_project_root()
+        profiles = load_profiles(root)
+        _, selected = select_profile(profiles, profile)
+
+        client = Neo4jClient(selected)
+        try:
+            baseline = build_profile(client)
+        finally:
+            client.close()
+
+        path = write_baseline(baseline)
+        if json_output:
+            typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
+        else:
+            _print_profile_summary(
+                baseline,
+                path,
+            )
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
 @_telemetry_command(CommandName.REPORT)
 def report(
     report_id: str | None = typer.Argument(
@@ -551,6 +602,206 @@ def report(
             telemetry.fail(ProcessOutcome.USER_ERROR, stage, code)
         typer.echo(f"report.error: {exc}", err=True)
         raise typer.Exit(1) from exc
+
+
+@baseline_app.command("set")
+def baseline_set(
+    filename: str | None = typer.Argument(
+        None,
+        help="Timestamped baseline filename to activate; defaults to the newest snapshot.",
+    ),
+) -> None:
+    """Select an existing snapshot as the active baseline."""
+    try:
+        selected = set_current_baseline(filename)
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Baseline set to {selected.name}")
+
+
+@app.command("diff")
+def diff_command(
+    current_baseline_name: str | None = typer.Argument(
+        None,
+        help="Current Baseline filename or path.",
+    ),
+    latest_baseline_name: str | None = typer.Argument(
+        None,
+        help="Latest Baseline filename or path.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit the structured diff as JSON."),
+) -> None:
+    """Compare two stored baseline snapshots."""
+    try:
+        current_baseline_path, latest_baseline_path = resolve_diff_baselines(
+            current_baseline_name,
+            latest_baseline_name,
+        )
+        current_raw = current_baseline_path.read_text(encoding="utf-8")
+        latest_raw = latest_baseline_path.read_text(encoding="utf-8")
+        current_data = json.loads(current_raw)
+        latest_data = json.loads(latest_raw)
+        if not isinstance(current_data, dict) or not isinstance(latest_data, dict):
+            raise GraphCheckError(
+                "baseline.invalid",
+                "Baseline JSON root must be an object.",
+                "Choose a valid baseline snapshot generated by `graphcheck profile`.",
+            )
+        if current_data.get("schema_version") != latest_data.get("schema_version"):
+            raise SchemaVersionMismatch(
+                "cannot diff baselines with different schema_version "
+                f"(a={current_data.get('schema_version')}, "
+                f"b={latest_data.get('schema_version')})"
+            )
+        current_baseline = BaselineProfile.model_validate_json(current_raw)
+        latest_baseline = BaselineProfile.model_validate_json(latest_raw)
+        if (
+            current_baseline.status is ProfileStatus.PARTIAL
+            or latest_baseline.status is ProfileStatus.PARTIAL
+        ):
+            raise GraphCheckError(
+                "diff.partial_baseline",
+                "Comparison is inconclusive because one or more baselines are partial.",
+                "Generate complete baseline profiles before running `graphcheck diff`.",
+            )
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(2) from exc
+    except SchemaVersionMismatch as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    except (OSError, ValidationError, json.JSONDecodeError) as exc:
+        typer.echo(f"error: unable to read baseline: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    if _target_identity(current_baseline.target) != _target_identity(latest_baseline.target):
+        if json_output:
+            typer.echo(
+                "error: cannot diff baselines from different databases "
+                f"(a={current_baseline.target.database}, b={latest_baseline.target.database})",
+                err=True,
+            )
+            raise typer.Exit(2)
+        _print_target_identity_warning(current_baseline, latest_baseline)
+        if not typer.confirm("Do you want to continue?", default=False):
+            typer.echo("Diff cancelled by user.")
+            return
+
+    try:
+        report = compare_baselines(current_baseline, latest_baseline)
+    except SchemaVersionMismatch as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if isinstance(report, list):  # Compatibility with the original line-oriented hook.
+        if not report:
+            typer.echo("No drift detected.")
+            return
+        typer.echo("Graph drift detected.\n")
+        for message in report:
+            typer.echo(message)
+        return
+    report = replace(
+        report,
+        baseline_a=current_baseline_path.name,
+        baseline_b=latest_baseline_path.name,
+    )
+    typer.echo(render_json(report) if json_output else render_human(report))
+    if report.drift_detected:
+        raise typer.Exit(1)
+
+
+def _target_identity(target: RunTarget) -> str:
+    return target.database
+
+
+def _target_identity_json(target: RunTarget) -> dict[str, str]:
+    return {"database": _target_identity(target)}
+
+
+def _print_target_identity_warning(
+    current_baseline: BaselineProfile,
+    latest_baseline: BaselineProfile,
+) -> None:
+    typer.echo("WARNING")
+    typer.echo()
+    typer.echo("The selected baseline snapshots belong to different database / target identities.")
+    typer.echo()
+    typer.echo("Current Baseline")
+    typer.echo(json.dumps(_target_identity_json(current_baseline.target), indent=2, sort_keys=True))
+    typer.echo()
+    typer.echo("Latest Baseline")
+    typer.echo(json.dumps(_target_identity_json(latest_baseline.target), indent=2, sort_keys=True))
+    typer.echo()
+    typer.echo(
+        "Comparing baseline snapshots from different databases or targets may produce "
+        "misleading drift results."
+    )
+
+
+def _print_profile_summary(
+    baseline: BaselineProfile,
+    baseline_path: Path,
+) -> None:
+    if baseline.status is ProfileStatus.PARTIAL:
+        typer.echo("Profile completed with partial data.")
+        typer.echo()
+        typer.echo(f"Status: {baseline.status}")
+        typer.echo(f"Reason: {baseline.partial_reason}")
+        typer.echo(
+            f"Collected: {baseline.statistics.node_count} nodes, "
+            f"{baseline.statistics.relationship_count} relationships"
+        )
+        typer.echo()
+        typer.echo(f"Baseline written to:\n{baseline_path}")
+        return
+
+    typer.echo("Profile completed.")
+    typer.echo()
+
+    typer.echo(f"Status: {baseline.status}")
+
+    if baseline.partial_reason:
+        typer.echo(f"Reason: {baseline.partial_reason}")
+
+    typer.echo()
+
+    typer.echo(f"Nodes: {baseline.statistics.node_count}")
+    typer.echo(f"Relationships: {baseline.statistics.relationship_count}")
+
+    typer.echo()
+
+    typer.echo(f"Labels: {len(baseline.graph_schema.labels)}")
+    typer.echo(f"Relationship Types: {len(baseline.graph_schema.relationship_types)}")
+    typer.echo(f"Constraints: {len(baseline.graph_schema.constraints)}")
+    typer.echo(f"Indexes: {len(baseline.graph_schema.indexes)}")
+
+    typer.echo()
+
+    typer.echo("Degree Distribution:")
+    for label in baseline.graph_schema.labels:
+        distribution = label.degree_distribution
+        if distribution is None:
+            typer.echo(f"  {label.name}: unavailable")
+        else:
+            typer.echo(
+                f"  {label.name}: median={distribution.median}, p95={distribution.p95}, "
+                f"p99={distribution.p99}, maximum={distribution.maximum}"
+            )
+
+    typer.echo()
+
+    typer.echo("Property Coverage:")
+    for coverage in baseline.statistics.property_coverage:
+        typer.echo(
+            f"  {coverage.owner_name}.{coverage.property} ({coverage.owner}): {coverage.coverage}%"
+        )
+
+    typer.echo()
+
+    typer.echo(f"Baseline written to:\n{baseline_path}")
 
 
 def _validate_report_options(
