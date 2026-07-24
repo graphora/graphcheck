@@ -5,7 +5,6 @@ this isolated module makes the eventual release change explicit and keeps transp
 the engine and consent layers.
 """
 
-POSTHOG_PROJECT_API_KEY: str | None = None
-"""TODO(release): set this to GraphCheck's public ``phc_...`` PostHog project API key."""
+POSTHOG_PROJECT_API_KEY: str | None = phc_knZzPbRwHobaDdLafjoWn48oAbrp97LwJ9drKStzExiz
 
-POSTHOG_HOST = "https://us.i.posthog.com"
+POSTHOG_HOST = "https://eu.i.posthog.com"
