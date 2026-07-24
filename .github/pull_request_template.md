@@ -10,7 +10,7 @@
 - [ ] No `print` / `console.log`; structured logger only
 - [ ] No swallowed exceptions (`except: pass`)
 - [ ] No un-issued TODOs
-- [ ] Design note in `docs/components/<name>.md` (where applicable)
+- [ ] Design detailed in `docs/specs/<name>.md` (where applicable)
 - [ ] CHANGELOG.md entry
 - [ ] No new third-party dependency without team review
 - [ ] No agent meta-commentary or AI attribution anywhere
