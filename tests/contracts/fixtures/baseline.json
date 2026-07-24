@@ -1,0 +1,114 @@
+{
+  "fingerprint": "sha256:c9e2dbdcdccc03a902909d8cc661653858bad24d2d40c97b1849e5b2e3ee26e1",
+  "metadata": {
+    "generated_at": "2026-07-07T17:30:00Z",
+    "graphcheck_version": "0.1.0"
+  },
+  "partial_reason": null,
+  "schema": {
+    "constraints": [
+      {
+        "labels_or_types": [
+          "Customer"
+        ],
+        "name": "customer_id_unique",
+        "properties": [
+          "id"
+        ],
+        "type": "UNIQUENESS"
+      }
+    ],
+    "indexes": [
+      {
+        "labels_or_types": [
+          "Customer"
+        ],
+        "name": "customer_name_index",
+        "properties": [
+          "name"
+        ],
+        "type": "RANGE"
+      }
+    ],
+    "labels": [
+      {
+        "count": 10,
+        "degree_distribution": {
+          "maximum": 4,
+          "median": 1.0,
+          "p95": 3.0,
+          "p99": 4.0
+        },
+        "name": "Account",
+        "properties": [
+          {
+            "name": "id",
+            "type": "STRING"
+          }
+        ]
+      },
+      {
+        "count": 3,
+        "degree_distribution": {
+          "maximum": 4,
+          "median": 1.0,
+          "p95": 3.0,
+          "p99": 4.0
+        },
+        "name": "Customer",
+        "properties": [
+          {
+            "name": "id",
+            "type": "STRING"
+          },
+          {
+            "name": "name",
+            "type": "STRING"
+          }
+        ]
+      }
+    ],
+    "relationship_types": [
+      {
+        "count": 7,
+        "name": "CONTROLS"
+      }
+    ]
+  },
+  "schema_version": "1.0",
+  "statistics": {
+    "node_count": 13,
+    "property_coverage": [
+      {
+        "coverage": 100.0,
+        "owner": "node",
+        "owner_name": "Account",
+        "property": "id"
+      },
+      {
+        "coverage": 100.0,
+        "owner": "node",
+        "owner_name": "Customer",
+        "property": "id"
+      },
+      {
+        "coverage": 66.67,
+        "owner": "node",
+        "owner_name": "Customer",
+        "property": "name"
+      }
+    ],
+    "relationship_count": 7
+  },
+  "status": "complete",
+  "target": {
+    "capabilities": {
+      "apoc": false,
+      "count_store": true
+    },
+    "database": "neo4j",
+    "edition": "community",
+    "fingerprint": "abc123",
+    "server_version": "5.18.0"
+  }
+}

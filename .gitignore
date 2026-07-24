@@ -52,6 +52,7 @@ coverage.xml
 .test-tmp
 .vscode
 cover/
+.test-tmp/
 
 # Translations
 *.mo
@@ -225,3 +226,6 @@ graphcheck.yml
 profiles.yml
 .graphcheck/
 .superpowers/
+
+
+.test-tmp/
