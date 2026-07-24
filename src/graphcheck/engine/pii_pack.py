@@ -13,6 +13,7 @@ from graphcheck.packs.metadata import PiiPackMetadata
 
 _DEFAULT_SAMPLE_SIZE = 1000
 _SAMPLE_NODE_MULTIPLIER = 1_103_515_245
+_SAMPLE_GATE_MULTIPLIER = 32
 
 _SCHEMA_CATALOG = """
 CALL {
@@ -47,27 +48,51 @@ def _node_pointer(variable: str) -> str:
 def _candidate_query(*, strings_only: bool) -> str:
     string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     value_projection = ", value: raw" if strings_only else ""
+    population_query = (
+        """
+        MATCH (n)
+        WHERE $label IS NULL OR $label IN labels(n)
+        UNWIND CASE WHEN $properties = [] THEN keys(n) ELSE $properties END AS property
+        WITH property, n[property] AS raw
+        WHERE raw IS NOT NULL
+          AND toStringOrNull(raw) = raw
+        RETURN count(*) AS population
+        """
+        if strings_only
+        else """
+        MATCH (n)
+        WHERE $label IS NULL OR $label IN labels(n)
+        RETURN coalesce(sum(size(keys(n))), 0) AS population
+        """
+    )
     hash_expression = cypher_hash_expression("_gc_occurrence_key")
+    gate_hash_expression = cypher_hash_expression("id(n) % 2147483647").replace(
+        "$sample_hash_",
+        "$sample_gate_hash_",
+    )
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IS NULL OR $label IN labels(n)
-          UNWIND keys(n) AS property
-          WITH property, n[property] AS raw
-          WHERE raw IS NOT NULL
-            AND ($properties = [] OR property IN $properties)
-            {string_predicate}
-          RETURN count(*) AS population
+          {dedent(population_query).strip()}
         }}
         CALL {{
+          WITH population
+          WITH population
+          WHERE population > 0
           MATCH (n)
           WHERE $label IS NULL OR $label IN labels(n)
-          UNWIND keys(n) AS property
+          WITH population, n, {gate_hash_expression} AS _gc_gate_key
+          WHERE population <= $sample_size * $sample_gate_multiplier
+             OR _gc_gate_key < toInteger(ceil(
+                  toFloat({CYPHER_SAMPLE_MODULUS})
+                  * toFloat($sample_size)
+                  * toFloat($sample_gate_multiplier)
+                  / toFloat(population)
+                ))
+          UNWIND CASE WHEN $properties = [] THEN keys(n) ELSE $properties END AS property
           WITH n, property, n[property] AS raw
           WHERE raw IS NOT NULL
-            AND ($properties = [] OR property IN $properties)
             {string_predicate}
           WITH n, property, raw ORDER BY id(n), property
           WITH n, collect({{property: property, raw: raw}}) AS _gc_node_properties
@@ -95,22 +120,6 @@ def _candidate_query(*, strings_only: bool) -> str:
     ).strip()
 
 
-def _population_query(*, strings_only: bool) -> str:
-    string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
-    return dedent(
-        f"""
-        MATCH (n)
-        WHERE $label IS NULL OR $label IN labels(n)
-        UNWIND keys(n) AS property
-        WITH property, n[property] AS raw
-        WHERE raw IS NOT NULL
-          AND ($properties = [] OR property IN $properties)
-          {string_predicate}
-        RETURN count(*) AS population
-        """
-    ).strip()
-
-
 def _common_config(
     config: dict[str, object],
     *,
@@ -118,7 +127,7 @@ def _common_config(
     sample_seed: int,
     properties: list[str],
     required_properties: list[str] | None = None,
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> dict[str, object]:
     label = config.get("label")
     if label is not None and (not isinstance(label, str) or not label.strip()):
         raise _invalid("PII label must be a non-blank string when supplied.")
@@ -136,18 +145,23 @@ def _common_config(
     if isinstance(sample_seed, bool) or not isinstance(sample_seed, int) or sample_seed < 0:
         raise _invalid("PII sample_seed must be a non-negative integer.")
     hash_params = cypher_hash_parameters(sample_seed)
+    gate_hash_params = {
+        name.replace("sample_hash_", "sample_gate_hash_"): value
+        for name, value in cypher_hash_parameters(sample_seed + 1).items()
+    }
     params = {
         "label": label,
         "properties": properties,
         "sample_size": requested_sample_size,
+        "sample_gate_multiplier": _SAMPLE_GATE_MULTIPLIER,
         **hash_params,
+        **gate_hash_params,
         "required_labels": [label] if label is not None else [],
         "required_relationship_types": [],
         "required_properties": required_properties or [],
     }
-    population_params = {"label": label, "properties": properties}
     del evidence_cap
-    return params, population_params
+    return params
 
 
 @register_conformance_compiler("pii_name_match")
@@ -160,7 +174,7 @@ def _compile_pii_name_match(
         {"id": pattern_id, "keys": list(metadata.name_match.patterns[pattern_id].keys)}
         for pattern_id in selected
     ]
-    params, population_params = _common_config(
+    params = _common_config(
         config,
         evidence_cap=evidence_cap,
         sample_seed=sample_seed,
@@ -176,8 +190,7 @@ def _compile_pii_name_match(
         },
         name="Property names do not expose likely personal data",
         sampled=True,
-        population_query=_population_query(strings_only=False),
-        population_params=population_params,
+        sampling_preflight=False,
     )
 
 
@@ -205,7 +218,7 @@ def _compile_pii_value_match(
     properties = (
         [] if configured_properties is None else [item.strip() for item in configured_properties]
     )
-    params, population_params = _common_config(
+    params = _common_config(
         config,
         evidence_cap=evidence_cap,
         sample_seed=sample_seed,
@@ -222,8 +235,7 @@ def _compile_pii_value_match(
         },
         name="Sampled property values do not match known personal-data formats",
         sampled=True,
-        population_query=_population_query(strings_only=True),
-        population_params=population_params,
+        sampling_preflight=False,
     )
 
 

@@ -26,6 +26,7 @@ class CompiledCheck:
     name: str
     evidence_cap: int
     sampled: bool = False
+    sampling_preflight: bool = True
     population_query: str | None = None
     population_params: dict[str, object] | None = None
     sample_population: int | None = None
@@ -42,6 +43,7 @@ class ConformancePlan:
     expected: dict[str, object]
     name: str
     sampled: bool = False
+    sampling_preflight: bool = True
     population_query: str | None = None
     population_params: dict[str, object] | None = None
 
@@ -260,6 +262,7 @@ class CypherCompiler:
             name=plan.name,
             evidence_cap=self.evidence_cap,
             sampled=plan.sampled,
+            sampling_preflight=plan.sampling_preflight,
             population_query=plan.population_query,
             population_params=(
                 dict(plan.population_params) if plan.population_params is not None else None

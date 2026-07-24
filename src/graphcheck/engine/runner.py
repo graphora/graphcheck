@@ -526,6 +526,26 @@ class Engine:
         target: RunTarget,
         deadline: float,
     ) -> tuple[CompiledCheck, dict[str, object]]:
+        requested = (
+            check.spec.with_.get("sample_size")
+            if isinstance(check.spec, ConformanceCheck)
+            else None
+        )
+        if requested is None:
+            requested = compiled.params.get("sample_size")
+        if not compiled.sampling_preflight:
+            sample_size = self.config.sampling.sample_size
+            if requested is not None:
+                sample_size = min(sample_size, int(requested))
+            resolved = {**params, "sample_size": sample_size}
+            return (
+                replace(
+                    compiled,
+                    params={**compiled.params, "sample_size": sample_size},
+                    expected={**compiled.expected, "sample_size": sample_size},
+                ),
+                resolved,
+            )
         if compiled.population_query is None:
             raise GraphCheckError(
                 "engine.sampling_invalid",
@@ -562,13 +582,6 @@ class Engine:
             suite_sha=suite_sha,
             check_id=check.id,
         )
-        requested = (
-            check.spec.with_.get("sample_size")
-            if isinstance(check.spec, ConformanceCheck)
-            else None
-        )
-        if requested is None:
-            requested = compiled.params.get("sample_size")
         sample_size = (
             decision.sample_size if requested is None else min(decision.sample_size, int(requested))
         )
