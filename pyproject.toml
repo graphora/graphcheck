@@ -25,7 +25,7 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "hypothesis>=6",
-    "ruff>=0.6",
+    "ruff==0.16.0",
     "pre-commit>=3.7",
     "testcontainers[neo4j]>=4.8",
 ]
