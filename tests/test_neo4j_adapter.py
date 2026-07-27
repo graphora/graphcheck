@@ -1164,6 +1164,55 @@ def test_unknown_relationship_type_notification_is_a_query_error():
     assert "OWNZ" in caught.value.error.message
 
 
+def test_successful_read_classification_is_cached_by_query_and_database(monkeypatch):
+    import neo4j
+
+    import graphcheck.neo4j_adapter as adapter
+
+    query = "RETURN 424242 AS cache_probe"
+    adapter._READ_CLASSIFICATION_CACHE.discard((query, "neo4j"))
+    calls: list[str] = []
+
+    class _ExecutionResult:
+        def keys(self):
+            return ("cache_probe",)
+
+        def __iter__(self):
+            return iter([{"cache_probe": 424242}])
+
+        def consume(self):
+            return object()
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, statement, params):
+            text = str(getattr(statement, "text", statement))
+            calls.append(text)
+            return _ReadPlanResult() if text.startswith("EXPLAIN ") else _ExecutionResult()
+
+    class _Driver:
+        def session(self, **kwargs):
+            return _Session()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *args, **kwargs: _Driver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    client.run_read_result(query)
+    client.run_read_result(query)
+
+    assert calls == [f"EXPLAIN {query}", query, query]
+
+
 def test_unknown_property_key_notification_is_a_query_error():
     from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
 

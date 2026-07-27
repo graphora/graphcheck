@@ -1,4 +1,5 @@
 import hashlib
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -396,6 +397,33 @@ def test_one_query_error_is_isolated_and_later_check_still_passes():
     assert results.totals.errored == 1
 
 
+def test_non_fail_fast_checks_use_bounded_concurrency():
+    barrier = threading.Barrier(2)
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+
+    class ConcurrentClient:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                barrier.wait(timeout=2)
+                return RichResult([{"value": 1}], ("value",))
+            finally:
+                with lock:
+                    active -= 1
+
+    results = _engine(ConcurrentClient(), config=EngineConfig(max_concurrency=2)).run_yaml(
+        TWO_COMPETENCIES, target=TARGET
+    )
+
+    assert [check.verdict for check in results.checks] == [Verdict.PASS, Verdict.PASS]
+    assert maximum_active == 2
+
+
 def test_compile_error_is_errored_and_never_passed_or_queried():
     class BrokenCompiler:
         def compile(self, check, *, sample_seed=0):
@@ -778,3 +806,9 @@ def test_engine_config_rejects_invalid_time_budgets(invalid):
 def test_engine_config_rejects_non_positive_integer_evidence_caps(invalid):
     with pytest.raises(ValueError, match="positive integer"):
         EngineConfig(evidence_cap=invalid)
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "4"])
+def test_engine_config_rejects_invalid_max_concurrency(invalid):
+    with pytest.raises(ValueError, match="max_concurrency"):
+        EngineConfig(max_concurrency=invalid)

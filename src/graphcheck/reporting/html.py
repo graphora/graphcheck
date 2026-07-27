@@ -33,6 +33,16 @@ def render_html_report(
     verdicts: Collection[Verdict] | None = None,
 ) -> str:
     model = load_results(results)
+    return render_validated_html_report(model, verdicts=verdicts)
+
+
+def render_validated_html_report(
+    model: Results,
+    *,
+    verdicts: Collection[Verdict] | None = None,
+) -> str:
+    """Render a Results model already validated at an artifact boundary."""
+
     checks = sorted(
         (check for check in model.checks if verdicts is None or check.verdict in verdicts),
         key=lambda check: (
@@ -103,11 +113,18 @@ def _banners(results: Results) -> str:
     error_html = ""
     if results.run.error is not None:
         error_html = (
-            '<section class="banner banner-error">'
-            f"<div><strong>{_escape(results.run.error.code)}</strong></div>"
-            f"<div>{_escape(results.run.error.message)}</div>"
-            f'<div class="fix-tip">💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</div>'
+            '<div class="banner-stack">'
+            '<section class="banner banner-error" role="alert">'
+            '<span aria-hidden="true">⚠️</span>'
+            f'<span class="banner-message">{_escape(results.run.error.message)}</span>'
+            '<button id="run-error-fix-toggle" class="banner-action" type="button" '
+            'aria-expanded="false" aria-controls="run-error-fix">See fix.</button>'
             "</section>"
+            '<section id="run-error-fix" class="banner-fix hidden-banner-fix">'
+            f"<strong>{_escape(results.run.error.code)}</strong>"
+            f"<span>💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</span>"
+            "</section>"
+            "</div>"
         )
 
     partial_html = ""
@@ -322,7 +339,9 @@ def _issue(check: CheckResult) -> str:
 
 
 def _checks(checks: list[CheckResult]) -> str:
-    items = "".join(_check(check) for check in checks)
+    items = "".join(_check(check) for check in checks) or (
+        '<p class="text-muted">No checks to explore.</p>'
+    )
     return (
         '<section id="checks-panel" class="card panel-section hidden-panel">'
         '  <div class="checks-header">'
@@ -907,9 +926,14 @@ body {
 .badge-score { background: #eff6ff; color: #2563eb; border: 1px solid rgba(37, 99, 235, 0.3); order: 999; }
 [data-theme="dark"] .badge-score { background: #1e3a8a; color: #bfdbfe; }
 
-.banner { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
-.banner-error { background: var(--fail-bg); border-left: 4px solid var(--fail-color); color: var(--fail-color); }
-.banner-partial { background: var(--warn-bg); border-left: 4px solid var(--warn-color); color: var(--warn-color); }
+.banner-stack { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.banner { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
+.banner-message { min-width: 0; }
+.banner-error { background: var(--fail-color); color: #fff; }
+.banner-partial { background: var(--warn-color); color: #0f172a; }
+.banner-action { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; white-space: nowrap; cursor: pointer; }
+.banner-fix { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border: 1px solid var(--fail-color); border-radius: var(--radius); background: var(--bg-card); color: var(--text-main); font-size: 13px; }
+.hidden-banner-fix { display: none; }
 
 .table-container { overflow-x: auto; margin-top: 8px; }
 .styled-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
@@ -1120,6 +1144,15 @@ function toggleSummaryTable() {
   }
 }
 
+function toggleRunErrorFix() {
+  const fix = document.getElementById('run-error-fix');
+  const btn = document.getElementById('run-error-fix-toggle');
+  if (!fix || !btn) return;
+  const isHidden = fix.classList.toggle('hidden-banner-fix');
+  btn.setAttribute('aria-expanded', String(!isHidden));
+  btn.textContent = isHidden ? 'See fix.' : 'Hide fix.';
+}
+
 function sortTable(columnIndex) {
   const table = document.getElementById('summary-table');
   if (!table) return;
@@ -1182,6 +1215,7 @@ function initInteractions() {
   initTooltips();
 
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+  document.getElementById('run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix);
   document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
   document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);

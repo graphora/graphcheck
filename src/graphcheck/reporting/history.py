@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from graphcheck.contracts.results import (
     CheckResult,
     Results,
+    RunStatus,
     Severity,
     Verdict,
     parse_utc_timestamp,
 )
 from graphcheck.reporting.writer import load_results
+
+SUMMARY_FILENAME = "summary.json"
 
 
 class ReportHistoryError(ValueError):
@@ -20,20 +24,65 @@ class ReportHistoryError(ValueError):
 
 
 @dataclass(frozen=True)
+class ReportSummary:
+    id: str
+    finished_at: str
+    status: RunStatus
+    suite_scores: tuple[tuple[str, int | None], ...]
+
+
+@dataclass(frozen=True, init=False)
 class ReportRun:
     directory: Path
     results_path: Path
     report_path: Path
-    results: Results
+    summary: ReportSummary
     modified_ns: int
+    _results: Results | None = field(default=None, repr=False, compare=False)
+
+    def __init__(
+        self,
+        directory: Path,
+        results_path: Path,
+        report_path: Path,
+        results: Results | None = None,
+        modified_ns: int = 0,
+        *,
+        summary: ReportSummary | None = None,
+    ) -> None:
+        if summary is None:
+            if results is None:
+                raise ValueError("ReportRun requires results or a summary")
+            summary = report_summary(results)
+        object.__setattr__(self, "directory", directory)
+        object.__setattr__(self, "results_path", results_path)
+        object.__setattr__(self, "report_path", report_path)
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "modified_ns", modified_ns)
+        object.__setattr__(self, "_results", results)
 
     @property
     def id(self) -> str:
-        return self.results.run.id
+        return self.summary.id
+
+    @property
+    def results(self) -> Results:
+        if self._results is None:
+            try:
+                loaded = load_results(self.results_path)
+                if report_summary(loaded) != self.summary:
+                    raise ValueError("results.json does not match summary.json")
+                object.__setattr__(self, "_results", loaded)
+            except (OSError, ValueError) as exc:
+                raise ReportHistoryError(
+                    f"Could not read report history from {self.results_path}: {exc}"
+                ) from exc
+        assert self._results is not None
+        return self._results
 
 
 def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
-    """Load and de-duplicate validated run artifacts, newest first."""
+    """Discover compact run summaries and lazily load full selected artifacts."""
     if not runs_dir.is_dir():
         return []
 
@@ -42,7 +91,12 @@ def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
         relative_parent = results_path.parent.relative_to(runs_dir)
         if any(part.startswith(".") for part in relative_parent.parts):
             continue
-        record = _load_report_run(results_path)
+        summary_path = results_path.with_name(SUMMARY_FILENAME)
+        record = (
+            _load_summary_run(summary_path, results_path)
+            if summary_path.is_file()
+            else _load_report_run(results_path)
+        )
         current = by_id.get(record.id)
         if current is None or _preferred_record(record) > _preferred_record(current):
             by_id[record.id] = record
@@ -66,9 +120,9 @@ def format_report_history(records: list[ReportRun]) -> str:
     rows = [
         (
             record.id,
-            record.results.run.finished_at,
-            record.results.run.status.value,
-            _suite_scores(record.results),
+            record.summary.finished_at,
+            record.summary.status.value,
+            _summary_suite_scores(record.summary),
         )
         for record in records
     ]
@@ -185,6 +239,80 @@ def _load_report_run(results_path: Path) -> ReportRun:
     )
 
 
+def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary = _parse_summary(payload)
+        modified_ns = results_path.stat().st_mtime_ns
+    except (KeyError, OSError, TypeError, ValueError):
+        return _load_report_run(results_path)
+    return ReportRun(
+        directory=results_path.parent,
+        results_path=results_path,
+        report_path=results_path.with_name("report.html"),
+        summary=summary,
+        modified_ns=modified_ns,
+    )
+
+
+def report_summary(results: Results) -> ReportSummary:
+    return ReportSummary(
+        id=results.run.id,
+        finished_at=results.run.finished_at,
+        status=results.run.status,
+        suite_scores=tuple(
+            (suite.id, suite.score) for suite in sorted(results.suites, key=lambda suite: suite.id)
+        ),
+    )
+
+
+def report_summary_json(results: Results) -> str:
+    summary = report_summary(results)
+    return (
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "id": summary.id,
+                "finished_at": summary.finished_at,
+                "status": summary.status.value,
+                "suite_scores": [
+                    {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def _parse_summary(payload: object) -> ReportSummary:
+    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+        raise ValueError("invalid report summary schema")
+    run_id = payload["id"]
+    finished_at = payload["finished_at"]
+    if not isinstance(run_id, str) or not isinstance(finished_at, str):
+        raise ValueError("invalid report summary identity")
+    parse_utc_timestamp(finished_at)
+    raw_scores = payload["suite_scores"]
+    if not isinstance(raw_scores, list):
+        raise ValueError("invalid report summary suite scores")
+    scores: list[tuple[str, int | None]] = []
+    for item in raw_scores:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise ValueError("invalid report summary suite score")
+        score = item.get("score")
+        if score is not None and (isinstance(score, bool) or not isinstance(score, int)):
+            raise ValueError("invalid report summary score")
+        scores.append((item["id"], score))
+    return ReportSummary(
+        id=run_id,
+        finished_at=finished_at,
+        status=RunStatus(payload["status"]),
+        suite_scores=tuple(sorted(scores)),
+    )
+
+
 def _preferred_record(record: ReportRun) -> tuple[bool, bool, int, str]:
     return (
         record.report_path.is_file(),
@@ -195,15 +323,15 @@ def _preferred_record(record: ReportRun) -> tuple[bool, bool, int, str]:
 
 
 def _recency(record: ReportRun) -> tuple[datetime, int, str]:
-    return (parse_utc_timestamp(record.results.run.finished_at), record.modified_ns, record.id)
+    return (parse_utc_timestamp(record.summary.finished_at), record.modified_ns, record.id)
 
 
-def _suite_scores(results: Results) -> str:
-    if not results.suites:
+def _summary_suite_scores(summary: ReportSummary) -> str:
+    if not summary.suite_scores:
         return "n/a"
     return ", ".join(
-        f"{suite.id}={'n/a' if suite.score is None else suite.score}"
-        for suite in sorted(results.suites, key=lambda suite: suite.id)
+        f"{suite_id}={'n/a' if score is None else score}"
+        for suite_id, score in summary.suite_scores
     )
 
 

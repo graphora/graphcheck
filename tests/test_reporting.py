@@ -329,6 +329,11 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
+    assert '<p class="text-muted">No checks to explore.</p>' in html
+    assert '<section class="banner banner-error" role="alert">' in html
+    assert 'aria-controls="run-error-fix">See fix.</button>' in html
+    assert '<section id="run-error-fix" class="banner-fix hidden-banner-fix">' in html
+    assert "run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix)" in html
     assert '<span class="meta-label">RUN FAILED</span>' in html
     assert '<span class="exit-3">Please check configured connections</span>' in html
     assert "connection.auth" in html

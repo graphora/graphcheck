@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from statistics import median
 from typing import Any, cast
 
 import pytest
@@ -65,6 +66,18 @@ class FakeNeo4jClient:
             return [{"label": "Customer"}, {"label": "Account"}]
         if query == ("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"):
             return [{"relationshipType": "OWNS"}, {"relationshipType": "HAS_ACCOUNT"}]
+        if query.startswith("CALL {\n  MATCH ()-[r:`HAS_ACCOUNT`]->()"):
+            return [{"count": 2, "properties": []}]
+        if query.startswith("CALL {\n  MATCH ()-[r:`OWNS`]->()"):
+            return [
+                {
+                    "count": 5,
+                    "properties": [
+                        {"name": "role", "populated_count": 3},
+                        {"name": "since", "populated_count": 5},
+                    ],
+                }
+            ]
         if query == "MATCH ()-[r:`HAS_ACCOUNT`]->() RETURN count(r) AS count":
             return [{"count": 2}]
         if query == "MATCH ()-[r:`OWNS`]->() RETURN count(r) AS count":
@@ -115,6 +128,31 @@ class FakeNeo4jClient:
             return [{"degree": 3}, {"degree": 1}]
         if query == "MATCH (n:`Customer`) RETURN COUNT { (n)--() } AS degree":
             return [{"degree": 4}, {"degree": 0}, {"degree": 2}]
+        if query.startswith("CALL {\n  MATCH (n:`Account`)"):
+            return [
+                {
+                    "count": 2,
+                    "median": 2.0,
+                    "p95": 2.9,
+                    "p99": 2.98,
+                    "maximum": 3,
+                    "properties": [{"name": "id", "populated_count": 2, "sample": "account-1"}],
+                }
+            ]
+        if query.startswith("CALL {\n  MATCH (n:`Customer`)"):
+            return [
+                {
+                    "count": 3,
+                    "median": 2.0,
+                    "p95": 3.8,
+                    "p99": 3.96,
+                    "maximum": 4,
+                    "properties": [
+                        {"name": "id", "populated_count": 3, "sample": 1},
+                        {"name": "name", "populated_count": 2, "sample": "Ada"},
+                    ],
+                }
+            ]
         if query.startswith("MATCH (n:`Account`) UNWIND keys(n)"):
             return [{"property": "id"}]
         if query.startswith("MATCH (n:`Customer`) UNWIND keys(n)"):
@@ -152,6 +190,8 @@ class UnknownTypeClient:
     ) -> list[dict[str, Any]]:
         if query == "CALL db.labels() YIELD label RETURN label":
             return [{"label": "Customer"}]
+        if query.startswith("CALL {\n  MATCH (n:`Customer`)"):
+            raise GraphCheckError("neo4j.query_failed", "query failed", "try again")
         if query == "MATCH (n:`Customer`) RETURN count(n) AS count":
             return [{"count": 1}]
         if query == "MATCH (n:`Customer`) RETURN COUNT { (n)--() } AS degree":
@@ -217,13 +257,17 @@ class EmptyTypeClient(UnknownTypeClient):
         *,
         timeout_s: float | None = None,
     ) -> list[dict[str, Any]]:
-        if query == (
-            "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
-            "WITH n "
-            "ORDER BY id(n) "
-            "RETURN n[$property] AS value LIMIT 1"
-        ):
-            return []
+        if query.startswith("CALL {\n  MATCH (n:`Customer`)"):
+            return [
+                {
+                    "count": 1,
+                    "median": 5.0,
+                    "p95": 5.0,
+                    "p99": 5.0,
+                    "maximum": 5,
+                    "properties": [{"name": "id", "populated_count": 1, "sample": None}],
+                }
+            ]
         return super().run_read(query, params, timeout_s=timeout_s)
 
 
@@ -241,7 +285,7 @@ class FailedPropertyTypeClient(FakeNeo4jClient):
         *,
         timeout_s: float | None = None,
     ) -> list[dict[str, Any]]:
-        if "RETURN n[$property] AS value LIMIT 1" in query:
+        if "sample[property]" in query:
             raise GraphCheckError("neo4j.query_failed", "type query failed", "try again")
         return super().run_read(query, params, timeout_s=timeout_s)
 
@@ -268,7 +312,7 @@ class FailedLabelProbeClient(FakeNeo4jClient):
         *,
         timeout_s: float | None = None,
     ) -> list[dict[str, Any]]:
-        if query == self.failed_query:
+        if self.failed_query in query and "`Account`" in query:
             raise GraphCheckError(self.code, "simulated label probe failure", "retry")
         return super().run_read(query, params, timeout_s=timeout_s)
 
@@ -277,12 +321,12 @@ class FailedLabelProbeClient(FakeNeo4jClient):
     "code",
     ["neo4j.query_failed", "profile.budget_exceeded"],
 )
-def test_profile_preserves_label_when_only_degree_distribution_fails(code: str) -> None:
+def test_profile_omits_label_when_batched_inventory_fails(code: str) -> None:
     baseline = profile(
         cast(
             Neo4jClient,
             FailedLabelProbeClient(
-                "MATCH (n:`Account`) RETURN COUNT { (n)--() } AS degree",
+                "percentileCont(degree",
                 code,
             ),
         )
@@ -291,21 +335,14 @@ def test_profile_preserves_label_when_only_degree_distribution_fails(code: str) 
     assert baseline.status is ProfileStatus.PARTIAL
     assert baseline.partial_reason
     assert "simulated label probe failure" in baseline.partial_reason
-    assert baseline.graph_schema.labels[0] == LabelProfile(
-        name="Account",
-        count=2,
-        properties=[ProfileProperty(name="id", type="STRING")],
-        degree_distribution=None,
-    )
-    assert baseline.graph_schema.labels[1].name == "Customer"
-    assert baseline.graph_schema.labels[1].degree_distribution is not None
+    assert [label.name for label in baseline.graph_schema.labels] == ["Customer"]
 
 
 def test_profile_omits_label_when_label_count_fails() -> None:
     baseline = profile(
         cast(
             Neo4jClient,
-            FailedLabelProbeClient("MATCH (n:`Account`) RETURN count(n) AS count"),
+            FailedLabelProbeClient("MATCH (n:`Account`)"),
         )
     )
 
@@ -318,10 +355,7 @@ def test_profile_omits_label_when_label_property_collection_fails() -> None:
     baseline = profile(
         cast(
             Neo4jClient,
-            FailedLabelProbeClient(
-                "MATCH (n:`Account`) UNWIND keys(n) AS property "
-                "RETURN DISTINCT property ORDER BY property"
-            ),
+            FailedLabelProbeClient("UNWIND keys(n) AS property"),
         )
     )
 
@@ -341,9 +375,26 @@ class DegreeClient:
         *,
         timeout_s: float | None = None,
     ) -> list[dict[str, Any]]:
-        assert query == "MATCH (n:`Test`) RETURN COUNT { (n)--() } AS degree"
+        assert "percentileCont(degree, 0.95)" in query
         assert params is None
-        return [{"degree": degree} for degree in self.degrees]
+        if not self.degrees:
+            return [{"median": 0, "p95": 0, "p99": 0, "maximum": 0}]
+        values = sorted(self.degrees)
+
+        def percentile(fraction: float) -> float:
+            rank = (len(values) - 1) * fraction
+            lower = int(rank)
+            upper = min(lower + 1, len(values) - 1)
+            return values[lower] + (values[upper] - values[lower]) * (rank - lower)
+
+        return [
+            {
+                "median": median(values),
+                "p95": percentile(0.95),
+                "p99": percentile(0.99),
+                "maximum": values[-1],
+            }
+        ]
 
 
 class RelationshipCoverageClient:
@@ -361,6 +412,16 @@ class RelationshipCoverageClient:
             return [{"relationshipType": name} for name in reversed(self.properties)]
         for relationship_type, property_counts in self.properties.items():
             relationship_type_ref = f"`{relationship_type}`"
+            if query.startswith(f"CALL {{\n  MATCH ()-[r:{relationship_type_ref}]->()"):
+                return [
+                    {
+                        "count": max(property_counts.values(), default=0),
+                        "properties": [
+                            {"name": name, "populated_count": count}
+                            for name, count in sorted(property_counts.items())
+                        ],
+                    }
+                ]
             if query == (f"MATCH ()-[r:{relationship_type_ref}]->() RETURN count(r) AS count"):
                 return [{"count": max(property_counts.values(), default=0)}]
             if query.startswith(f"MATCH ()-[r:{relationship_type_ref}]->() UNWIND keys(r)"):
@@ -526,6 +587,19 @@ def test_profile_returns_valid_baseline_from_probe_and_labels() -> None:
         ),
     ]
     assert baseline.fingerprint.startswith("sha256:")
+
+
+def test_profile_batches_inventory_and_reuses_it_for_coverage() -> None:
+    client = FakeNeo4jClient()
+
+    baseline = profile(cast(Neo4jClient, client))
+
+    assert baseline.status is ProfileStatus.COMPLETE
+    assert len(client.calls) == 8
+    assert sum(query.startswith("CALL {\n  MATCH (n:") for query, _ in client.calls) == 2
+    assert sum(query.startswith("CALL {\n  MATCH ()-[r:") for query, _ in client.calls) == 2
+    assert not any("WHERE n[$property]" in query for query, _ in client.calls)
+    assert not any("WHERE r[$property]" in query for query, _ in client.calls)
 
 
 def test_profile_fails_when_core_counts_are_unavailable() -> None:

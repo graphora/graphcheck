@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from graphcheck.reporting.history import ReportRun
 
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
+_SUITE_MANIFEST = ".graphcheck-suite-manifest.json"
 
 
 def _call(module: str, name: str, *args, **kwargs):
@@ -72,6 +73,17 @@ def write_results(*args, **kwargs):
 
 def write_html_report(*args, **kwargs):
     return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
+
+
+def render_run_artifacts(results: "Results") -> tuple[bytes, bytes, bytes]:
+    model, rendered_json = _call("graphcheck.reporting.writer", "validated_results_json", results)
+    rendered_html = _call("graphcheck.reporting.html", "render_validated_html_report", model)
+    rendered_summary = _call("graphcheck.reporting.history", "report_summary_json", model)
+    return (
+        rendered_json.encode("utf-8"),
+        rendered_html.encode("utf-8"),
+        rendered_summary.encode("utf-8"),
+    )
 
 
 app = typer.Typer(
@@ -855,11 +867,38 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["S
             "Check the configured checks path and its filesystem permissions.",
         ) from exc
 
+    manifest = _read_suite_manifest(checks_dir / _SUITE_MANIFEST)
+    manifest_entries: dict[str, dict[str, object]] = {}
+    requested = set(requested_suites)
     loaded: list[SuiteInput] = []
     for path in paths:
+        relative = path.relative_to(checks_dir).as_posix()
         try:
-            text = path.read_text(encoding="utf-8")
-            loaded.append(SuiteInput.from_yaml(text, source=str(path)))
+            stat = path.stat()
+            cached = manifest.get(relative)
+            cached_id = (
+                cached.get("suite")
+                if isinstance(cached, dict)
+                and cached.get("mtime_ns") == stat.st_mtime_ns
+                and cached.get("size") == stat.st_size
+                else None
+            )
+            suite_hint = cached_id if isinstance(cached_id, str) else None
+            text: str | None = None
+            if requested and suite_hint is None:
+                text = path.read_text(encoding="utf-8")
+                suite_hint = _suite_id_hint(text, path)
+            manifest_entries[relative] = {
+                "mtime_ns": stat.st_mtime_ns,
+                "size": stat.st_size,
+                "suite": suite_hint or path.stem,
+            }
+            if requested and suite_hint not in requested:
+                continue
+            text = text if text is not None else path.read_text(encoding="utf-8")
+            suite_input = SuiteInput.from_yaml(text, source=str(path))
+            manifest_entries[relative]["suite"] = suite_input.suite.suite
+            loaded.append(suite_input)
         except Exception as exc:
             raise GraphCheckError(
                 "run.suite_invalid",
@@ -867,10 +906,43 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["S
                 "Fix the suite YAML and remove unknown keys, then run it again.",
             ) from exc
 
-    if not requested_suites:
-        return loaded
-    requested = set(requested_suites)
-    return [item for item in loaded if item.suite.suite in requested]
+    _write_suite_manifest(checks_dir / _SUITE_MANIFEST, manifest_entries)
+    return loaded
+
+
+def _suite_id_hint(text: str, path: Path) -> str:
+    line = next((line for line in text.splitlines() if line.startswith("suite:")), None)
+    if line is None:
+        return path.stem
+    try:
+        raw = _call("graphcheck.contracts.check", "load_suite_yaml", line + "\n")
+    except Exception:
+        return path.stem
+    hinted = raw.get("suite")
+    return hinted if isinstance(hinted, str) else path.stem
+
+
+def _read_suite_manifest(path: Path) -> dict[str, dict[str, object]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    files = payload.get("files") if isinstance(payload, dict) else None
+    return files if isinstance(files, dict) else {}
+
+
+def _write_suite_manifest(path: Path, entries: dict[str, dict[str, object]]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps({"schema_version": 1, "files": entries}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError:
+        pass
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _project_path(root: Path, configured: str) -> Path:
@@ -888,13 +960,14 @@ def _write_run_artifacts(results: "Results", runs_dir: Path) -> tuple[Path, Path
     ):
         raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
 
-    _publish_run_directory(results, historical_dir)
+    artifacts = render_run_artifacts(results)
+    _publish_run_directory(artifacts, historical_dir)
     latest_dir = runs_dir / "latest"
-    _publish_run_directory(results, latest_dir)
+    _publish_run_directory(artifacts, latest_dir)
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
-def _publish_run_directory(results: "Results", directory: Path) -> None:
+def _publish_run_directory(artifacts: tuple[bytes, bytes, bytes], directory: Path) -> None:
     """Stage and swap a complete results/report pair without exposing a mixed pair."""
 
     parent = directory.parent
@@ -905,8 +978,10 @@ def _publish_run_directory(results: "Results", directory: Path) -> None:
     staging.mkdir()
     previous_moved = False
     try:
-        write_results(results, staging / "results.json")
-        write_html_report(results, staging / "report.html")
+        for name, content in zip(
+            ("results.json", "report.html", "summary.json"), artifacts, strict=True
+        ):
+            (staging / name).write_bytes(content)
 
         if directory.exists():
             is_junction = getattr(directory, "is_junction", lambda: False)

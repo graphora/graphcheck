@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,6 +15,10 @@ from neo4j import GraphDatabase
 from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError
+
+_READ_CLASSIFICATION_CACHE: set[tuple[str, str]] = set()
+_READ_CLASSIFICATION_INFLIGHT: dict[tuple[str, str], threading.Event] = {}
+_READ_CLASSIFICATION_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -143,11 +148,12 @@ class Neo4jClient:
             ) as session:
                 values = params or {}
                 if verify_read:
-                    _assert_server_classified_read(
+                    _ensure_server_classified_read(
                         session,
                         query,
                         values,
-                        timeout_s=_remaining_timeout(deadline),
+                        database=self._profile.database,
+                        deadline=deadline,
                     )
                 driver_query = (
                     neo4j.Query(query, timeout=_remaining_timeout(deadline))
@@ -538,6 +544,48 @@ def _assert_server_classified_read(
         f"Neo4j returned unknown query type {query_type!r} for the read-only preflight.",
         "Use a supported Neo4j server/driver and a dedicated read-only database credential.",
     )
+
+
+def _ensure_server_classified_read(
+    session: object,
+    query: str,
+    params: dict[str, object],
+    *,
+    database: str,
+    deadline: float | None,
+) -> None:
+    cache_key = (query, database)
+    while True:
+        with _READ_CLASSIFICATION_LOCK:
+            if cache_key in _READ_CLASSIFICATION_CACHE:
+                return
+            pending = _READ_CLASSIFICATION_INFLIGHT.get(cache_key)
+            owner = pending is None
+            if owner:
+                pending = threading.Event()
+                _READ_CLASSIFICATION_INFLIGHT[cache_key] = pending
+        if owner:
+            break
+        assert pending is not None
+        pending.wait(_remaining_timeout(deadline))
+
+    assert pending is not None
+    try:
+        _assert_server_classified_read(
+            session,
+            query,
+            params,
+            timeout_s=_remaining_timeout(deadline),
+        )
+    except BaseException:
+        with _READ_CLASSIFICATION_LOCK:
+            _READ_CLASSIFICATION_INFLIGHT.pop(cache_key, None)
+            pending.set()
+        raise
+    with _READ_CLASSIFICATION_LOCK:
+        _READ_CLASSIFICATION_CACHE.add(cache_key)
+        _READ_CLASSIFICATION_INFLIGHT.pop(cache_key, None)
+        pending.set()
 
 
 def _summary_notifications(summary: object | None) -> tuple[dict[str, Any], ...]:

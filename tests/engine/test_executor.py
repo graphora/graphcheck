@@ -1,3 +1,4 @@
+import inspect
 from dataclasses import dataclass
 
 import pytest
@@ -72,3 +73,25 @@ def test_executor_rejects_connector_without_read_api():
         ReadOnlyExecutor(object()).execute("RETURN 1")
 
     assert caught.value.error.code == "engine.connector_invalid"
+
+
+def test_executor_inspects_timeout_support_only_during_construction(monkeypatch):
+    calls = 0
+    real_signature = inspect.signature
+
+    def count_signature(method):
+        nonlocal calls
+        calls += 1
+        return real_signature(method)
+
+    class Client:
+        def run_read(self, query, params, *, timeout_s=None):
+            return [{"value": 1}]
+
+    monkeypatch.setattr("graphcheck.engine.executor.inspect.signature", count_signature)
+    executor = ReadOnlyExecutor(Client())
+
+    executor.execute("RETURN 1 AS value")
+    executor.execute("RETURN 1 AS value")
+
+    assert calls == 1

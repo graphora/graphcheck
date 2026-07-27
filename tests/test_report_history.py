@@ -5,6 +5,14 @@ from typer.testing import CliRunner
 
 from graphcheck.cli import app
 from graphcheck.project import write_default_project
+from graphcheck.reporting import history as history_module
+from graphcheck.reporting.history import (
+    discover_report_runs,
+    find_report_run,
+    format_report_comparison,
+    format_report_history,
+    report_summary_json,
+)
 from graphcheck.reporting.writer import load_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
@@ -303,3 +311,42 @@ def test_report_history_reads_schema_1_0_artifacts(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "legacy-run" in result.stdout
     assert json.loads(results_path.read_text(encoding="utf-8"))["schema_version"] == "1.0"
+
+
+def test_report_history_uses_summaries_and_loads_only_compared_runs(tmp_path, monkeypatch):
+    runs_dir = tmp_path / "runs"
+    for run_id, finished_at in (
+        ("run-one", "2026-07-01T10:00:00Z"),
+        ("run-two", "2026-07-02T10:00:00Z"),
+        ("run-three", "2026-07-03T10:00:00Z"),
+    ):
+        directory = runs_dir / run_id
+        directory.mkdir(parents=True)
+        payload = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+        payload["run"]["id"] = run_id
+        payload["run"]["started_at"] = finished_at
+        payload["run"]["finished_at"] = finished_at
+        results_path = directory / "results.json"
+        results_path.write_text(json.dumps(payload), encoding="utf-8")
+        (directory / "summary.json").write_text(
+            report_summary_json(load_results(results_path)), encoding="utf-8"
+        )
+        (directory / "report.html").write_text("report", encoding="utf-8")
+
+    real_load = history_module.load_results
+    loaded: list[Path] = []
+
+    def count_loads(path):
+        loaded.append(path)
+        return real_load(path)
+
+    monkeypatch.setattr(history_module, "load_results", count_loads)
+    records = discover_report_runs(runs_dir)
+
+    assert "run-three" in format_report_history(records)
+    assert loaded == []
+
+    first = find_report_run(records, "run-one")
+    second = find_report_run(records, "run-two")
+    assert "Comparing run-one -> run-two" in format_report_comparison(first, second)
+    assert loaded == [first.results_path, second.results_path]

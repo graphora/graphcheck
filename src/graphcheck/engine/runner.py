@@ -7,6 +7,7 @@ import math
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -81,6 +82,7 @@ class EngineConfig:
     # Leave a small serialization/reporting margin inside the user-facing five-minute budget.
     time_budget_s: float = 295.0
     evidence_cap: int = 100
+    max_concurrency: int = 4
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,
@@ -103,6 +105,12 @@ class EngineConfig:
             or self.evidence_cap < 1
         ):
             raise ValueError("evidence_cap must be a positive integer")
+        if (
+            isinstance(self.max_concurrency, bool)
+            or not isinstance(self.max_concurrency, int)
+            or self.max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
 
 
 class Engine:
@@ -134,6 +142,8 @@ class Engine:
         self._monotonic = monotonic or time.monotonic
         self._id_factory = id_factory or uuid.uuid4
         self._progress_callback = progress_callback
+        probe = getattr(client, "probe", None)
+        self._probe_accepts_timeout = callable(probe) and _accepts_timeout(probe)
 
     def run_yaml(
         self,
@@ -271,13 +281,16 @@ class Engine:
                 fail_fast=fail_fast,
             )
 
-        check_results: list[CheckResult] = []
-        total_checks = sum(len(item.suite.checks) for item in inputs)
+        tasks = [
+            (suite_input, check) for suite_input in inputs for check in suite_input.suite.checks
+        ]
+        total_checks = len(tasks)
+        result_slots: list[CheckResult | None] = [None] * total_checks
         completed_checks = 0
 
-        def record_result(result: CheckResult, suite_id: str, check_id: str) -> None:
+        def record_result(index: int, result: CheckResult, suite_id: str, check_id: str) -> None:
             nonlocal completed_checks
-            check_results.append(result)
+            result_slots[index] = result
             completed_checks += 1
             if self._progress_callback is not None:
                 self._progress_callback(
@@ -287,17 +300,65 @@ class Engine:
                 )
 
         partial_reasons: list[str] = list(dict.fromkeys(_initial_partial_reasons))
-        fail_fast_after: str | None = None
-        for suite_input in inputs:
-            for check in suite_input.suite.checks:
+        capability_check = getattr(self.compiler, "missing_capabilities", None)
+
+        def prepare(
+            index: int, suite_input: SuiteInput, check, *, check_deadline: bool = True
+        ) -> bool:
+            suite_id = suite_input.suite.suite
+            if check.generated:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.GENERATED),
+                    suite_id,
+                    check.id,
+                )
+                return False
+            missing_capabilities = (
+                tuple(capability_check(check, resolved_target))
+                if callable(capability_check)
+                else ()
+            )
+            if missing_capabilities:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.UNSUPPORTED),
+                    suite_id,
+                    check.id,
+                )
+                rendered = ", ".join(missing_capabilities)
+                _append_once(
+                    partial_reasons,
+                    f"check {suite_id}/{check.id} requires missing capability: {rendered}",
+                )
+                return False
+            if check_deadline and self._monotonic() >= deadline:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.NOT_RUN),
+                    suite_id,
+                    check.id,
+                )
+                _append_once(
+                    partial_reasons,
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                )
+                return False
+            return True
+
+        if fail_fast:
+            fail_fast_after: str | None = None
+            for index, (suite_input, check) in enumerate(tasks):
+                suite_id = suite_input.suite.suite
                 if fail_fast_after is not None:
                     record_result(
+                        index,
                         _skipped_result(
                             check,
-                            suite_input.suite.suite,
+                            suite_id,
                             SkipReason.NOT_RUN,
                         ),
-                        suite_input.suite.suite,
+                        suite_id,
                         check.id,
                     )
                     _append_once(
@@ -305,73 +366,74 @@ class Engine:
                         f"fail-fast stopped the run after {fail_fast_after}",
                     )
                     continue
-                if check.generated:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.GENERATED,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
-                    continue
-                capability_check = getattr(self.compiler, "missing_capabilities", None)
-                missing_capabilities = (
-                    tuple(capability_check(check, resolved_target))
-                    if callable(capability_check)
-                    else ()
-                )
-                if missing_capabilities:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.UNSUPPORTED,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
-                    rendered = ", ".join(missing_capabilities)
-                    _append_once(
-                        partial_reasons,
-                        f"check {suite_input.suite.suite}/{check.id} requires "
-                        f"missing capability: {rendered}",
-                    )
-                    continue
-                if self._monotonic() >= deadline:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.NOT_RUN,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
-                    _append_once(
-                        partial_reasons,
-                        f"the {self.config.time_budget_s:g}-second run budget was exhausted",
-                    )
+                if not prepare(index, suite_input, check):
                     continue
                 result, partial_reason = self._run_check(
                     check,
-                    suite_id=suite_input.suite.suite,
+                    suite_id=suite_id,
                     suite_sha=suite_input.source_sha,
                     target=resolved_target,
                     deadline=deadline,
                 )
-                record_result(result, suite_input.suite.suite, check.id)
+                record_result(index, result, suite_id, check.id)
                 if partial_reason is not None:
                     _append_once(partial_reasons, partial_reason)
-                if fail_fast and _is_hard_result(result):
-                    fail_fast_after = f"{suite_input.suite.suite}/{check.id}"
+                if _is_hard_result(result):
+                    fail_fast_after = f"{suite_id}/{check.id}"
                 if self._monotonic() >= deadline:
                     _append_once(
                         partial_reasons,
                         f"the {self.config.time_budget_s:g}-second run budget was exhausted",
                     )
+        else:
+            runnable = [
+                (index, suite_input, check)
+                for index, (suite_input, check) in enumerate(tasks)
+                if prepare(index, suite_input, check, check_deadline=False)
+            ]
+            outcomes: dict[int, str | None] = {}
+            if self.config.max_concurrency == 1:
+                for index, suite_input, check in runnable:
+                    result, reason = self._run_check_if_time(
+                        check,
+                        suite_id=suite_input.suite.suite,
+                        suite_sha=suite_input.source_sha,
+                        target=resolved_target,
+                        deadline=deadline,
+                    )
+                    outcomes[index] = reason
+                    record_result(index, result, suite_input.suite.suite, check.id)
+            elif runnable:
+                with ThreadPoolExecutor(
+                    max_workers=min(self.config.max_concurrency, len(runnable)),
+                    thread_name_prefix="graphcheck",
+                ) as pool:
+                    futures = {
+                        pool.submit(
+                            self._run_check_if_time,
+                            check,
+                            suite_id=suite_input.suite.suite,
+                            suite_sha=suite_input.source_sha,
+                            target=resolved_target,
+                            deadline=deadline,
+                        ): (index, suite_input.suite.suite, check.id)
+                        for index, suite_input, check in runnable
+                    }
+                    for future in as_completed(futures):
+                        index, suite_id, check_id = futures[future]
+                        result, reason = future.result()
+                        outcomes[index] = reason
+                        record_result(index, result, suite_id, check_id)
+            for index in sorted(outcomes):
+                if outcomes[index] is not None:
+                    _append_once(partial_reasons, outcomes[index])
+            if runnable and self._monotonic() >= deadline:
+                _append_once(
+                    partial_reasons,
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                )
 
+        check_results = [result for result in result_slots if result is not None]
         status = RunStatus.PARTIAL if partial_reasons else RunStatus.COMPLETE
         partial_reason = "; ".join(partial_reasons) if partial_reasons else None
         return self._results(
@@ -516,6 +578,28 @@ class Engine:
             partial_reason,
         )
 
+    def _run_check_if_time(
+        self,
+        check,
+        *,
+        suite_id: str,
+        suite_sha: str,
+        target: RunTarget,
+        deadline: float,
+    ) -> tuple[CheckResult, str | None]:
+        if self._monotonic() >= deadline:
+            return (
+                _skipped_result(check, suite_id, SkipReason.NOT_RUN),
+                f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+            )
+        return self._run_check(
+            check,
+            suite_id=suite_id,
+            suite_sha=suite_sha,
+            target=target,
+            deadline=deadline,
+        )
+
     def _apply_sampling(
         self,
         compiled: CompiledCheck,
@@ -606,7 +690,7 @@ class Engine:
                 "Pass `target=` or use the Neo4jClient from the C2 connector.",
             )
         timeout_s = _remaining(deadline, self._monotonic())
-        result = probe(timeout_s=timeout_s) if _accepts_timeout(probe) else probe()
+        result = probe(timeout_s=timeout_s) if self._probe_accepts_timeout else probe()
         _remaining(deadline, self._monotonic())
         target = result[0] if isinstance(result, tuple) else result
         return RunTarget.model_validate(target)

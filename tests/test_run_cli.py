@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from graphcheck import cli as cli_module
-from graphcheck.cli import _write_run_artifacts, app
+from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
@@ -81,8 +81,11 @@ def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path)
     assert (runs_dir / "run-one" / "report.html").is_file()
     assert (runs_dir / "run-two" / "results.json").is_file()
     assert (runs_dir / "run-two" / "report.html").is_file()
+    assert (runs_dir / "run-two" / "summary.json").is_file()
     assert load_results(latest_results).run.id == "run-two"
     assert latest_report.is_file()
+    assert latest_results.read_bytes() == (runs_dir / "run-two" / "results.json").read_bytes()
+    assert latest_report.read_bytes() == (runs_dir / "run-two" / "report.html").read_bytes()
     assert {record.id for record in discover_report_runs(runs_dir)} == {"run-one", "run-two"}
 
 
@@ -95,14 +98,14 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
     latest_results, latest_report = _write_run_artifacts(first, runs_dir)
     previous_results = latest_results.read_bytes()
     previous_report = latest_report.read_bytes()
-    real_write_html_report = cli_module.write_html_report
+    real_publish = cli_module._publish_run_directory
 
-    def fail_latest_refresh(results, path, **kwargs):
-        if path.parent.name.startswith(".latest.staging-"):
+    def fail_latest_refresh(artifacts, directory):
+        if directory.name == "latest":
             raise OSError("simulated latest report failure")
-        return real_write_html_report(results, path, **kwargs)
+        return real_publish(artifacts, directory)
 
-    monkeypatch.setattr(cli_module, "write_html_report", fail_latest_refresh)
+    monkeypatch.setattr(cli_module, "_publish_run_directory", fail_latest_refresh)
 
     with pytest.raises(OSError, match="simulated latest report failure"):
         _write_run_artifacts(second, runs_dir)
@@ -112,6 +115,23 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
     assert (runs_dir / "run-two" / "results.json").is_file()
     assert not list(runs_dir.glob(".*.staging-*"))
     assert not list(runs_dir.glob(".*.backup-*"))
+
+
+def test_artifact_writer_renders_once_for_history_and_latest(tmp_path, monkeypatch):
+    results = load_results(FIXTURES / "results.complete.json")
+    calls = 0
+    real_render = cli_module.render_run_artifacts
+
+    def render_once(value):
+        nonlocal calls
+        calls += 1
+        return real_render(value)
+
+    monkeypatch.setattr(cli_module, "render_run_artifacts", render_once)
+
+    _write_run_artifacts(results, tmp_path / "runs")
+
+    assert calls == 1
 
 
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
@@ -543,6 +563,26 @@ competency:
     assert payload["checks"] == []
     assert payload["score"] is None
     assert client.read_calls == []
+
+
+def test_suite_selection_skips_validation_of_unselected_files_and_writes_manifest(tmp_path):
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    (checks / "selected.yml").write_text(
+        "suite: selected\ncompetency:\n"
+        "  - id: value\n"
+        "    question: Value?\n"
+        "    query: RETURN 1 AS value\n"
+        "    expect: {rows: {exactly: 1}}\n",
+        encoding="utf-8",
+    )
+    (checks / "broken.yml").write_text("suite: broken\nunknown_top_level: true\n", encoding="utf-8")
+
+    loaded = _load_suite_inputs(checks, ["selected"])
+
+    assert [item.suite.suite for item in loaded] == ["selected"]
+    manifest = json.loads((checks / ".graphcheck-suite-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["broken.yml"]["suite"] == "broken"
 
 
 def test_run_invalid_suite_is_configuration_failure(tmp_path, monkeypatch):
