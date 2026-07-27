@@ -239,10 +239,13 @@ def safe_validation_reason(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         summaries: list[str] = []
         for error in exc.errors(include_url=False, include_context=False, include_input=False)[:5]:
-            location = ".".join(
-                str(part) if isinstance(part, int) or part in _DIAGNOSTIC_FIELDS else "field"
-                for part in error["loc"]
-            ) or "candidate"
+            location = (
+                ".".join(
+                    str(part) if isinstance(part, int) or part in _DIAGNOSTIC_FIELDS else "field"
+                    for part in error["loc"]
+                )
+                or "candidate"
+            )
             summaries.append(f"{location}: {error['msg']}")
         reason = "; ".join(summaries)
     elif isinstance(exc, UnknownCheckError):
