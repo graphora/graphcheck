@@ -7,48 +7,72 @@ import webbrowser
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
-from pydantic import ValidationError
 
 from graphcheck import __version__
-from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
-from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
-from graphcheck.contracts.results import CheckError, Results, RunTarget, Verdict
-from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
-from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
-from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
-from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
-from graphcheck.profiler import profile as build_profile
-from graphcheck.project import (
-    ARTIFACTS_DIR,
-    PROJECT_FILE,
-    ensure_gitignore_entries,
-    find_project_root,
-    load_project_config,
-    write_default_project,
-    write_example_suite,
-)
-from graphcheck.reporting import (
-    ReportHistoryError,
-    ReportRun,
-    discover_report_runs,
-    find_report_run,
-    format_report_comparison,
-    format_report_history,
-    prune_report_runs,
-    write_html_report,
-    write_results,
-)
 
-_DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
+if TYPE_CHECKING:
+    from graphcheck.contracts.profile import BaselineProfile
+    from graphcheck.contracts.results import CheckError, Results, RunTarget
+    from graphcheck.engine import SuiteInput
+    from graphcheck.reporting.history import ReportRun
+
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
-# Kept as an injection point for integrations that patched the original comparator.
-compare_baselines = compare
+
+def _call(module: str, name: str, *args, **kwargs):
+    """Import a command dependency only when its command actually uses it."""
+    return getattr(import_module(module), name)(*args, **kwargs)
+
+
+# Stable injection points for tests and integrations; each forwards lazily by default.
+def find_project_root(*args, **kwargs):
+    return _call("graphcheck.project", "find_project_root", *args, **kwargs)
+
+
+def load_profiles(*args, **kwargs):
+    return _call("graphcheck.connection_profiles", "load_profiles", *args, **kwargs)
+
+
+def select_profile(*args, **kwargs):
+    return _call("graphcheck.connection_profiles", "select_profile", *args, **kwargs)
+
+
+def Neo4jClient(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "Neo4jClient", *args, **kwargs)
+
+
+def init_trace(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "init_trace", *args, **kwargs)
+
+
+def debug_trace(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "debug_trace", *args, **kwargs)
+
+
+def build_profile(*args, **kwargs):
+    return _call("graphcheck.profiler", "profile", *args, **kwargs)
+
+
+def resolve_diff_baselines(*args, **kwargs):
+    return _call("graphcheck.baselines", "resolve_diff_baselines", *args, **kwargs)
+
+
+def compare_baselines(*args, **kwargs):
+    return _call("graphcheck.diff", "compare", *args, **kwargs)
+
+
+def write_results(*args, **kwargs):
+    return _call("graphcheck.reporting.writer", "write_results", *args, **kwargs)
+
+
+def write_html_report(*args, **kwargs):
+    return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
+
 
 app = typer.Typer(
     name="graphcheck",
@@ -83,6 +107,15 @@ def main(
 @app.command()
 def init() -> None:
     """Scaffold a new GraphCheck project in the current directory."""
+    from graphcheck.connection_profiles import write_default_profiles
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import (
+        PROJECT_FILE,
+        ensure_gitignore_entries,
+        write_default_project,
+        write_example_suite,
+    )
+
     root = Path.cwd()
     write_default_project(root)
     write_default_profiles(root)
@@ -113,6 +146,10 @@ def debug(
     json_output: bool = typer.Option(False, "--json", help="Emit the stable debug JSON trace."),
 ) -> None:
     """Diagnose the configured Neo4j connection."""
+    from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.neo4j_adapter import error_json
+
     profile_name = profile or "local"
     try:
         root = find_project_root()
@@ -196,6 +233,8 @@ def profile(
     ),
 ) -> None:
     """Generate a baseline profile for the connected Neo4j graph."""
+    from graphcheck.baselines import write_baseline
+    from graphcheck.errors import GraphCheckError
 
     try:
         root = find_project_root()
@@ -276,6 +315,18 @@ def report(
         _print_report_command_help()
         return
 
+    from graphcheck.contracts.results import Verdict
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import load_project_config
+    from graphcheck.reporting.history import (
+        ReportHistoryError,
+        discover_report_runs,
+        find_report_run,
+        format_report_comparison,
+        format_report_history,
+        prune_report_runs,
+    )
+
     try:
         root = find_project_root()
         config = load_project_config(root)
@@ -312,7 +363,11 @@ def report(
             records = discover_report_runs(runs_dir)
             record = find_report_run(records, report_id) if report_id else _latest_run(records)
             output = record.directory / "report.failures.html"
-            write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
+            write_html_report(
+                record.results,
+                output,
+                verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
+            )
             typer.echo(f"Wrote {output}")
             if open_report:
                 _open_html_report(output)
@@ -337,6 +392,9 @@ def baseline_set(
     ),
 ) -> None:
     """Select an existing snapshot as the active baseline."""
+    from graphcheck.baselines import set_current_baseline
+    from graphcheck.errors import GraphCheckError
+
     try:
         selected = set_current_baseline(filename)
     except GraphCheckError as exc:
@@ -359,6 +417,12 @@ def diff_command(
     json_output: bool = typer.Option(False, "--json", help="Emit the structured diff as JSON."),
 ) -> None:
     """Compare two stored baseline snapshots."""
+    from pydantic import ValidationError
+
+    from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+    from graphcheck.diff import SchemaVersionMismatch, render_human, render_json
+    from graphcheck.errors import GraphCheckError
+
     try:
         current_baseline_path, latest_baseline_path = resolve_diff_baselines(
             current_baseline_name,
@@ -438,17 +502,17 @@ def diff_command(
         raise typer.Exit(1)
 
 
-def _target_identity(target: RunTarget) -> str:
+def _target_identity(target: "RunTarget") -> str:
     return target.database
 
 
-def _target_identity_json(target: RunTarget) -> dict[str, str]:
+def _target_identity_json(target: "RunTarget") -> dict[str, str]:
     return {"database": _target_identity(target)}
 
 
 def _print_target_identity_warning(
-    current_baseline: BaselineProfile,
-    latest_baseline: BaselineProfile,
+    current_baseline: "BaselineProfile",
+    latest_baseline: "BaselineProfile",
 ) -> None:
     typer.echo("WARNING")
     typer.echo()
@@ -467,9 +531,11 @@ def _print_target_identity_warning(
 
 
 def _print_profile_summary(
-    baseline: BaselineProfile,
+    baseline: "BaselineProfile",
     baseline_path: Path,
 ) -> None:
+    from graphcheck.contracts.profile import ProfileStatus
+
     if baseline.status is ProfileStatus.PARTIAL:
         typer.echo("Profile completed with partial data.")
         typer.echo()
@@ -574,7 +640,9 @@ def _print_report_command_help() -> None:
     )
 
 
-def _latest_run(records: list[ReportRun]) -> ReportRun:
+def _latest_run(records: list["ReportRun"]) -> "ReportRun":
+    from graphcheck.reporting.history import ReportHistoryError
+
     if not records:
         raise ReportHistoryError(
             "No results.json found in report history. Run `graphcheck run` first."
@@ -583,6 +651,8 @@ def _latest_run(records: list[ReportRun]) -> ReportRun:
 
 
 def _latest_html_report(runs_dir: Path) -> Path:
+    from graphcheck.reporting.history import ReportHistoryError
+
     reports = list(runs_dir.rglob("report.html")) if runs_dir.is_dir() else []
     if not reports:
         raise ReportHistoryError(
@@ -592,6 +662,8 @@ def _latest_html_report(runs_dir: Path) -> Path:
 
 
 def _open_html_report(path: Path) -> None:
+    from graphcheck.reporting.history import ReportHistoryError
+
     if not path.is_file():
         raise ReportHistoryError(f"No report.html found for the selected run at {path}.")
     try:
@@ -623,12 +695,16 @@ def run_command(
     ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
+    from graphcheck.contracts.results import CheckError
+    from graphcheck.engine import DirectoryBaselineProvider, Engine, failed_results
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import ARTIFACTS_DIR, load_project_config
 
     requested_suites = list(dict.fromkeys(suite or []))
     root: Path | None = None
     runs_dir: Path | None = None
     tags: list[str] = []
-    client: Neo4jClient | None = None
+    client = None
     try:
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
@@ -698,7 +774,7 @@ def run_command(
     raise typer.Exit(results.run.exit_code)
 
 
-def _selected_check_count(suites: Sequence[SuiteInput], tags: Sequence[str]) -> int:
+def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
     return sum(
         1
         for suite_input in suites
@@ -739,6 +815,8 @@ def _run_progress(
 
 
 def _selection_tags(selectors: list[str]) -> list[str]:
+    from graphcheck.errors import GraphCheckError
+
     tags: list[str] = []
     for selector in selectors:
         kind, separator, value = selector.partition(":")
@@ -754,7 +832,10 @@ def _selection_tags(selectors: list[str]) -> list[str]:
     return tags
 
 
-def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[SuiteInput]:
+def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["SuiteInput"]:
+    from graphcheck.engine import SuiteInput
+    from graphcheck.errors import GraphCheckError
+
     if not checks_dir.is_dir():
         raise GraphCheckError(
             "run.checks_missing",
@@ -797,7 +878,7 @@ def _project_path(root: Path, configured: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
+def _write_run_artifacts(results: "Results", runs_dir: Path) -> tuple[Path, Path]:
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
     historical_dir = runs_dir / results.run.id
@@ -813,7 +894,7 @@ def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
-def _publish_run_directory(results: Results, directory: Path) -> None:
+def _publish_run_directory(results: "Results", directory: Path) -> None:
     """Stage and swap a complete results/report pair without exposing a mixed pair."""
 
     parent = directory.parent
@@ -848,12 +929,12 @@ def _publish_run_directory(results: Results, directory: Path) -> None:
             shutil.rmtree(staging)
 
 
-def _print_setup_error(error: CheckError) -> None:
+def _print_setup_error(error: "CheckError") -> None:
     typer.echo(f"{error.code}: {error.message}", err=True)
     typer.echo(f"Fix: {error.fix}", err=True)
 
 
-def _print_run_summary(results: Results, results_path: Path, report_path: Path) -> None:
+def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
     typer.echo(f"GraphCheck run {results.run.id}: {results.run.status.value}")
