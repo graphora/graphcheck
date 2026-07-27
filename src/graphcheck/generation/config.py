@@ -45,10 +45,18 @@ class GenerateConfig(BaseModel):
             raise ValueError(
                 "ollama requires an explicit base_url (recommended: http://localhost:11434/v1)"
             )
-        if self.base_url is not None and (
-            self.base_url.username is not None or self.base_url.password is not None
+        if self.base_url is not None and any(
+            part is not None
+            for part in (
+                self.base_url.username,
+                self.base_url.password,
+                self.base_url.query,
+                self.base_url.fragment,
+            )
         ):
-            raise ValueError("base_url must not contain embedded credentials")
+            raise ValueError(
+                "base_url must not contain embedded credentials, query parameters, or fragments"
+            )
         return self
 
     @property

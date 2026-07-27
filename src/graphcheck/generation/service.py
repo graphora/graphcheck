@@ -267,7 +267,7 @@ class GenerationService:
                         attempt=attempt,
                         candidate=candidate_name,
                         code="generate.candidate_duplicate",
-                        reason=f"duplicate check id {candidate.id!r}",
+                        reason="duplicate check id",
                     )
                 elif len(retained) >= requested_count:
                     rejection = DroppedCandidate(

@@ -75,6 +75,8 @@ class GenerateDisclosure:
                 }
                 for document in self.documents
             ],
+            "documents_may_contain_sensitive_content": True,
+            "documents_inspected_or_redacted": False,
             "excluded_fields": list(EXCLUDED_FIELDS),
             "non_deterministic": True,
         }
@@ -103,6 +105,8 @@ class GenerateDisclosure:
             "property coverage, GraphCheck check schemas, and "
             f"{count} user-supplied {noun} ({total_bytes:,} bytes).\n"
             f"Documents sent verbatim: {document_paths}\n"
+            "Sensitive document warning: user-supplied documents may contain sensitive content; "
+            "GraphCheck does not inspect or redact their contents.\n"
             "Not transmitting: graph records or property values, query results, target/server "
             "metadata, fingerprints, credentials, API keys, profiler failure text, or local "
             "absolute paths.\n"

@@ -19,10 +19,39 @@ from graphcheck.contracts.check import (
     ConformanceCheck,
     DriftCheck,
     Expect,
+    SuiteValidationError,
+    UnknownCheckError,
     load_suite,
 )
+from graphcheck.yaml_loader import DuplicateKeyError
 
 MAX_CANDIDATES = 20
+_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "baseline",
+        "candidate",
+        "check",
+        "competency",
+        "conformance",
+        "drift",
+        "expect",
+        "generated",
+        "id",
+        "kind",
+        "metric",
+        "params",
+        "provenance",
+        "query",
+        "question",
+        "rows",
+        "spec",
+        "suite",
+        "tags",
+        "target",
+        "tolerance",
+        "with",
+    }
+)
 
 
 class _Strict(BaseModel):
@@ -210,10 +239,21 @@ def safe_validation_reason(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         summaries: list[str] = []
         for error in exc.errors(include_url=False, include_context=False, include_input=False)[:5]:
-            location = ".".join(str(part) for part in error["loc"]) or "candidate"
+            location = ".".join(
+                str(part) if isinstance(part, int) or part in _DIAGNOSTIC_FIELDS else "field"
+                for part in error["loc"]
+            ) or "candidate"
             summaries.append(f"{location}: {error['msg']}")
         reason = "; ".join(summaries)
+    elif isinstance(exc, UnknownCheckError):
+        reason = "check: unknown check type"
+    elif isinstance(exc, DuplicateKeyError):
+        reason = "candidate: duplicate field"
+    elif isinstance(exc, SuiteValidationError):
+        reason = "candidate: invalid suite structure"
+    elif isinstance(exc, TypeError):
+        reason = "candidate: invalid type"
     else:
-        reason = str(exc)
+        reason = "candidate: invalid value"
     reason = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]+", " ", reason)
     return reason[:500] or type(exc).__name__

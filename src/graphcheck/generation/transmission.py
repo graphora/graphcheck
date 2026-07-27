@@ -204,7 +204,8 @@ def read_documents(
                 "Pass a readable UTF-8 text file.",
             )
         try:
-            raw = local_path.read_bytes()
+            with local_path.open("rb") as document_file:
+                raw = document_file.read(MAX_DOCUMENT_BYTES + 1)
         except OSError as exc:
             raise GraphCheckError(
                 "generate.doc_invalid",

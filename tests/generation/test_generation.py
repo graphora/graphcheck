@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from graphcheck.contracts.check import load_suite
 from graphcheck.contracts.profile import BaselineProfile
 from graphcheck.errors import GraphCheckError
 from graphcheck.generation.config import GenerateConfig, resolve_api_key
+from graphcheck.generation.disclosure import GenerateDisclosure
 from graphcheck.generation.prompts import (
     build_correction_request,
     build_initial_request,
@@ -22,6 +24,7 @@ from graphcheck.generation.proposals import (
     validate_candidate,
 )
 from graphcheck.generation.transmission import (
+    MAX_DOCUMENT_BYTES,
     GenerateRequest,
     build_profile_context,
     read_documents,
@@ -71,6 +74,23 @@ def test_generate_config_and_secret_resolution() -> None:
         GenerateConfig(provider="ollama", model="qwen3:8b")
     with pytest.raises(ValidationError):
         GenerateConfig(provider="openai", model="gpt", api_key_env=None)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://proxy.example/v1?api_key=DO-NOT-LOG",
+        "https://proxy.example/v1#DO-NOT-LOG",
+    ],
+)
+def test_generate_config_rejects_undisclosable_urls(base_url: str) -> None:
+    with pytest.raises(ValidationError):
+        GenerateConfig(
+            provider="openai",
+            model="gpt",
+            api_key_env="CORP_TOKEN",
+            base_url=base_url,
+        )
 
 
 def test_transmission_is_an_explicit_allow_list() -> None:
@@ -127,6 +147,54 @@ def test_documents_preserve_order_bytes_and_provider_safe_names(tmp_path: Path) 
     assert caught.value.error.code == "generate.doc_invalid"
 
 
+def test_document_read_is_bounded_before_size_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = tmp_path / "large.txt"
+    document.touch()
+    read_sizes: list[int] = []
+
+    class RecordingStream(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            return super().read(size)
+
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda self, *args, **kwargs: RecordingStream(b"x" * (MAX_DOCUMENT_BYTES + 1)),
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        read_documents([document], project_root=tmp_path)
+
+    assert caught.value.error.code == "generate.doc_too_large"
+    assert read_sizes == [MAX_DOCUMENT_BYTES + 1]
+
+
+def test_disclosure_explicitly_warns_that_documents_are_not_redacted(tmp_path: Path) -> None:
+    document = tmp_path / "rules.md"
+    document.write_text("sensitive", encoding="utf-8")
+    loaded = read_documents([document], project_root=tmp_path)
+    disclosure = GenerateDisclosure.build(
+        config=GenerateConfig(
+            provider="ollama",
+            model="qwen",
+            base_url="http://localhost:11434/v1",
+        ),
+        baseline=".graphcheck/baselines/latest.json",
+        profile_status="complete",
+        documents=loaded,
+    )
+
+    rendered = disclosure.render_human()
+    payload = disclosure.as_json()
+    assert "may contain sensitive content" in rendered
+    assert "does not inspect or redact" in rendered
+    assert payload["documents_may_contain_sensitive_content"] is True
+    assert payload["documents_inspected_or_redacted"] is False
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -167,25 +235,27 @@ def test_candidates_cross_the_real_spec02_loader(raw: RawProposal) -> None:
 
 def test_candidate_rejects_provider_owned_and_unknown_pack_fields() -> None:
     raw = conformance()
-    raw.spec["generated"] = True
-    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+    raw.spec["PRIVATE-DOCUMENT-CANARY"] = True
+    with pytest.raises(ValueError, match="Extra inputs are not permitted") as caught:
         validate_candidate(
             raw,
             provider="openai",
             model="gpt",
             candidate_name="proposal[0]",
         )
+    assert "PRIVATE-DOCUMENT-CANARY" not in str(caught.value)
 
-    with pytest.raises(ValueError, match="unknown check type"):
+    with pytest.raises(ValueError, match="check: unknown check type") as caught:
         validate_candidate(
             RawProposal(
                 kind="conformance",
-                spec={"id": "bad", "check": "invented", "with": {}},
+                spec={"id": "bad", "check": "PRIVATE-DOCUMENT-CANARY", "with": {}},
             ),
             provider="openai",
             model="gpt",
             candidate_name="proposal[0]",
         )
+    assert "PRIVATE-DOCUMENT-CANARY" not in str(caught.value)
 
 
 def test_prompts_publish_real_schemas_and_keep_documents_in_user_data() -> None:

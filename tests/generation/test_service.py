@@ -97,6 +97,49 @@ def test_service_reasks_once_and_writes_partial_result(
     assert all(check.generated for check in load_suite(generated.read_text()).checks)
 
 
+def test_service_never_discloses_provider_values_in_rejections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path, monkeypatch)
+    canary = "PRIVATE-DOCUMENT-CANARY"
+    fake = FakeClient(
+        [
+            RawProposalBatch(
+                candidates=[
+                    proposal("one"),
+                    RawProposal(
+                        kind="conformance",
+                        spec={"id": "bad-one", "check": canary, "with": {}},
+                    ),
+                ]
+            ),
+            RawProposalBatch(
+                candidates=[
+                    RawProposal(
+                        kind="conformance",
+                        spec={"id": "bad-two", "check": canary, "with": {}},
+                    )
+                ]
+            ),
+        ]
+    )
+    warnings = []
+
+    result = GenerationService(client_factory=lambda config, key: fake).generate(
+        project_root=root,
+        baseline_from=None,
+        document_paths=None,
+        requested_count=2,
+        disclosure_sink=lambda event: None,
+        warning_sink=warnings.append,
+    )
+
+    assert canary not in fake.requests[1].user_prompt
+    assert canary not in result.model_dump_json()
+    assert canary not in json.dumps([warning.model_dump(mode="json") for warning in warnings])
+    assert result.dropped_candidates[0].reason == "check: unknown check type"
+
+
 def test_service_never_writes_when_no_candidate_survives(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
