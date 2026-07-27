@@ -687,6 +687,7 @@ def report(
 
 
 @baseline_app.command("set")
+@_telemetry_command(CommandName.BASELINE)
 def baseline_set(
     filename: str | None = typer.Argument(
         None,
@@ -694,9 +695,18 @@ def baseline_set(
     ),
 ) -> None:
     """Select an existing snapshot as the active baseline."""
+    telemetry = _command_telemetry()
+    if telemetry is not None:
+        telemetry.set_action(CommandAction.SET)
     try:
         selected = set_current_baseline(filename)
     except GraphCheckError as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.BASELINE_LOAD,
+                exc.error.code,
+            )
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
@@ -704,6 +714,7 @@ def baseline_set(
 
 
 @app.command("diff")
+@_telemetry_command(CommandName.DIFF)
 def diff_command(
     current_baseline_name: str | None = typer.Argument(
         None,
@@ -716,6 +727,7 @@ def diff_command(
     json_output: bool = typer.Option(False, "--json", help="Emit the structured diff as JSON."),
 ) -> None:
     """Compare two stored baseline snapshots."""
+    telemetry = _command_telemetry()
     try:
         current_baseline_path, latest_baseline_path = resolve_diff_baselines(
             current_baseline_name,
@@ -749,18 +761,46 @@ def diff_command(
                 "Generate complete baseline profiles before running `graphcheck diff`.",
             )
     except GraphCheckError as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.BASELINE_LOAD,
+                exc.error.code,
+            )
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(2) from exc
     except SchemaVersionMismatch as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.DIFF_COMPARE,
+                SafeErrorCode.DIFF_INCOMPARABLE,
+            )
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     except (OSError, ValidationError, json.JSONDecodeError) as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.BASELINE_LOAD,
+                (
+                    SafeErrorCode.BASELINE_LOAD_FAILED
+                    if isinstance(exc, OSError)
+                    else SafeErrorCode.BASELINE_INVALID
+                ),
+            )
         typer.echo(f"error: unable to read baseline: {exc}", err=True)
         raise typer.Exit(2) from exc
 
     if _target_identity(current_baseline.target) != _target_identity(latest_baseline.target):
         if json_output:
+            if telemetry is not None:
+                telemetry.fail(
+                    ProcessOutcome.USER_ERROR,
+                    CliFailureStage.DIFF_COMPARE,
+                    SafeErrorCode.DIFF_INCOMPARABLE,
+                )
             typer.echo(
                 "error: cannot diff baselines from different databases "
                 f"(a={current_baseline.target.database}, b={latest_baseline.target.database})",
@@ -774,9 +814,33 @@ def diff_command(
 
     try:
         report = compare_baselines(current_baseline, latest_baseline)
+    except GraphCheckError as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.DIFF_COMPARE,
+                exc.error.code,
+            )
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(2) from exc
     except SchemaVersionMismatch as exc:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                CliFailureStage.DIFF_COMPARE,
+                SafeErrorCode.DIFF_INCOMPARABLE,
+            )
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
+    except Exception:
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                CliFailureStage.DIFF_COMPARE,
+                SafeErrorCode.DIFF_FAILED,
+            )
+        raise
     if isinstance(report, list):  # Compatibility with the original line-oriented hook.
         if not report:
             typer.echo("No drift detected.")

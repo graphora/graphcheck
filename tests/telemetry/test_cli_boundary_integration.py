@@ -9,7 +9,7 @@ from graphcheck import __version__
 from graphcheck import cli as cli_module
 from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
-from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
@@ -118,6 +118,108 @@ def test_parse_time_error_emits_user_error_at_true_cli_boundary(
     assert command["failure_stage"] == "config_load"
     assert command["telemetry_run_id"] is None
     assert "not-a-real-option" not in repr(command)
+
+
+def test_baseline_set_success_is_instrumented_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    baselines = tmp_path / ".graphcheck" / "baselines"
+    baselines.mkdir(parents=True)
+    (baselines / "20260714T120000.json").write_text("{}", encoding="utf-8")
+
+    exit_code = _invoke_entrypoint(monkeypatch, "baseline", "set")
+
+    assert exit_code == 0
+    command = _command_event(recording_transport)
+    assert command["command"] == "baseline"
+    assert command["action"] == "set"
+    assert command["process_outcome"] == "success"
+    assert command["failure_stage"] is None
+    assert command["safe_error_code"] is None
+
+
+def test_baseline_set_error_is_baseline_load_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    (tmp_path / ".graphcheck" / "baselines").mkdir(parents=True)
+
+    exit_code = _invoke_entrypoint(
+        monkeypatch,
+        "baseline",
+        "set",
+        "20260714T120000.json",
+    )
+
+    assert exit_code == 1
+    command = _command_event(recording_transport)
+    assert command["command"] == "baseline"
+    assert command["action"] == "set"
+    assert command["process_outcome"] == "user_error"
+    assert command["failure_stage"] == "baseline_load"
+    assert command["safe_error_code"] == "baseline.missing"
+
+
+def test_diff_missing_inputs_is_baseline_load_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.baselines.find_project_root", lambda: tmp_path)
+    (tmp_path / ".graphcheck" / "baselines").mkdir(parents=True)
+
+    exit_code = _invoke_entrypoint(monkeypatch, "diff")
+
+    assert exit_code == 2
+    command = _command_event(recording_transport)
+    assert command["command"] == "diff"
+    assert command["process_outcome"] == "user_error"
+    assert command["failure_stage"] == "baseline_load"
+    assert command["safe_error_code"] == "baseline.missing"
+
+
+def test_diff_detected_drift_is_success_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    fixture = FIXTURES / "baseline.json"
+    current = BaselineProfile.model_validate_json(fixture.read_text(encoding="utf-8"))
+    statistics = current.statistics.model_copy(
+        update={"node_count": current.statistics.node_count + 1}
+    )
+    latest = current.model_copy(
+        update={
+            "statistics": statistics,
+            "fingerprint": profile_fingerprint(current.graph_schema, statistics),
+        }
+    )
+    current_path = tmp_path / "current.json"
+    latest_path = tmp_path / "latest.json"
+    current_path.write_text(current.model_dump_json(by_alias=True), encoding="utf-8")
+    latest_path.write_text(latest.model_dump_json(by_alias=True), encoding="utf-8")
+
+    exit_code = _invoke_entrypoint(
+        monkeypatch,
+        "diff",
+        str(current_path),
+        str(latest_path),
+    )
+
+    assert exit_code == 1
+    command = _command_event(recording_transport)
+    assert command["command"] == "diff"
+    assert command["process_outcome"] == "success"
+    assert command["failure_stage"] is None
+    assert command["safe_error_code"] is None
 
 
 @pytest.mark.parametrize(

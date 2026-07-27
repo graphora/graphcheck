@@ -94,6 +94,7 @@ def test_reset_breaks_linkage_and_allowlists_map_unknown_values(tmp_path):
     assert safe_template("single-customer-secret-check") is Template.CUSTOM
     assert safe_pattern("future-private-pattern") is Pattern.UNKNOWN
     assert safe_error_code("profile.counts_unavailable") is SafeErrorCode.PROFILE_COLLECTION_FAILED
+    assert safe_error_code("baseline.not_found") is SafeErrorCode.BASELINE_MISSING
     assert safe_error_code("customer.secret.failure") is SafeErrorCode.UNKNOWN
 
 
