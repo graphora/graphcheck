@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from graphcheck.contracts.results import CheckResult, Results, RunStatus, Totals, Verdict
+from graphcheck.contracts.results import CheckResult, Results, RunStatus, Verdict
 from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
@@ -18,14 +18,6 @@ _VERDICT_ORDER = {
     Verdict.PASS: 4,
 }
 _SEVERITY_ORDER = {"error": 0, "warn": 1}
-
-_EXIT_COLORS = {
-    0: "var(--pass-color)",
-    1: "var(--fail-color)",
-    2: "var(--warn-color)",
-    3: "var(--skipped-color)",
-}
-
 
 def render_html_report(
     results: Results | dict[str, Any] | str | Path,
@@ -110,32 +102,75 @@ def _header(results: Results) -> str:
 
 
 def _banners(results: Results) -> str:
-    error_html = ""
+    total_issues = results.totals.fail + results.totals.warn + results.totals.errored
+    executed = results.totals.checks - results.totals.skipped
+
+    if total_issues > 0:
+        issue_counts = [
+            (results.totals.fail, "failure", "failures"),
+            (results.totals.warn, "warning", "warnings"),
+            (results.totals.errored, "error", "errors"),
+        ]
+        status_text = ", ".join(
+            f"{count} {singular if count == 1 else plural}"
+            for count, singular, plural in issue_counts
+            if count > 0
+        )
+    elif results.totals.skipped == 0:
+        status_text = "No checks evaluated" if executed == 0 else "No issues found"
+    else:
+        status_text = "No issues found"
+
+    skipped_text = ""
+    if results.totals.skipped > 0:
+        check_str = "check" if results.totals.skipped == 1 else "checks"
+        skipped_text = f" ({results.totals.skipped} {check_str} skipped)"
+
     if results.run.error is not None:
-        error_html = (
+        return (
             '<div class="banner-stack">'
             '<section class="banner banner-error" role="alert">'
             '<span aria-hidden="true">⚠️</span>'
+            "<strong>Run Failed.</strong>"
             f'<span class="banner-message">{_escape(results.run.error.message)}</span>'
             '<button id="run-error-fix-toggle" class="banner-action" type="button" '
             'aria-expanded="false" aria-controls="run-error-fix">See fix.</button>'
             "</section>"
             '<section id="run-error-fix" class="banner-fix hidden-banner-fix">'
-            f"<strong>{_escape(results.run.error.code)}</strong>"
             f"<span>💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</span>"
             "</section>"
             "</div>"
         )
 
-    partial_html = ""
-    if results.run.partial_reason is not None:
-        partial_html = (
+    if results.run.status is RunStatus.PARTIAL:
+        return (
+            '<div class="banner-stack">'
             '<section class="banner banner-partial">'
-            f"<strong>Partial run:</strong> {_escape(results.run.partial_reason)}"
+            "<strong>Partial Run.</strong>"
+            f'<span class="banner-message">{_escape(status_text)}.</span>'
+            '<button id="run-summary-toggle" class="banner-action" type="button" '
+            'aria-expanded="false" aria-controls="summary-table-container">See more.</button>'
             "</section>"
+            "</div>"
         )
 
-    return f"{error_html}{partial_html}"
+    celebration = " 🎉" if status_text == "No issues found" and executed > 0 else ""
+    banner_class = "banner-warning" if total_issues > 0 else "banner-complete"
+    issues_action = (
+        '<button id="run-summary-toggle" class="banner-action" type="button" '
+        'aria-expanded="false" aria-controls="summary-table-container">See issues.</button>'
+        if total_issues > 0
+        else ""
+    )
+    return (
+        '<div class="banner-stack">'
+        f'<section class="banner {banner_class}">'
+        "<strong>Run Complete.</strong>"
+        f'<span class="banner-message">{_escape(status_text)}'
+        f"{_escape(skipped_text)}.{celebration}</span>{issues_action}"
+        "</section>"
+        "</div>"
+    )
 
 
 def _status_overview(
@@ -144,7 +179,6 @@ def _status_overview(
     *,
     filtered: bool,
 ) -> str:
-    exit_code = results.run.exit_code
     details_rows = _details_rows(checks)
 
     target = results.run.target
@@ -156,12 +190,9 @@ def _status_overview(
             f"(Neo4j version: {_escape(target.server_version)}, {_escape(target.edition)})"
         )
 
-    run_info_html = _format_run_info(
+    time_info_html = _format_time_info(
         results.run.started_at,
         results.run.finished_at,
-        exit_code,
-        results.run.status,
-        results.totals,
     )
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
@@ -243,7 +274,9 @@ def _status_overview(
         )
 
     suite_body = (
-        "".join(suite_blocks) if suite_blocks else '<p class="text-muted">No suites found.</p>'
+        "".join(suite_blocks)
+        if suite_blocks
+        else '<p class="empty-panel-message text-muted">No suites found.</p>'
     )
 
     details_body = (
@@ -257,8 +290,8 @@ def _status_overview(
         "      <h2>Graph Health Overview</h2>"
         '      <div class="summary-meta-grid">'
         '        <div class="meta-item">'
-        f'          <span class="meta-label">RUN {_escape(results.run.status.value.upper())}</span>'
-        f"          <div>{run_info_html}</div>"
+        '          <span class="meta-label">CHECKED ON</span>'
+        f"          <div>{_escape(time_info_html)}</div>"
         "        </div>"
         '        <div class="meta-item">'
         '          <span class="meta-label">Target Graph</span>'
@@ -318,7 +351,7 @@ def _details_rows(checks: Collection[CheckResult]) -> list[str]:
 
 def _empty_issue_summary(results: Results, *, filtered: bool) -> str:
     if results.run.status is RunStatus.FAILED:
-        message = "Run failed before checks could be evaluated."
+        message = "Run failed before any checks could be evaluated."
     elif results.totals.checks == results.totals.skipped:
         message = "No checks were evaluated."
     elif filtered:
@@ -340,7 +373,7 @@ def _issue(check: CheckResult) -> str:
 
 def _checks(checks: list[CheckResult]) -> str:
     items = "".join(_check(check) for check in checks) or (
-        '<p class="text-muted">No checks to explore.</p>'
+        '<p class="empty-panel-message text-muted">No checks to explore.</p>'
     )
     return (
         '<section id="checks-panel" class="card panel-section hidden-panel">'
@@ -444,54 +477,22 @@ def _details_open(check: CheckResult) -> str:
     return ""
 
 
-def _format_run_info(
+def _format_time_info(
     started: Any,
     finished: Any,
-    exit_code: int,
-    status: RunStatus,
-    totals: Totals,
 ) -> str:
     s_dt = _parse_datetime(started)
     f_dt = _parse_datetime(finished)
 
-    total_issues = totals.fail + totals.warn + totals.errored
-    executed = totals.checks - totals.skipped
-    status_text: str | None = None
-    if status is RunStatus.FAILED:
-        status_text = "Please check configured connections"
-    else:
-        if total_issues > 0:
-            issue_str = "issue" if total_issues == 1 else "issues"
-            status_text = f"{total_issues} {issue_str} found"
-        elif totals.skipped == 0:
-            status_text = "No checks evaluated" if executed == 0 else "No issues found"
-
-    exit_class = f"exit-{exit_code}" if exit_code in _EXIT_COLORS else ""
-
     if s_dt is None:
-        time_str = "n/a"
-    else:
-        formatted_date = s_dt.strftime("%d-%m-%Y at %H:%M:%S")
-        if f_dt is not None:
-            duration = max(0, int((f_dt - s_dt).total_seconds()))
-            unit = "second" if duration == 1 else "seconds"
-            time_str = f"on {formatted_date} (in {duration} {unit})"
-        else:
-            time_str = f"on {formatted_date}"
+        return "n/a"
 
-    summary_parts = []
-    if status_text is not None:
-        summary_parts.append(
-            f'<span class="{exit_class}">{_escape(status_text)}</span>'
-            if exit_class
-            else _escape(status_text)
-        )
-    if totals.skipped > 0:
-        check_str = "check" if totals.skipped == 1 else "checks"
-        skipped_text = f"{totals.skipped} {check_str} skipped"
-        separator = ", " if summary_parts else ""
-        summary_parts.append(f"{separator}{_escape(skipped_text)}")
-    return f"{''.join(summary_parts)} {_escape(time_str)}"
+    formatted_date = s_dt.strftime("%d-%m-%Y at %H:%M:%S")
+    if f_dt is not None:
+        duration = max(0, int((f_dt - s_dt).total_seconds()))
+        unit = "second" if duration == 1 else "seconds"
+        return f"{formatted_date} (in {duration} {unit})"
+    return formatted_date
 
 
 def _parse_datetime(val: Any) -> datetime | None:
@@ -648,6 +649,8 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
+  height: 96px;
+  min-height: 96px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 14px;
@@ -683,6 +686,7 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+.empty-panel-message { margin: 0; }
 
 .suite-status-card {
   background: var(--bg-subtle);
@@ -926,11 +930,25 @@ body {
 .badge-score { background: #eff6ff; color: #2563eb; border: 1px solid rgba(37, 99, 235, 0.3); order: 999; }
 [data-theme="dark"] .badge-score { background: #1e3a8a; color: #bfdbfe; }
 
-.banner-stack { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.banner-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  transition: max-width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.banner-stack.has-checks {
+  max-width: 100%;
+}
 .banner { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
 .banner-message { min-width: 0; }
 .banner-error { background: var(--fail-color); color: #fff; }
-.banner-partial { background: var(--warn-color); color: #0f172a; }
+.banner-partial { background: var(--errored-color); color: #fff; }
+.banner-complete { background: var(--pass-color); color: #fff; }
+.banner-warning { background: var(--warn-bg); color: var(--warn-color); border: 1px solid rgba(245, 158, 11, 0.3); }
 .banner-action { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; white-space: nowrap; cursor: pointer; }
 .banner-fix { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border: 1px solid var(--fail-color); border-radius: var(--radius); background: var(--bg-card); color: var(--text-main); font-size: 13px; }
 .hidden-banner-fix { display: none; }
@@ -959,8 +977,14 @@ body {
 .checks-header {
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
+  height: 96px;
+  min-height: 96px;
   gap: 10px;
-  margin-bottom: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+  flex-shrink: 0;
 }
 .checks-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #search-input {
@@ -1035,6 +1059,7 @@ pre.code-block { background: #020617; color: #f8fafc; padding: 12px; border-radi
 pre.code-block code { background: transparent; color: inherit; padding: 0; border-radius: 0; font-size: 100%; }
 
 .text-muted { color: var(--text-muted); }
+p.text-muted { margin-top: 0; }
 .text-danger { color: var(--fail-color); }
 .text-center { text-align: center; }
 .meta-sub { font-size: 12px; color: var(--text-muted); }
@@ -1046,6 +1071,7 @@ pre.code-block code { background: transparent; color: inherit; padding: 0; borde
   html, body { height: auto; overflow: auto; }
   .dashboard-body { overflow: visible; }
   .navbar { flex-direction: row; justify-content: space-between; }
+  .summary-top-bar, .checks-header { height: auto; min-height: 0; }
   .summary-top-bar { flex-direction: column; align-items: flex-start; }
   .summary-meta-grid { flex-direction: column; gap: 8px; }
   .dashboard-grid, .dashboard-grid.has-checks { grid-template-columns: 1fr; }
@@ -1058,6 +1084,7 @@ _JS = """
 let activeVerdictFilter = 'all';
 let globalTooltip = null;
 let sortDirections = {};
+const CHECK_FILTERS_STORAGE_KEY = 'graphcheck.checksExplorerFilters';
 
 function initTooltips() {
   globalTooltip = document.createElement('div');
@@ -1114,6 +1141,40 @@ function filterChecks() {
 
     card.style.display = (matchesVerdict && matchesSearch) ? 'block' : 'none';
   });
+  persistCheckFilters();
+}
+
+function persistCheckFilters() {
+  const query = document.getElementById('search-input')?.value || '';
+  try {
+    localStorage.setItem(
+      CHECK_FILTERS_STORAGE_KEY,
+      JSON.stringify({ verdict: activeVerdictFilter, query })
+    );
+  } catch {}
+}
+
+function restoreCheckFilters() {
+  let saved;
+  try {
+    saved = JSON.parse(localStorage.getItem(CHECK_FILTERS_STORAGE_KEY) || '{}');
+  } catch {
+    return;
+  }
+
+  const filterButton = Array.from(document.querySelectorAll('.filter-btn')).find(
+    button => button.dataset.filter === saved.verdict
+  );
+  if (filterButton) {
+    activeVerdictFilter = filterButton.dataset.filter;
+    document.querySelectorAll('.filter-btn').forEach(button => {
+      button.classList.toggle('active', button === filterButton);
+    });
+  }
+
+  const searchInput = document.getElementById('search-input');
+  if (searchInput && typeof saved.query === 'string') searchInput.value = saved.query;
+  filterChecks();
 }
 
 function toggleAllDetails() {
@@ -1135,12 +1196,15 @@ function toggleTheme() {
 function toggleSummaryTable() {
   const container = document.getElementById('summary-table-container');
   const btn = document.getElementById('toggle-summary-btn');
+  const bannerBtn = document.getElementById('run-summary-toggle');
   if (container.classList.contains('hidden-summary')) {
     container.classList.remove('hidden-summary');
     btn.innerHTML = 'Hide Issue Summary <span class="toggle-arrow">▲</span>';
+    bannerBtn?.setAttribute('aria-expanded', 'true');
   } else {
     container.classList.add('hidden-summary');
     btn.innerHTML = 'Show Issue Summary <span class="toggle-arrow">▼</span>';
+    bannerBtn?.setAttribute('aria-expanded', 'false');
   }
 }
 
@@ -1151,6 +1215,16 @@ function toggleRunErrorFix() {
   const isHidden = fix.classList.toggle('hidden-banner-fix');
   btn.setAttribute('aria-expanded', String(!isHidden));
   btn.textContent = isHidden ? 'See fix.' : 'Hide fix.';
+}
+
+function showIssueSummary() {
+  const container = document.getElementById('summary-table-container');
+  const btn = document.getElementById('toggle-summary-btn');
+  if (!container || !btn) return;
+  container.classList.remove('hidden-summary');
+  btn.innerHTML = 'Hide Issue Summary <span class="toggle-arrow">▲</span>';
+  document.getElementById('run-summary-toggle')?.setAttribute('aria-expanded', 'true');
+  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function sortTable(columnIndex) {
@@ -1179,9 +1253,11 @@ function showChecksExplorer() {
   const grid = document.querySelector('.dashboard-grid');
   const checksPanel = document.getElementById('checks-panel');
   const btn = document.getElementById('explore-checks-btn');
+  const bannerStack = document.querySelector('.banner-stack');
 
   if (checksPanel.classList.contains('hidden-panel')) {
     grid.classList.add('has-checks');
+    if (bannerStack) bannerStack.classList.add('has-checks');
     checksPanel.classList.remove('hidden-panel');
     checksPanel.classList.add('visible-panel');
     if (btn) btn.style.display = 'none';
@@ -1216,6 +1292,7 @@ function initInteractions() {
 
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
   document.getElementById('run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix);
+  document.getElementById('run-summary-toggle')?.addEventListener('click', showIssueSummary);
   document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
   document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);
@@ -1239,6 +1316,8 @@ function initInteractions() {
       }
     });
   });
+
+  restoreCheckFilters();
 }
 
 document.addEventListener('DOMContentLoaded', initInteractions);

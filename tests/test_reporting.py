@@ -94,9 +94,15 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
     assert "<h2>Graph Health Overview</h2>" in html
-    assert '<span class="meta-label">RUN COMPLETE</span>' in html
-    assert '<span class="exit-1">2 issues found</span> on 06-07-2026' in html
-    assert "on 06-07-2026 at 09:00:00 (in 161 seconds)" in html
+    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert '<section class="banner banner-warning">' in html
+    assert "<strong>Run Complete.</strong>" in html
+    assert '<span class="banner-message">1 failure, 1 warning.</span>' in html
+    assert 'aria-controls="summary-table-container">See issues.</button>' in html
+    assert "background: var(--warn-bg); color: var(--warn-color);" in html
+    assert "localStorage.setItem(" in html
+    assert "restoreCheckFilters();" in html
+    assert "06-07-2026 at 09:00:00 (in 161 seconds)" in html
     assert "ran in" not in html
     assert "<strong>neo4j</strong> (Neo4j version: 5.18.0, community)" in html
     assert "<code>customer-360</code>" in html
@@ -120,13 +126,15 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
 def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
-    assert "<strong>Partial run:</strong>" in html
+    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="banner-message">No issues found.</span>' in html
+    assert 'aria-controls="summary-table-container">See more.</button>' in html
+    assert "run-summary-toggle')?.addEventListener('click', showIssueSummary)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
     assert '<span class="badge badge-skipped">1 SKIPPED</span>' in html
     assert 'class="status-box status-box-skipped"' in html
     assert 'class="status-box status-box-pass"' in html
-    assert '<span class="meta-label">RUN PARTIAL</span>' in html
-    assert "1 check skipped on 06-07-2026" in html
+    assert '<span class="meta-label">CHECKED ON</span>' in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
@@ -143,8 +151,8 @@ def test_html_renderer_reports_all_checks_skipped():
         '<span class="badge badge-score">SCORE: N/A</span></div>'
     ) in html
     assert '<span class="badge badge-score">SCORE: N/A</span>' in html
-    assert '<span class="meta-label">RUN COMPLETE</span>' in html
-    assert "1 check skipped on 06-07-2026" in html
+    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert "No issues found (1 check skipped)" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
     assert "Check did not pass" not in html
@@ -170,7 +178,7 @@ def test_html_renderer_does_not_call_an_empty_selection_all_clear():
 
     html = render_html_report(raw)
 
-    assert '<span class="exit-2">No checks evaluated</span>' in html
+    assert "No checks evaluated" in html
     assert "No checks were evaluated." in html
     assert "All clear! No issues found." not in html
 
@@ -191,7 +199,7 @@ def test_html_renderer_does_not_count_intentional_skips_as_issues():
 
     html = render_html_report(raw)
 
-    assert "2 checks skipped on 06-07-2026" in html
+    assert "No issues found (2 checks skipped)" in html
     assert '<span class="exit-0">2 checks skipped</span>' not in html
     assert '<span class="suite-check-stats">1/3 checks run</span>' in html
     assert '<span class="badge badge-skipped">2 SKIPPED</span>' in html
@@ -214,7 +222,9 @@ def test_html_renderer_appends_skips_to_issue_status_text():
 
     html = render_html_report(raw)
 
-    assert ('<span class="exit-1">2 issues found</span>, 2 checks skipped on 06-07-2026') in html
+    assert (
+        '<span class="banner-message">1 failure, 1 warning (2 checks skipped).</span>' in html
+    )
 
 
 def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
@@ -235,7 +245,7 @@ def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
 
     html = render_html_report(raw)
 
-    assert '<span class="exit-2">1 issue found</span> on 06-07-2026' in html
+    assert '<span class="banner-message">1 warning.</span>' in html
     assert "Run interrupted" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-warn">1 WARNING</span>'
@@ -272,6 +282,7 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     html = render_html_report(raw)
 
+    assert '<span class="banner-message">1 warning, 3 errors.</span>' in html
     assert (
         '<div class="suite-badges-row">'
         '<span class="badge badge-errored">3 ERRORED</span>'
@@ -329,14 +340,15 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
-    assert '<p class="text-muted">No checks to explore.</p>' in html
+    assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
+    assert '<p class="empty-panel-message text-muted">No checks to explore.</p>' in html
     assert '<section class="banner banner-error" role="alert">' in html
+    assert "<strong>Run Failed.</strong>" in html
     assert 'aria-controls="run-error-fix">See fix.</button>' in html
     assert '<section id="run-error-fix" class="banner-fix hidden-banner-fix">' in html
     assert "run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix)" in html
-    assert '<span class="meta-label">RUN FAILED</span>' in html
-    assert '<span class="exit-3">Please check configured connections</span>' in html
-    assert "connection.auth" in html
+    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert "connection.auth" not in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
     assert "Run failed before checks could be evaluated." in html
