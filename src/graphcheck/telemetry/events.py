@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+from threading import Lock
 from typing import Annotated, Literal, Protocol, TypeVar
 from uuid import UUID
 
@@ -405,6 +406,7 @@ class EngineEventEmitter:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid.uuid4
         self._sequence = 0
+        self._lock = Lock()
         self.telemetry_run_id: UUID | None = None
         try:
             self.telemetry_run_id = self._id_factory()
@@ -417,23 +419,24 @@ class EngineEventEmitter:
         return self._sink is not None
 
     def emit(self, model: type[EventModel], /, **payload: object) -> EventModel | None:
-        if self._sink is None or self.telemetry_run_id is None:
-            return None
-        try:
-            self._sequence += 1
-            event = model(
-                event_id=self._id_factory(),
-                telemetry_run_id=self.telemetry_run_id,
-                sequence=self._sequence,
-                occurred_at=self._clock(),
-                **payload,
-            )
-            self._sink.emit(event)
-        except Exception:
-            # SPEC-10 accepts event loss. Construction or observer failure cannot alter the run.
-            self._sink = None
-            return None
-        return event
+        with self._lock:
+            if self._sink is None or self.telemetry_run_id is None:
+                return None
+            try:
+                self._sequence += 1
+                event = model(
+                    event_id=self._id_factory(),
+                    telemetry_run_id=self.telemetry_run_id,
+                    sequence=self._sequence,
+                    occurred_at=self._clock(),
+                    **payload,
+                )
+                self._sink.emit(event)
+            except Exception:
+                # SPEC-10 accepts event loss. Construction or observer failure cannot alter the run.
+                self._sink = None
+                return None
+            return event
 
 
 def _validate_outcome_error_code(

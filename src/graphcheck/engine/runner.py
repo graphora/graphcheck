@@ -4,10 +4,12 @@ import hashlib
 import inspect
 import json
 import math
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -201,8 +203,10 @@ class Engine:
         self._telemetry_probe_ms: int | None = None
         self._telemetry_deadline: float | None = None
         self._telemetry_partial_codes: list[PartialReasonCode] = []
-        self._active_check_sequence: int | None = None
-        self._active_check: object | None = None
+        self._active_check_context: ContextVar[tuple[int, object] | None] = ContextVar(
+            f"graphcheck_active_check_{id(self)}", default=None
+        )
+        self._telemetry_state_lock = threading.Lock()
 
     def run_yaml(
         self,
@@ -307,8 +311,7 @@ class Engine:
                 )
             raise
         finally:
-            self._active_check_sequence = None
-            self._active_check = None
+            self._active_check_context.set(None)
 
     def _run_with_events(
         self,
@@ -426,22 +429,21 @@ class Engine:
         total_checks = len(tasks)
         result_slots: list[CheckResult | None] = [None] * total_checks
         completed_checks = 0
-        next_check_sequence = 0
 
         def record_result(
+            index: int,
             result: CheckResult,
             suite_id: str,
             check_id: str,
             *,
             timings: _CheckTimings | None = None,
         ) -> None:
-            nonlocal completed_checks, next_check_sequence
-            check_results.append(result)
+            nonlocal completed_checks
+            result_slots[index] = result
             completed_checks += 1
-            next_check_sequence += 1
             self._emit_check_processed(
-                next_check_sequence,
-                self._telemetry_checks[next_check_sequence - 1][1],
+                index + 1,
+                tasks[index][1],
                 result,
                 timings or _CheckTimings(),
             )
@@ -484,6 +486,7 @@ class Engine:
                     partial_reasons,
                     f"check {suite_id}/{check.id} requires missing capability: {rendered}",
                 )
+                self._add_partial_code(PartialReasonCode.UNSUPPORTED_CHECK)
                 return False
             if check_deadline and self._monotonic() >= deadline:
                 record_result(
@@ -496,6 +499,7 @@ class Engine:
                     partial_reasons,
                     f"the {self.config.time_budget_s:g}-second run budget was exhausted",
                 )
+                self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
                 return False
             return True
 
@@ -521,23 +525,21 @@ class Engine:
                     continue
                 if not prepare(index, suite_input, check):
                     continue
-                self._active_check_sequence = next_check_sequence + 1
-                self._active_check = check
-                result, partial_reason, timings = self._run_check(
+                result, partial_reason, timings = self._run_check_if_time(
                     check,
+                    check_sequence=index + 1,
                     suite_id=suite_id,
                     suite_sha=suite_input.source_sha,
                     target=resolved_target,
                     deadline=deadline,
                 )
                 record_result(
+                    index,
                     result,
                     suite_input.suite.suite,
                     check.id,
                     timings=timings,
                 )
-                self._active_check_sequence = None
-                self._active_check = None
                 if partial_reason is not None:
                     _append_once(partial_reasons, partial_reason)
                 if _is_hard_result(result):
@@ -547,6 +549,7 @@ class Engine:
                         partial_reasons,
                         f"the {self.config.time_budget_s:g}-second run budget was exhausted",
                     )
+                    self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
         else:
             runnable = [
                 (index, suite_input, check)
@@ -556,15 +559,22 @@ class Engine:
             outcomes: dict[int, str | None] = {}
             if self.config.max_concurrency == 1:
                 for index, suite_input, check in runnable:
-                    result, reason = self._run_check_if_time(
+                    result, reason, timings = self._run_check_if_time(
                         check,
+                        check_sequence=index + 1,
                         suite_id=suite_input.suite.suite,
                         suite_sha=suite_input.source_sha,
                         target=resolved_target,
                         deadline=deadline,
                     )
                     outcomes[index] = reason
-                    record_result(index, result, suite_input.suite.suite, check.id)
+                    record_result(
+                        index,
+                        result,
+                        suite_input.suite.suite,
+                        check.id,
+                        timings=timings,
+                    )
             elif runnable:
                 with ThreadPoolExecutor(
                     max_workers=min(self.config.max_concurrency, len(runnable)),
@@ -574,6 +584,7 @@ class Engine:
                         pool.submit(
                             self._run_check_if_time,
                             check,
+                            check_sequence=index + 1,
                             suite_id=suite_input.suite.suite,
                             suite_sha=suite_input.source_sha,
                             target=resolved_target,
@@ -583,9 +594,9 @@ class Engine:
                     }
                     for future in as_completed(futures):
                         index, suite_id, check_id = futures[future]
-                        result, reason = future.result()
+                        result, reason, timings = future.result()
                         outcomes[index] = reason
-                        record_result(index, result, suite_id, check_id)
+                        record_result(index, result, suite_id, check_id, timings=timings)
             for index in sorted(outcomes):
                 if outcomes[index] is not None:
                     _append_once(partial_reasons, outcomes[index])
@@ -594,6 +605,7 @@ class Engine:
                     partial_reasons,
                     f"the {self.config.time_budget_s:g}-second run budget was exhausted",
                 )
+                self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
 
         check_results = [result for result in result_slots if result is not None]
         status = RunStatus.PARTIAL if partial_reasons else RunStatus.COMPLETE
@@ -765,23 +777,29 @@ class Engine:
         self,
         check,
         *,
+        check_sequence: int,
         suite_id: str,
         suite_sha: str,
         target: RunTarget,
         deadline: float,
-    ) -> tuple[CheckResult, str | None]:
-        if self._monotonic() >= deadline:
-            return (
-                _skipped_result(check, suite_id, SkipReason.NOT_RUN),
-                f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+    ) -> tuple[CheckResult, str | None, _CheckTimings]:
+        token = self._active_check_context.set((check_sequence, check))
+        try:
+            if self._monotonic() >= deadline:
+                return (
+                    _skipped_result(check, suite_id, SkipReason.NOT_RUN),
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _CheckTimings(),
+                )
+            return self._run_check(
+                check,
+                suite_id=suite_id,
+                suite_sha=suite_sha,
+                target=target,
+                deadline=deadline,
             )
-        return self._run_check(
-            check,
-            suite_id=suite_id,
-            suite_sha=suite_sha,
-            target=target,
-            deadline=deadline,
-        )
+        finally:
+            self._active_check_context.reset(token)
 
     def _apply_sampling(
         self,
@@ -792,7 +810,7 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
-    ) -> tuple[CompiledCheck, dict[str, object]]:
+    ) -> tuple[CompiledCheck, dict[str, object], int | None]:
         requested = (
             check.spec.with_.get("sample_size")
             if isinstance(check.spec, ConformanceCheck)
@@ -812,8 +830,62 @@ class Engine:
                     expected={**compiled.expected, "sample_size": sample_size},
                 ),
                 resolved,
+                None,
             )
-        
+        if compiled.population_query is None:
+            raise GraphCheckError(
+                "engine.sampling_invalid",
+                f"Sampled check {check.id!r} has no population query.",
+                "Fix the pack compiler to provide a deterministic population query.",
+            )
+        stage_started = self._timing_start()
+        population_execution = self._execute_query_with_event(
+            compiled.population_query,
+            compiled.population_params or {},
+            role=QueryRole.SAMPLING_POPULATION,
+            timeout_s=_remaining(deadline, self._monotonic()),
+        )
+        sampling_population_ms = self._timing_finish(stage_started)
+        if len(population_execution.rows) != 1:
+            raise GraphCheckError(
+                "engine.sampling_invalid",
+                f"Sampled check {check.id!r} did not return one population row.",
+                "Fix the pack's population query to return one non-negative count.",
+            )
+        population = population_execution.rows[0].get("population")
+        if (
+            isinstance(population, bool)
+            or not isinstance(population, (int, float))
+            or int(population) != population
+            or population < 0
+        ):
+            raise GraphCheckError(
+                "engine.sampling_invalid",
+                f"Sampled check {check.id!r} returned an invalid population {population!r}.",
+                "Fix the pack's population query to return a non-negative integer.",
+            )
+        population = int(population)
+        decision = self.config.sampling.decide(
+            population,
+            graph_fingerprint=target.fingerprint,
+            suite_sha=suite_sha,
+            check_id=check.id,
+        )
+        sample_size = (
+            decision.sample_size if requested is None else min(decision.sample_size, int(requested))
+        )
+        resolved = {**params, "sample_size": sample_size}
+        return (
+            replace(
+                compiled,
+                params={**compiled.params, "sample_size": sample_size},
+                expected={**compiled.expected, "sample_size": sample_size},
+                sample_population=population,
+            ),
+            resolved,
+            sampling_population_ms,
+        )
+
     def _reset_telemetry_state(self) -> None:
         self._telemetry = None
         self._telemetry_started_perf = None
@@ -827,8 +899,7 @@ class Engine:
         self._telemetry_probe_ms = None
         self._telemetry_deadline = None
         self._telemetry_partial_codes = []
-        self._active_check_sequence = None
-        self._active_check = None
+        self._active_check_context.set(None)
 
     def _resolve_target_with_events(
         self,
@@ -986,10 +1057,12 @@ class Engine:
             server_consumed_after_ms=execution.server_consumed_after_ms,
             notification_count=execution.notification_count,
         )
-        if self._active_check_sequence is not None and execution.read_guard_ms is not None:
-            self._telemetry_read_guard_ms_by_check.setdefault(
-                self._active_check_sequence, []
-            ).append(execution.read_guard_ms)
+        active_check = self._active_check_context.get()
+        if active_check is not None and execution.read_guard_ms is not None:
+            with self._telemetry_state_lock:
+                self._telemetry_read_guard_ms_by_check.setdefault(active_check[0], []).append(
+                    execution.read_guard_ms
+                )
         return execution
 
     def _emit_query(
@@ -1006,29 +1079,31 @@ class Engine:
     ) -> None:
         if self._telemetry is None or not self._telemetry.enabled:
             return
-        check_sequence = None if role is QueryRole.TARGET_PROBE else self._active_check_sequence
-        check = None if check_sequence is None else self._active_check
-        if check_sequence is not None:
-            self._telemetry_query_durations_by_check.setdefault(check_sequence, []).append(
-                duration_ms
+        active_check = None if role is QueryRole.TARGET_PROBE else self._active_check_context.get()
+        check_sequence = None if active_check is None else active_check[0]
+        check = None if active_check is None else active_check[1]
+        with self._telemetry_state_lock:
+            if check_sequence is not None:
+                self._telemetry_query_durations_by_check.setdefault(check_sequence, []).append(
+                    duration_ms
+                )
+                if role is QueryRole.SAMPLING_POPULATION:
+                    self._telemetry_sampled_checks.add(check_sequence)
+            self._telemetry_query_durations.append(duration_ms)
+            self._telemetry.emit(
+                QueryFinished,
+                check_sequence=check_sequence,
+                pattern=None if check is None else safe_pattern(check.pattern),
+                template=None if check is None else _telemetry_template(check),
+                query_role=role,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                server_available_after_ms=server_available_after_ms,
+                server_consumed_after_ms=server_consumed_after_ms,
+                read_guard_outcome=read_guard_outcome,
+                notification_count=notification_count,
+                error_code=error_code,
             )
-            if role is QueryRole.SAMPLING_POPULATION:
-                self._telemetry_sampled_checks.add(check_sequence)
-        self._telemetry_query_durations.append(duration_ms)
-        self._telemetry.emit(
-            QueryFinished,
-            check_sequence=check_sequence,
-            pattern=None if check is None else safe_pattern(check.pattern),
-            template=None if check is None else _telemetry_template(check),
-            query_role=role,
-            outcome=outcome,
-            duration_ms=duration_ms,
-            server_available_after_ms=server_available_after_ms,
-            server_consumed_after_ms=server_consumed_after_ms,
-            read_guard_outcome=read_guard_outcome,
-            notification_count=notification_count,
-            error_code=error_code,
-        )
 
     def _emit_check_processed(
         self,

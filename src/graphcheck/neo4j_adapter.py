@@ -153,7 +153,7 @@ class Neo4jClient:
                 read_guard_ms: int | None = None
                 if verify_read:
                     guard_started = time.monotonic()
-                    _assert_server_classified_read(
+                    _ensure_server_classified_read(
                         session,
                         query,
                         values,

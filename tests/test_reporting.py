@@ -222,9 +222,7 @@ def test_html_renderer_appends_skips_to_issue_status_text():
 
     html = render_html_report(raw)
 
-    assert (
-        '<span class="banner-message">1 failure, 1 warning (2 checks skipped).</span>' in html
-    )
+    assert '<span class="banner-message">1 failure, 1 warning (2 checks skipped).</span>' in html
 
 
 def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
@@ -351,7 +349,7 @@ def test_html_renderer_displays_failed_run_error():
     assert "connection.auth" not in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
-    assert "Run failed before checks could be evaluated." in html
+    assert "Run failed before any checks could be evaluated." in html
     assert "All clear! No issues found." not in html
 
 

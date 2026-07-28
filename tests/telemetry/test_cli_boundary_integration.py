@@ -14,7 +14,7 @@ from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.writer import load_results
-from graphcheck.telemetry.policy import enable_telemetry
+from graphcheck.telemetry.policy import enable_telemetry, os_family, os_version, python_minor
 from graphcheck.telemetry.posthog import PostHogAdapter
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
@@ -117,6 +117,9 @@ def test_parse_time_error_emits_user_error_at_true_cli_boundary(
     assert command["process_outcome"] == "user_error"
     assert command["failure_stage"] == "config_load"
     assert command["telemetry_run_id"] is None
+    assert command["os_family"] == os_family().value
+    assert command["os_version"] == os_version()
+    assert command["python_minor"] == python_minor()
     assert "not-a-real-option" not in repr(command)
 
 

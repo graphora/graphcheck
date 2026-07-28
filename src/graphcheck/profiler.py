@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import time
-from contextvars import ContextVar
-from dataclasses import dataclass, field
 from collections.abc import Callable
 from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,22 +51,27 @@ class _LabelCollectionError(GraphCheckError):
     def __init__(self, cause: GraphCheckError, labels: list[LabelProfile]) -> None:
         super().__init__(cause.error.code, cause.error.message, cause.error.fix)
         self.labels = labels
-        self.partial_reason_code = (
-            "degree_distribution_incomplete"
-            if isinstance(cause, _DegreeDistributionError)
-            else "schema_incomplete"
-        )
+        self.partial_reason_code = "schema_incomplete"
 
 
-def profile(client: Neo4jClient) -> BaselineProfile:
+def profile(
+    client: Neo4jClient,
+    *,
+    telemetry_observer: ProfileTelemetryObserver | None = None,
+    telemetry_result_observer: ProfileResultTelemetryObserver | None = None,
+) -> BaselineProfile:
     token = _ACTIVE_INVENTORY.set(_CoverageInventory())
     try:
-        return _profile(client)
+        return _profile(
+            client,
+            telemetry_observer=telemetry_observer,
+            telemetry_result_observer=telemetry_result_observer,
+        )
     finally:
         _ACTIVE_INVENTORY.reset(token)
 
 
-def profile(
+def _profile(
     client: Neo4jClient,
     *,
     telemetry_observer: ProfileTelemetryObserver | None = None,
@@ -668,7 +673,11 @@ def _collect_degree_distribution(
         "degree_distribution",
         lambda: _run_read(
             client,
-            f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree",
+            f"MATCH (n:{label_ref}) WITH COUNT {{ (n)--() }} AS degree "
+            "RETURN coalesce(percentileCont(degree, 0.5), 0) AS median, "
+            "coalesce(percentileCont(degree, 0.95), 0) AS p95, "
+            "coalesce(percentileCont(degree, 0.99), 0) AS p99, "
+            "coalesce(max(degree), 0) AS maximum",
             deadline=deadline,
         ),
     )

@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
+from functools import wraps
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,6 +17,26 @@ from typing import TYPE_CHECKING
 import typer
 
 from graphcheck import __version__
+from graphcheck.telemetry.events import EventOutcome
+from graphcheck.telemetry.policy import (
+    CONSENT_VERSION,
+    TELEMETRY_SCHEMA_VERSION,
+    ArtifactOutcome,
+    CliFailureStage,
+    CommandAction,
+    CommandName,
+    OutputMode,
+    ProcessOutcome,
+    SafeErrorCode,
+    assert_private_payload,
+    disable_telemetry,
+    enable_telemetry,
+    reset_installation_id,
+    resolve_consent,
+    safe_command,
+)
+from graphcheck.telemetry.posthog import telemetry_delivery_configured
+from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 
 if TYPE_CHECKING:
     from graphcheck.contracts.profile import BaselineProfile
@@ -446,6 +467,7 @@ def profile(
 ) -> None:
     """Generate a baseline profile for the connected Neo4j graph."""
     from graphcheck.baselines import write_baseline
+    from graphcheck.contracts.profile import ProfileStatus
     from graphcheck.errors import GraphCheckError
 
     telemetry = _command_telemetry()
@@ -674,11 +696,27 @@ def report(
             records = discover_report_runs(runs_dir)
             record = find_report_run(records, report_id) if report_id else _latest_run(records)
             output = record.directory / "report.failures.html"
-            write_html_report(
-                record.results,
-                output,
-                verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
-            )
+            render_started = time.monotonic()
+            try:
+                write_html_report(
+                    record.results,
+                    output,
+                    verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
+                )
+            except OSError as exc:
+                if telemetry is not None:
+                    telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
+                    telemetry.report_artifact = ArtifactOutcome.ERROR
+                    telemetry.fail(
+                        ProcessOutcome.UNEXPECTED_ERROR,
+                        CliFailureStage.REPORT_RENDER,
+                        SafeErrorCode.REPORT_RENDER_FAILED,
+                    )
+                typer.echo("report.error: failed to render the requested report", err=True)
+                raise typer.Exit(1) from exc
+            if telemetry is not None:
+                telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
+                telemetry.report_artifact = ArtifactOutcome.WRITTEN
             typer.echo(f"Wrote {output}")
             if open_report:
                 _open_html_report(output)
@@ -1063,8 +1101,8 @@ def _cli_stage_for_error(code: str) -> CliFailureStage:
 
 def _telemetry_preview_payload() -> dict[str, object]:
     common = {
-        "telemetry_schema_version": "1.0",
-        "consent_version": "1.0",
+        "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
+        "consent_version": CONSENT_VERSION,
         "graphcheck_version": __version__,
         "distinct_id": "<installation-uuid>",
         "session_id": "<process-uuid>",
@@ -1130,6 +1168,9 @@ def _telemetry_preview_payload() -> dict[str, object]:
                 "process_outcome": "success",
                 "failure_stage": None,
                 "telemetry_run_id": "<run-uuid>",
+                "os_family": "linux",
+                "os_version": "6.8",
+                "python_minor": "3.12",
             },
         },
         {
@@ -1551,7 +1592,7 @@ def _project_path(root: Path, configured: str) -> Path:
 
 
 def _write_run_artifacts(
-    results: Results,
+    results: "Results",
     runs_dir: Path,
     *,
     render_observer: Callable[[int, bool], None] | None = None,

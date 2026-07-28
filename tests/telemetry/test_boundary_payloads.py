@@ -51,6 +51,7 @@ def _command(**updates):
         "interactive": False,
         "ci": True,
         "os_family": OsFamily.LINUX,
+        "os_version": "6.8",
         "python_minor": "3.12",
         "graphcheck_version": "0.1.0",
         "safe_error_code": None,
@@ -67,6 +68,11 @@ def test_completed_run_is_command_success_independent_of_result_exit_code():
     assert event.telemetry_run_id == RUN_ID
     assert "exit_code" not in event.model_dump()
     assert "verdict" not in event.model_dump()
+
+
+def test_command_environment_versions_reject_exact_build_details():
+    with pytest.raises(ValidationError, match="os_version"):
+        _command(os_version="6.8.12")
 
 
 def test_post_run_artifact_failure_is_non_success_with_run_correlation():

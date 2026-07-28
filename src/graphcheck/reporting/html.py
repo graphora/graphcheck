@@ -19,6 +19,7 @@ _VERDICT_ORDER = {
 }
 _SEVERITY_ORDER = {"error": 0, "warn": 1}
 
+
 def render_html_report(
     results: Results | dict[str, Any] | str | Path,
     *,

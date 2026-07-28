@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -7,9 +8,13 @@ from graphcheck.telemetry.events import Pattern, SafeErrorCode, Template
 from graphcheck.telemetry.policy import (
     CONSENT_VERSION,
     ConsentSource,
+    OsFamily,
     assert_private_payload,
     disable_telemetry,
     enable_telemetry,
+    os_family,
+    os_version,
+    python_minor,
     reset_installation_id,
     resolve_consent,
     safe_error_code,
@@ -103,6 +108,37 @@ def test_custom_exception_with_allowlisted_name_remains_unknown():
 
     assert safe_exception_type(RuntimeError("stdlib")).value == "RuntimeError"
     assert safe_exception_type(custom_runtime_error("custom")).value == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("system", "expected"),
+    [
+        ("Windows", OsFamily.WINDOWS),
+        ("Darwin", OsFamily.MACOS),
+        ("Linux", OsFamily.LINUX),
+        ("FreeBSD", OsFamily.OTHER),
+    ],
+)
+def test_os_family_is_coarse_and_allowlisted(system, expected):
+    assert os_family(system) is expected
+
+
+@pytest.mark.parametrize(
+    ("system", "version", "expected"),
+    [
+        ("Windows", "11", "11"),
+        ("Darwin", "15.4.1", "15.4"),
+        ("Linux", "6.8.0-64-generic", "6.8"),
+        ("FreeBSD", "14.2-RELEASE", "14.2"),
+        ("Linux", "private-custom-kernel", "unknown"),
+    ],
+)
+def test_os_version_excludes_build_and_distribution_details(system, version, expected):
+    assert os_version(system, version) == expected
+
+
+def test_python_version_is_limited_to_major_and_minor():
+    assert python_minor(SimpleNamespace(major=3, minor=13, micro=7)) == "3.13"
 
 
 def test_privacy_assertion_rejects_content_fields_and_values():

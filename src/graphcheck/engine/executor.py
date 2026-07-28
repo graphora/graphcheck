@@ -41,24 +41,7 @@ class ReadOnlyExecutor:
     ) -> ExecutionResult:
         query = compiled.query if isinstance(compiled, CompiledCheck) else compiled
         values = dict(compiled.params if isinstance(compiled, CompiledCheck) else params or {})
-        rich = getattr(self.client, "run_read_result", None)
-        if callable(rich):
-            kwargs = {"timeout_s": timeout_s} if _accepts_timeout(rich) else {}
-            result = rich(query, values, **kwargs)
-            if hasattr(result, "rows"):
-                return ExecutionResult(
-                    list(result.rows),
-                    tuple(result.columns),
-                    notification_count=len(getattr(result, "notifications", ())),
-                    server_available_after_ms=getattr(result, "server_available_after_ms", None),
-                    server_consumed_after_ms=getattr(result, "server_consumed_after_ms", None),
-                    read_guard_ms=getattr(result, "read_guard_ms", None),
-                )
-            rows = list(result)
-            return ExecutionResult(rows, tuple(rows[0]) if rows else ())
-
-        run_read = getattr(self.client, "run_read", None)
-        if not callable(run_read):
+        if self._method is None:
             raise GraphCheckError(
                 "engine.connector_invalid",
                 "The connector does not expose the SPEC-03 run_read method.",
@@ -68,7 +51,14 @@ class ReadOnlyExecutor:
         if self._rich:
             result = self._method(query, values, **kwargs)
             if hasattr(result, "rows"):
-                return ExecutionResult(list(result.rows), tuple(result.columns))
+                return ExecutionResult(
+                    list(result.rows),
+                    tuple(result.columns),
+                    notification_count=len(getattr(result, "notifications", ())),
+                    server_available_after_ms=getattr(result, "server_available_after_ms", None),
+                    server_consumed_after_ms=getattr(result, "server_consumed_after_ms", None),
+                    read_guard_ms=getattr(result, "read_guard_ms", None),
+                )
             rows = list(result)
             return ExecutionResult(rows, tuple(rows[0]) if rows else ())
         rows = list(self._method(query, values, **kwargs))

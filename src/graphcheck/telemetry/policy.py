@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import uuid
 from collections.abc import Iterable, Mapping
@@ -33,7 +34,7 @@ from graphcheck.telemetry.events import (
     Template,
 )
 
-TELEMETRY_SCHEMA_VERSION = "1.0"
+TELEMETRY_SCHEMA_VERSION = "1.1"
 CONSENT_VERSION = "1.0"
 _CONFIG_ENV = "GRAPHCHECK_TELEMETRY_CONFIG"
 _CI_INDICATORS = frozenset(
@@ -204,6 +205,7 @@ class CommandCompleted(_StrictPayload):
     interactive: bool
     ci: bool
     os_family: OsFamily
+    os_version: str
     python_minor: str
     graphcheck_version: str
     safe_error_code: SafeErrorCode | None
@@ -214,6 +216,17 @@ class CommandCompleted(_StrictPayload):
         parts = value.split(".")
         if len(parts) != 2 or not all(part.isdigit() for part in parts):
             raise ValueError("python_minor must contain only major.minor")
+        return value
+
+    @field_validator("os_version")
+    @classmethod
+    def os_version_is_coarse(cls, value: str) -> str:
+        parts = value.split(".")
+        if value != "unknown" and (
+            len(parts) not in {1, 2}
+            or not all(part.isdigit() and 1 <= len(part) <= 4 for part in parts)
+        ):
+            raise ValueError("os_version must be unknown, major, or major.minor")
         return value
 
     @model_validator(mode="after")
@@ -521,6 +534,7 @@ _COMMAND_COMPLETED_PROPERTY_KEYS = frozenset(
         "interactive",
         "ci",
         "os_family",
+        "os_version",
         "python_minor",
         "graphcheck_version",
         "safe_error_code",
@@ -893,6 +907,26 @@ def os_family(system: str | None = None) -> OsFamily:
     if name == "linux":
         return OsFamily.LINUX
     return OsFamily.OTHER
+
+
+def os_version(system: str | None = None, version: str | None = None) -> str:
+    """Return only the OS major/minor version, excluding builds and distribution details."""
+
+    name = (platform.system() if system is None else system).lower()
+    try:
+        raw = (
+            platform.mac_ver()[0]
+            if version is None and name == "darwin"
+            else platform.release()
+            if version is None
+            else version
+        )
+    except Exception:
+        return "unknown"
+    match = re.match(r"^(\d{1,4})(?:\.(\d{1,4}))?", raw.strip())
+    if match is None:
+        return "unknown"
+    return ".".join(part for part in match.groups() if part is not None)
 
 
 def python_minor(version_info: object = sys.version_info) -> str:
