@@ -236,7 +236,7 @@ def test_candidates_cross_the_real_spec02_loader(raw: RawProposal) -> None:
 def test_candidate_rejects_provider_owned_and_unknown_pack_fields() -> None:
     raw = conformance()
     raw.spec["PRIVATE-DOCUMENT-CANARY"] = True
-    with pytest.raises(ValueError, match="Extra inputs are not permitted") as caught:
+    with pytest.raises(ValueError, match="extra field is not permitted") as caught:
         validate_candidate(
             raw,
             provider="openai",
@@ -255,6 +255,45 @@ def test_candidate_rejects_provider_owned_and_unknown_pack_fields() -> None:
             model="gpt",
             candidate_name="proposal[0]",
         )
+    assert "PRIVATE-DOCUMENT-CANARY" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("raw", "safe_reason"),
+    [
+        (
+            RawProposal(kind="PRIVATE-DOCUMENT-CANARY", spec={"id": "bad"}),
+            "candidate: invalid discriminator value",
+        ),
+        (
+            RawProposal(
+                kind="conformance",
+                spec={
+                    "id": "bad",
+                    "check": "property_format",
+                    "with": {
+                        "label": "Customer",
+                        "property": "id",
+                        "regex": "(?P<PRIVATE-DOCUMENT-CANARY>a)",
+                    },
+                },
+            ),
+            "field: invalid value",
+        ),
+    ],
+)
+def test_candidate_validation_messages_never_echo_provider_values(
+    raw: RawProposal, safe_reason: str
+) -> None:
+    with pytest.raises(ValueError) as caught:
+        validate_candidate(
+            raw,
+            provider="openai",
+            model="gpt",
+            candidate_name="proposal[0]",
+        )
+
+    assert str(caught.value) == safe_reason
     assert "PRIVATE-DOCUMENT-CANARY" not in str(caught.value)
 
 

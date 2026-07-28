@@ -468,15 +468,6 @@ def profile(
             )
         finally:
             client.close()
-
-        path = write_baseline(baseline, root, config.artifacts)
-        if json_output:
-            typer.echo(baseline.model_dump_json(indent=2, by_alias=True))
-        else:
-            _print_profile_summary(
-                baseline,
-                path,
-            )
     except GraphCheckError as exc:
         if telemetry is not None:
             if telemetry.setup_ms is None:
@@ -515,7 +506,7 @@ def profile(
         )
     artifact_started = time.monotonic()
     try:
-        path = write_baseline(baseline)
+        path = write_baseline(baseline, root, config.artifacts)
     except OSError as exc:
         if telemetry is not None:
             telemetry.baseline_artifact = ArtifactOutcome.ERROR

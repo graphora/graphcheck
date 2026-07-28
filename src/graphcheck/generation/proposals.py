@@ -52,6 +52,13 @@ _DIAGNOSTIC_FIELDS = frozenset(
         "with",
     }
 )
+_PYDANTIC_DIAGNOSTICS = {
+    "extra_forbidden": "extra field is not permitted",
+    "missing": "field is required",
+    "union_tag_invalid": "invalid discriminator value",
+    "union_tag_not_found": "discriminator field is required",
+    "value_error": "invalid value",
+}
 
 
 class _Strict(BaseModel):
@@ -246,7 +253,9 @@ def safe_validation_reason(exc: Exception) -> str:
                 )
                 or "candidate"
             )
-            summaries.append(f"{location}: {error['msg']}")
+            summaries.append(
+                f"{location}: {_PYDANTIC_DIAGNOSTICS.get(error['type'], 'invalid field value')}"
+            )
         reason = "; ".join(summaries)
     elif isinstance(exc, UnknownCheckError):
         reason = "check: unknown check type"
