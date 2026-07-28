@@ -2,7 +2,7 @@ import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import (
     Counts,
     DebugTrace,
@@ -748,6 +748,7 @@ def test_transaction_timeout_error_has_an_actionable_timeout_fix():
     mapped = map_neo4j_error(error_type("The transaction timed out"))
 
     assert mapped.error.code == "neo4j.query_failed"
+    assert isinstance(mapped, GraphCheckTimeoutError)
     assert "timed out" in mapped.error.message
     assert "sampling" in mapped.error.fix
 

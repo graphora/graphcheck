@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,12 +24,14 @@ from graphcheck.contracts.profile import (
     RelationshipTypeProfile,
     profile_fingerprint,
 )
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import Neo4jClient
 
 # test addition
 # DEFAULT_PROFILE_BUDGET_SECONDS = 3
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
+ProfileTelemetryObserver = Callable[[str, str, int, object | None], None]
+ProfileResultTelemetryObserver = Callable[[str, str | None, bool], None]
 
 
 @dataclass
@@ -47,6 +51,11 @@ class _LabelCollectionError(GraphCheckError):
     def __init__(self, cause: GraphCheckError, labels: list[LabelProfile]) -> None:
         super().__init__(cause.error.code, cause.error.message, cause.error.fix)
         self.labels = labels
+        self.partial_reason_code = (
+            "degree_distribution_incomplete"
+            if isinstance(cause, _DegreeDistributionError)
+            else "schema_incomplete"
+        )
 
 
 def profile(client: Neo4jClient) -> BaselineProfile:
@@ -57,9 +66,31 @@ def profile(client: Neo4jClient) -> BaselineProfile:
         _ACTIVE_INVENTORY.reset(token)
 
 
-def _profile(client: Neo4jClient) -> BaselineProfile:
+def profile(
+    client: Neo4jClient,
+    *,
+    telemetry_observer: ProfileTelemetryObserver | None = None,
+    telemetry_result_observer: ProfileResultTelemetryObserver | None = None,
+) -> BaselineProfile:
     deadline = time.monotonic() + DEFAULT_PROFILE_BUDGET_SECONDS
-    target, _, counts = client.probe(timeout_s=_remaining_budget(deadline))
+    probe_started = time.monotonic() if telemetry_observer is not None else None
+    try:
+        target, _, counts = client.probe(timeout_s=_remaining_budget(deadline))
+    except Exception as exc:
+        _observe_profile_stage(
+            telemetry_observer,
+            "probe",
+            "timeout" if isinstance(exc, GraphCheckTimeoutError) else "error",
+            probe_started,
+        )
+        raise
+    _observe_profile_stage(
+        telemetry_observer,
+        "probe",
+        "success",
+        probe_started,
+        target=target,
+    )
     if counts.nodes is None or counts.relationships is None:
         raise GraphCheckError(
             "profile.counts_unavailable",
@@ -82,10 +113,25 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget after probe.",
+            partial_reason_code="probe_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     try:
-        labels = collect_labels(client, _deadline=deadline)
+        labels = _observed_profile_call(
+            telemetry_observer,
+            "labels",
+            lambda: (
+                collect_labels(client, _deadline=deadline)
+                if telemetry_observer is None
+                else collect_labels(
+                    client,
+                    _deadline=deadline,
+                    _telemetry_observer=telemetry_observer,
+                )
+            ),
+        )
     except _LabelCollectionError as exc:
         labels = exc.labels
         return _partial_profile(
@@ -97,6 +143,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting labels: {exc}",
+            partial_reason_code=exc.partial_reason_code,
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     except GraphCheckError as exc:
         return _partial_profile(
@@ -108,6 +157,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting labels: {exc}",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -120,10 +172,17 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting labels.",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     try:
-        relationship_types = collect_relationship_types(client, _deadline=deadline)
+        relationship_types = _observed_profile_call(
+            telemetry_observer,
+            "relationship_types",
+            lambda: collect_relationship_types(client, _deadline=deadline),
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -134,6 +193,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting relationship types: {exc}",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -146,10 +208,17 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting relationship types.",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     try:
-        constraints = collect_constraints(client, _deadline=deadline)
+        constraints = _observed_profile_call(
+            telemetry_observer,
+            "constraints",
+            lambda: collect_constraints(client, _deadline=deadline),
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -160,6 +229,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting constraints: {exc}",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -172,10 +244,17 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting constraints.",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     try:
-        indexes = collect_indexes(client, _deadline=deadline)
+        indexes = _observed_profile_call(
+            telemetry_observer,
+            "indexes",
+            lambda: collect_indexes(client, _deadline=deadline),
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -186,6 +265,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting indexes: {exc}",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -198,10 +280,17 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting indexes.",
+            partial_reason_code="schema_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     try:
-        property_coverage = collect_property_coverage(client, _deadline=deadline)
+        property_coverage = _observed_profile_call(
+            telemetry_observer,
+            "property_coverage",
+            lambda: collect_property_coverage(client, _deadline=deadline),
+        )
     except GraphCheckError as exc:
         return _partial_profile(
             target,
@@ -212,6 +301,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             indexes,
             property_coverage,
             f"Failed collecting property coverage: {exc}",
+            partial_reason_code="property_coverage_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -224,6 +316,9 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
             property_coverage,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting property coverage.",
+            partial_reason_code="property_coverage_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
         )
 
     graph_schema = GraphSchema(
@@ -237,7 +332,7 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
         relationship_count=counts.relationships,
         property_coverage=property_coverage,
     )
-    return BaselineProfile(
+    baseline = BaselineProfile(
         schema_version="1.0",
         status=ProfileStatus.COMPLETE,
         partial_reason=None,
@@ -250,6 +345,13 @@ def _profile(client: Neo4jClient) -> BaselineProfile:
         statistics=statistics,
         fingerprint=profile_fingerprint(graph_schema, statistics),
     )
+    _observe_profile_result(
+        telemetry_result_observer,
+        "complete",
+        partial_reason_code=None,
+        deadline_exhausted=False,
+    )
+    return baseline
 
 
 def _partial_profile(
@@ -261,6 +363,10 @@ def _partial_profile(
     indexes: list[IndexProfile],
     property_coverage: list[PropertyCoverage],
     reason: str,
+    *,
+    partial_reason_code: str,
+    deadline: float,
+    telemetry_result_observer: ProfileResultTelemetryObserver | None,
 ) -> BaselineProfile:
     graph_schema = GraphSchema(
         labels=labels,
@@ -275,7 +381,7 @@ def _partial_profile(
         property_coverage=property_coverage,
     )
 
-    return BaselineProfile(
+    baseline = BaselineProfile(
         schema_version="1.0",
         status=ProfileStatus.PARTIAL,
         partial_reason=reason,
@@ -288,10 +394,67 @@ def _partial_profile(
         statistics=statistics,
         fingerprint=profile_fingerprint(graph_schema, statistics),
     )
+    deadline_exhausted = _budget_exceeded(deadline)
+    _observe_profile_result(
+        telemetry_result_observer,
+        "partial",
+        partial_reason_code=("deadline_exhausted" if deadline_exhausted else partial_reason_code),
+        deadline_exhausted=deadline_exhausted,
+    )
+    return baseline
 
 
 def print_profile(client: Neo4jClient) -> None:
     print(profile(client).model_dump_json(indent=2, by_alias=True))
+
+
+def _observed_profile_call[T](
+    observer: ProfileTelemetryObserver | None,
+    stage: str,
+    operation: Callable[[], T],
+) -> T:
+    started = time.monotonic() if observer is not None else None
+    try:
+        result = operation()
+    except Exception as exc:
+        _observe_profile_stage(
+            observer,
+            stage,
+            "timeout" if isinstance(exc, GraphCheckTimeoutError) else "error",
+            started,
+        )
+        raise
+    _observe_profile_stage(observer, stage, "success", started)
+    return result
+
+
+def _observe_profile_stage(
+    observer: ProfileTelemetryObserver | None,
+    stage: str,
+    outcome: str,
+    started: float | None,
+    *,
+    target: object | None = None,
+) -> None:
+    if observer is None or started is None:
+        return
+    duration_ms = max(0, round((time.monotonic() - started) * 1000))
+    # Profiling telemetry is best-effort and must never change the profile result.
+    with suppress(Exception):
+        observer(stage, outcome, duration_ms, target)
+
+
+def _observe_profile_result(
+    observer: ProfileResultTelemetryObserver | None,
+    outcome: str,
+    *,
+    partial_reason_code: str | None,
+    deadline_exhausted: bool,
+) -> None:
+    if observer is None:
+        return
+    with suppress(Exception):
+        observer(outcome, partial_reason_code, deadline_exhausted)
 
 
 def collect_labels(
@@ -299,6 +462,7 @@ def collect_labels(
     *,
     timeout_s: float | None = None,
     _deadline: float | None = None,
+    _telemetry_observer: ProfileTelemetryObserver | None = None,
 ) -> list[LabelProfile]:
     deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
     labels = sorted(
@@ -496,16 +660,17 @@ def _collect_degree_distribution(
     *,
     timeout_s: float | None = None,
     _deadline: float | None = None,
+    _telemetry_observer: ProfileTelemetryObserver | None = None,
 ) -> DegreeDistribution:
     deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
-    rows = _run_read(
-        client,
-        f"MATCH (n:{label_ref}) WITH COUNT {{ (n)--() }} AS degree "
-        "RETURN coalesce(percentileCont(degree, 0.5), 0) AS median, "
-        "coalesce(percentileCont(degree, 0.95), 0) AS p95, "
-        "coalesce(percentileCont(degree, 0.99), 0) AS p99, "
-        "coalesce(max(degree), 0) AS maximum",
-        deadline=deadline,
+    rows = _observed_profile_call(
+        _telemetry_observer,
+        "degree_distribution",
+        lambda: _run_read(
+            client,
+            f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree",
+            deadline=deadline,
+        ),
     )
     if not rows:
         return DegreeDistribution(median=0, p95=0, p99=0, maximum=0)

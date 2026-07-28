@@ -9,6 +9,10 @@ class GraphCheckError(Exception):
         self.error = CheckError(code=code, message=message, fix=fix)
 
 
+class GraphCheckTimeoutError(GraphCheckError):
+    """An expected timeout whose public result code remains contract-compatible."""
+
+
 def profile_missing() -> GraphCheckError:
     return GraphCheckError(
         "profile.missing",

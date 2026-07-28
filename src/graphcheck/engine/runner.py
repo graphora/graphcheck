@@ -49,9 +49,38 @@ from graphcheck.engine.parameters import (
     resolve_parameters,
 )
 from graphcheck.engine.sampling import SamplingPolicy
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.packs import PACK_VERSION
+from graphcheck.packs.catalog import builtin_pack_catalog
 from graphcheck.scoring import calculate_score, calculate_suite_scores
+from graphcheck.telemetry.events import (
+    CheckProcessed,
+    EngineEventEmitter,
+    EngineEventSink,
+    EngineFaulted,
+    EngineStage,
+    EventOutcome,
+    PartialReasonCode,
+    ProcessingOutcome,
+    QueryFinished,
+    QueryRole,
+    ReadGuardOutcome,
+    RunFinished,
+    RunStarted,
+    SafeErrorCode,
+    TargetProbeFinished,
+    TargetSource,
+)
+from graphcheck.telemetry.events import (
+    SkipReason as TelemetrySkipReason,
+)
+from graphcheck.telemetry.policy import (
+    safe_error_code,
+    safe_exception_type,
+    safe_pattern,
+    safe_template,
+    version_major_minor,
+)
 
 _ProgressCallback = Callable[[int, int, str], None]
 
@@ -113,6 +142,16 @@ class EngineConfig:
             raise ValueError("max_concurrency must be a positive integer")
 
 
+@dataclass
+class _CheckTimings:
+    compile_ms: int | None = None
+    parameter_resolution_ms: int | None = None
+    sampling_population_ms: int | None = None
+    baseline_resolution_ms: int | None = None
+    read_guard_ms: int | None = None
+    evaluation_ms: int | None = None
+
+
 class Engine:
     def __init__(
         self,
@@ -127,6 +166,9 @@ class Engine:
         monotonic: Callable[[], float] | None = None,
         id_factory: Callable[[], object] | None = None,
         progress_callback: _ProgressCallback | None = None,
+        event_sink: EngineEventSink | None = None,
+        telemetry_clock: Callable[[], datetime] | None = None,
+        telemetry_id_factory: Callable[[], uuid.UUID] | None = None,
     ) -> None:
         self.client = client
         self.config = config or EngineConfig()
@@ -144,6 +186,23 @@ class Engine:
         self._progress_callback = progress_callback
         probe = getattr(client, "probe", None)
         self._probe_accepts_timeout = callable(probe) and _accepts_timeout(probe)
+        self._event_sink = event_sink
+        self._telemetry_clock = telemetry_clock
+        self._telemetry_id_factory = telemetry_id_factory
+        self._telemetry: EngineEventEmitter | None = None
+        self._telemetry_started_perf: float | None = None
+        self._telemetry_stage = EngineStage.PROBE
+        self._telemetry_checks: list[tuple[int, object]] = []
+        self._telemetry_processed: set[int] = set()
+        self._telemetry_query_durations: list[int] = []
+        self._telemetry_query_durations_by_check: dict[int, list[int]] = {}
+        self._telemetry_read_guard_ms_by_check: dict[int, list[int]] = {}
+        self._telemetry_sampled_checks: set[int] = set()
+        self._telemetry_probe_ms: int | None = None
+        self._telemetry_deadline: float | None = None
+        self._telemetry_partial_codes: list[PartialReasonCode] = []
+        self._active_check_sequence: int | None = None
+        self._active_check: object | None = None
 
     def run_yaml(
         self,
@@ -217,6 +276,50 @@ class Engine:
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
     ) -> Results:
+        """Run checks and contain all event-sink failures at the engine boundary."""
+
+        self._reset_telemetry_state()
+        try:
+            return self._run_with_events(
+                suites,
+                target=target,
+                tags=tags,
+                fail_fast=fail_fast,
+                selection_suites=selection_suites,
+                _initial_partial_reasons=_initial_partial_reasons,
+            )
+        except Exception as exc:
+            if (
+                self._telemetry is not None
+                and self._telemetry.enabled
+                and self._telemetry_started_perf is not None
+            ):
+                self._emit_unprocessed_as_not_run()
+                self._telemetry.emit(
+                    EngineFaulted,
+                    engine_stage=self._telemetry_stage,
+                    exception_type=safe_exception_type(exc),
+                    safe_error_code=SafeErrorCode.ENGINE_UNEXPECTED,
+                    elapsed_ms=_duration_ms(
+                        self._telemetry_started_perf,
+                        self._monotonic(),
+                    ),
+                )
+            raise
+        finally:
+            self._active_check_sequence = None
+            self._active_check = None
+
+    def _run_with_events(
+        self,
+        suites: Sequence[SuiteInput | LoadedSuite],
+        *,
+        target: RunTarget | None = None,
+        tags: Sequence[str] = (),
+        fail_fast: bool = False,
+        selection_suites: Sequence[str] | None = None,
+        _initial_partial_reasons: Sequence[str] = (),
+    ) -> Results:
         requested_tags = list(dict.fromkeys(tags))
         inputs = [
             item if isinstance(item, SuiteInput) else SuiteInput(item, _canonical_suite_sha(item))
@@ -241,7 +344,42 @@ class Engine:
         started_at = _timestamp(self._clock())
         started_perf = self._monotonic()
         deadline = started_perf + self.config.time_budget_s
+        self._telemetry_deadline = deadline
         run_id = str(self._id_factory())
+        selected_checks = [check for item in inputs for check in item.suite.checks]
+        self._telemetry_checks = list(enumerate(selected_checks, start=1))
+        if self._event_sink is not None:
+            self._telemetry = EngineEventEmitter(
+                self._event_sink,
+                clock=self._telemetry_clock,
+                id_factory=self._telemetry_id_factory,
+            )
+            self._telemetry_started_perf = started_perf
+            conformance_count = sum(
+                isinstance(check.spec, ConformanceCheck) for check in selected_checks
+            )
+            competency_count = sum(
+                isinstance(check.spec, CompetencyCheck) for check in selected_checks
+            )
+            drift_count = sum(isinstance(check.spec, DriftCheck) for check in selected_checks)
+            self._telemetry.emit(
+                RunStarted,
+                graphcheck_version=__version__,
+                pack_version=PACK_VERSION,
+                suite_count=len(inputs),
+                selected_check_count=len(selected_checks),
+                conformance_count=conformance_count,
+                competency_count=competency_count,
+                drift_count=drift_count,
+                uses_sampling=any(_check_may_sample(check) for check in selected_checks),
+                uses_baselines=bool(drift_count),
+                fail_fast_enabled=fail_fast,
+                suite_filter_used=selection_suites is not None,
+                tag_filter_used=bool(requested_tags),
+                time_budget_ms=max(0, round(self.config.time_budget_s * 1000)),
+            )
+            if _initial_partial_reasons:
+                self._add_partial_code(PartialReasonCode.SUITE_INPUT_INVALID)
         suite_ids = [item.suite.suite for item in inputs]
         recorded_suite_ids = (
             suite_ids if selection_suites is None else list(dict.fromkeys(selection_suites))
@@ -260,8 +398,9 @@ class Engine:
                 fail_fast=fail_fast,
             )
 
+        self._telemetry_stage = EngineStage.PROBE
         try:
-            resolved_target = target or self._probe_target(deadline)
+            resolved_target = self._resolve_target_with_events(target, deadline)
         except GraphCheckError as exc:
             return self._failed_run(
                 run_id,
@@ -287,11 +426,25 @@ class Engine:
         total_checks = len(tasks)
         result_slots: list[CheckResult | None] = [None] * total_checks
         completed_checks = 0
+        next_check_sequence = 0
 
-        def record_result(index: int, result: CheckResult, suite_id: str, check_id: str) -> None:
-            nonlocal completed_checks
-            result_slots[index] = result
+        def record_result(
+            result: CheckResult,
+            suite_id: str,
+            check_id: str,
+            *,
+            timings: _CheckTimings | None = None,
+        ) -> None:
+            nonlocal completed_checks, next_check_sequence
+            check_results.append(result)
             completed_checks += 1
+            next_check_sequence += 1
+            self._emit_check_processed(
+                next_check_sequence,
+                self._telemetry_checks[next_check_sequence - 1][1],
+                result,
+                timings or _CheckTimings(),
+            )
             if self._progress_callback is not None:
                 self._progress_callback(
                     completed_checks,
@@ -368,14 +521,23 @@ class Engine:
                     continue
                 if not prepare(index, suite_input, check):
                     continue
-                result, partial_reason = self._run_check(
+                self._active_check_sequence = next_check_sequence + 1
+                self._active_check = check
+                result, partial_reason, timings = self._run_check(
                     check,
                     suite_id=suite_id,
                     suite_sha=suite_input.source_sha,
                     target=resolved_target,
                     deadline=deadline,
                 )
-                record_result(index, result, suite_id, check.id)
+                record_result(
+                    result,
+                    suite_input.suite.suite,
+                    check.id,
+                    timings=timings,
+                )
+                self._active_check_sequence = None
+                self._active_check = None
                 if partial_reason is not None:
                     _append_once(partial_reasons, partial_reason)
                 if _is_hard_result(result):
@@ -436,7 +598,8 @@ class Engine:
         check_results = [result for result in result_slots if result is not None]
         status = RunStatus.PARTIAL if partial_reasons else RunStatus.COMPLETE
         partial_reason = "; ".join(partial_reasons) if partial_reasons else None
-        return self._results(
+        self._telemetry_stage = EngineStage.FINALIZE
+        results = self._results(
             run_id=run_id,
             started_at=started_at,
             finished_at=_timestamp(self._clock()),
@@ -449,6 +612,8 @@ class Engine:
             tags=requested_tags,
             fail_fast=fail_fast,
         )
+        self._emit_run_finished(results, started_perf)
+        return results
 
     def _run_check(
         self,
@@ -458,31 +623,37 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
-    ) -> tuple[CheckResult, str | None]:
+    ) -> tuple[CheckResult, str | None, _CheckTimings]:
         check_started_at = _timestamp(self._clock())
         check_started_perf = self._monotonic()
+        timings = _CheckTimings()
         compiled: CompiledCheck | None = None
         resolved_params: dict[str, object] | None = None
         baseline: BaselineValue | None = None
         partial_reason: str | None = None
         try:
+            self._telemetry_stage = EngineStage.COMPILE
+            stage_started = self._timing_start()
             sample_seed = self.config.sampling.check_seed(
                 graph_fingerprint=target.fingerprint,
                 suite_sha=suite_sha,
                 check_id=check.id,
             )
             compiled = self.compiler.compile(check, sample_seed=sample_seed)
+            timings.compile_ms = self._timing_finish(stage_started)
             if isinstance(check.spec, CompetencyCheck):
-                resolved_params = resolve_parameters(
-                    compiled.params,
-                    self.client,
-                    resolver=self.parameter_resolver,
-                    timeout_factory=lambda: _remaining(deadline, self._monotonic()),
+                self._telemetry_stage = EngineStage.RESOLVE_PARAMS
+                stage_started = self._timing_start()
+                resolved_params = self._resolve_parameters_with_events(
+                    compiled,
+                    deadline,
                 )
+                timings.parameter_resolution_ms = self._timing_finish(stage_started)
             else:
                 resolved_params = dict(compiled.params)
             if compiled.sampled:
-                compiled, resolved_params = self._apply_sampling(
+                self._telemetry_stage = EngineStage.SAMPLE
+                compiled, resolved_params, timings.sampling_population_ms = self._apply_sampling(
                     compiled,
                     resolved_params,
                     check=check,
@@ -491,21 +662,30 @@ class Engine:
                     deadline=deadline,
                 )
             if isinstance(check.spec, DriftCheck):
+                self._telemetry_stage = EngineStage.BASELINE
+                stage_started = self._timing_start()
                 baseline = require_baseline(
                     self.baselines,
                     check.spec.baseline,
                     check.spec.metric,
                     check.spec.target,
                 )
+                timings.baseline_resolution_ms = self._timing_finish(stage_started)
                 if baseline.partial:
                     partial_reason = (
                         f"check {suite_id}/{check.id} used partial baseline {check.spec.baseline!r}"
                     )
-            execution = self.executor.execute(
+                    self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
+            self._telemetry_stage = EngineStage.QUERY
+            execution = self._execute_query_with_event(
                 compiled.query,
                 resolved_params,
+                role=QueryRole.CHECK_MEASUREMENT,
                 timeout_s=_remaining(deadline, self._monotonic()),
             )
+            timings.read_guard_ms = execution.read_guard_ms
+            self._telemetry_stage = EngineStage.EVALUATE
+            stage_started = self._timing_start()
             evaluation = self.evaluator.evaluate(
                 # Evidence extraction must see executed literals, never unresolved graph tokens.
                 replace(compiled, params=resolved_params),
@@ -519,6 +699,7 @@ class Engine:
                     f"Evaluator returned {type(evaluation).__name__}, not an Evaluation.",
                     "Fix the evaluator implementation to return the frozen C1 Evaluation shape.",
                 )
+            timings.evaluation_ms = self._timing_finish(stage_started)
             verdict = (
                 Verdict.PASS
                 if evaluation.passed
@@ -545,13 +726,14 @@ class Engine:
                 evidence=evaluation.evidence,
                 error=None,
             )
-            return result, partial_reason
+            return result, partial_reason, timings
         except GraphCheckError as exc:
             error = exc.error
             if error.code == "engine.baseline_partial_missing":
                 partial_reason = (
                     f"check {suite_id}/{check.id} used a partial baseline missing its measurement"
                 )
+                self._add_partial_code(PartialReasonCode.BASELINE_MEASUREMENT_MISSING)
         except Exception as exc:  # isolate a broken pack/evaluator from every later check
             error = _unexpected_error(f"check {suite_id}/{check.id}", exc)
 
@@ -576,6 +758,7 @@ class Engine:
                 error=error,
             ),
             partial_reason,
+            timings,
         )
 
     def _run_check_if_time(
@@ -630,56 +813,372 @@ class Engine:
                 ),
                 resolved,
             )
-        if compiled.population_query is None:
-            raise GraphCheckError(
-                "engine.sampling_invalid",
-                f"Sampled check {check.id!r} has no population query.",
-                "Fix the pack compiler to provide a deterministic population query.",
+        
+    def _reset_telemetry_state(self) -> None:
+        self._telemetry = None
+        self._telemetry_started_perf = None
+        self._telemetry_stage = EngineStage.PROBE
+        self._telemetry_checks = []
+        self._telemetry_processed = set()
+        self._telemetry_query_durations = []
+        self._telemetry_query_durations_by_check = {}
+        self._telemetry_read_guard_ms_by_check = {}
+        self._telemetry_sampled_checks = set()
+        self._telemetry_probe_ms = None
+        self._telemetry_deadline = None
+        self._telemetry_partial_codes = []
+        self._active_check_sequence = None
+        self._active_check = None
+
+    def _resolve_target_with_events(
+        self,
+        target: RunTarget | None,
+        deadline: float,
+    ) -> RunTarget:
+        if target is not None:
+            major, minor = version_major_minor(target.server_version)
+            if self._telemetry is not None and self._telemetry.enabled:
+                self._telemetry.emit(
+                    TargetProbeFinished,
+                    outcome=EventOutcome.SUCCESS,
+                    duration_ms=0,
+                    target_source=TargetSource.PROVIDED,
+                    server_version_major=major,
+                    server_version_minor=minor,
+                    apoc_available=target.capabilities.apoc,
+                    count_store_available=target.capabilities.count_store,
+                    error_code=None,
+                )
+            self._telemetry_probe_ms = 0
+            return target
+
+        probe_started = self._timing_start()
+        try:
+            resolved = self._probe_target(deadline)
+        except Exception as exc:
+            duration_ms = self._timing_finish(probe_started) or 0
+            self._telemetry_probe_ms = duration_ms
+            raw_code = exc.error.code if isinstance(exc, GraphCheckError) else None
+            code = safe_error_code(raw_code) or SafeErrorCode.UNKNOWN
+            outcome = _telemetry_outcome(exc, raw_code)
+            self._emit_query(
+                role=QueryRole.TARGET_PROBE,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                error_code=code,
+                read_guard_outcome=ReadGuardOutcome.NOT_RUN,
             )
-        population_execution = self.executor.execute(
-            compiled.population_query,
-            compiled.population_params or {},
-            timeout_s=_remaining(deadline, self._monotonic()),
+            if self._telemetry is not None and self._telemetry.enabled:
+                self._telemetry.emit(
+                    TargetProbeFinished,
+                    outcome=outcome,
+                    duration_ms=duration_ms,
+                    target_source=TargetSource.PROBED,
+                    server_version_major=None,
+                    server_version_minor=None,
+                    apoc_available=None,
+                    count_store_available=None,
+                    error_code=code,
+                )
+            raise
+
+        duration_ms = self._timing_finish(probe_started) or 0
+        self._telemetry_probe_ms = duration_ms
+        self._emit_query(
+            role=QueryRole.TARGET_PROBE,
+            outcome=EventOutcome.SUCCESS,
+            duration_ms=duration_ms,
+            error_code=None,
+            read_guard_outcome=ReadGuardOutcome.NOT_RUN,
         )
-        if len(population_execution.rows) != 1:
-            raise GraphCheckError(
-                "engine.sampling_invalid",
-                f"Sampled check {check.id!r} did not return one population row.",
-                "Fix the pack's population query to return one non-negative count.",
+        major, minor = version_major_minor(resolved.server_version)
+        if self._telemetry is not None and self._telemetry.enabled:
+            self._telemetry.emit(
+                TargetProbeFinished,
+                outcome=EventOutcome.SUCCESS,
+                duration_ms=duration_ms,
+                target_source=TargetSource.PROBED,
+                server_version_major=major,
+                server_version_minor=minor,
+                apoc_available=resolved.capabilities.apoc,
+                count_store_available=resolved.capabilities.count_store,
+                error_code=None,
             )
-        population = population_execution.rows[0].get("population")
-        if (
-            isinstance(population, bool)
-            or not isinstance(population, (int, float))
-            or int(population) != population
-            or population < 0
-        ):
-            raise GraphCheckError(
-                "engine.sampling_invalid",
-                f"Sampled check {check.id!r} returned an invalid population {population!r}.",
-                "Fix the pack's population query to return a non-negative integer.",
+        return resolved
+
+    def _resolve_parameters_with_events(
+        self,
+        compiled: CompiledCheck,
+        deadline: float,
+    ) -> dict[str, object]:
+        has_tokens = any(
+            isinstance(value, str) and value.startswith("$") for value in compiled.params.values()
+        )
+        started = self._timing_start() if has_tokens else None
+        try:
+            resolved = resolve_parameters(
+                compiled.params,
+                self.client,
+                resolver=self.parameter_resolver,
+                timeout_factory=lambda: _remaining(deadline, self._monotonic()),
             )
-        population = int(population)
-        decision = self.config.sampling.decide(
-            population,
-            graph_fingerprint=target.fingerprint,
-            suite_sha=suite_sha,
-            check_id=check.id,
-        )
-        sample_size = (
-            decision.sample_size if requested is None else min(decision.sample_size, int(requested))
-        )
-        resolved = {**params, "sample_size": sample_size}
-        compiled_params = {**compiled.params, "sample_size": sample_size}
-        return (
-            replace(
-                compiled,
-                params=compiled_params,
-                expected={**compiled.expected, "sample_size": sample_size},
-                sample_population=population,
+        except Exception as exc:
+            if has_tokens:
+                duration_ms = self._timing_finish(started) or 0
+                raw_code = exc.error.code if isinstance(exc, GraphCheckError) else None
+                code = safe_error_code(raw_code) or SafeErrorCode.UNKNOWN
+                self._emit_query(
+                    role=QueryRole.PARAMETER_RESOLUTION,
+                    outcome=_telemetry_outcome(exc, raw_code),
+                    duration_ms=duration_ms,
+                    error_code=code,
+                    read_guard_outcome=_read_guard_error_outcome(code),
+                )
+            raise
+        if has_tokens:
+            self._emit_query(
+                role=QueryRole.PARAMETER_RESOLUTION,
+                outcome=EventOutcome.SUCCESS,
+                duration_ms=self._timing_finish(started) or 0,
+                error_code=None,
+                read_guard_outcome=(
+                    ReadGuardOutcome.ALLOWED
+                    if callable(getattr(self.client, "run_read_result", None))
+                    else ReadGuardOutcome.NOT_RUN
+                ),
+            )
+        return resolved
+
+    def _execute_query_with_event(
+        self,
+        query: str,
+        params: Mapping[str, object],
+        *,
+        role: QueryRole,
+        timeout_s: float,
+    ):
+        started = self._timing_start()
+        try:
+            execution = self.executor.execute(query, params, timeout_s=timeout_s)
+        except Exception as exc:
+            duration_ms = self._timing_finish(started) or 0
+            raw_code = exc.error.code if isinstance(exc, GraphCheckError) else None
+            code = safe_error_code(raw_code) or SafeErrorCode.UNKNOWN
+            self._emit_query(
+                role=role,
+                outcome=_telemetry_outcome(exc, raw_code),
+                duration_ms=duration_ms,
+                error_code=code,
+                read_guard_outcome=_read_guard_error_outcome(code),
+            )
+            raise
+        self._emit_query(
+            role=role,
+            outcome=EventOutcome.SUCCESS,
+            duration_ms=self._timing_finish(started) or 0,
+            error_code=None,
+            read_guard_outcome=(
+                ReadGuardOutcome.ALLOWED
+                if callable(getattr(self.client, "run_read_result", None))
+                else ReadGuardOutcome.NOT_RUN
             ),
-            resolved,
+            server_available_after_ms=execution.server_available_after_ms,
+            server_consumed_after_ms=execution.server_consumed_after_ms,
+            notification_count=execution.notification_count,
         )
+        if self._active_check_sequence is not None and execution.read_guard_ms is not None:
+            self._telemetry_read_guard_ms_by_check.setdefault(
+                self._active_check_sequence, []
+            ).append(execution.read_guard_ms)
+        return execution
+
+    def _emit_query(
+        self,
+        *,
+        role: QueryRole,
+        outcome: EventOutcome,
+        duration_ms: int,
+        error_code: SafeErrorCode | None,
+        read_guard_outcome: ReadGuardOutcome,
+        server_available_after_ms: int | None = None,
+        server_consumed_after_ms: int | None = None,
+        notification_count: int | None = None,
+    ) -> None:
+        if self._telemetry is None or not self._telemetry.enabled:
+            return
+        check_sequence = None if role is QueryRole.TARGET_PROBE else self._active_check_sequence
+        check = None if check_sequence is None else self._active_check
+        if check_sequence is not None:
+            self._telemetry_query_durations_by_check.setdefault(check_sequence, []).append(
+                duration_ms
+            )
+            if role is QueryRole.SAMPLING_POPULATION:
+                self._telemetry_sampled_checks.add(check_sequence)
+        self._telemetry_query_durations.append(duration_ms)
+        self._telemetry.emit(
+            QueryFinished,
+            check_sequence=check_sequence,
+            pattern=None if check is None else safe_pattern(check.pattern),
+            template=None if check is None else _telemetry_template(check),
+            query_role=role,
+            outcome=outcome,
+            duration_ms=duration_ms,
+            server_available_after_ms=server_available_after_ms,
+            server_consumed_after_ms=server_consumed_after_ms,
+            read_guard_outcome=read_guard_outcome,
+            notification_count=notification_count,
+            error_code=error_code,
+        )
+
+    def _emit_check_processed(
+        self,
+        check_sequence: int,
+        check,
+        result: CheckResult,
+        timings: _CheckTimings,
+    ) -> None:
+        if self._telemetry is None or not self._telemetry.enabled:
+            return
+        query_durations = self._telemetry_query_durations_by_check.get(check_sequence, [])
+        read_guard_durations = self._telemetry_read_guard_ms_by_check.get(check_sequence, [])
+        if result.verdict is Verdict.SKIPPED:
+            processing_outcome = ProcessingOutcome.SKIPPED
+            skip_reason = TelemetrySkipReason(result.skip_reason.value)
+            error_code = None
+            duration_ms = None
+        elif result.verdict is Verdict.ERRORED:
+            processing_outcome = ProcessingOutcome.ENGINE_ERROR
+            skip_reason = None
+            error_code = (
+                safe_error_code(result.error.code if result.error else None)
+                or SafeErrorCode.UNKNOWN
+            )
+            duration_ms = result.duration_ms
+        else:
+            processing_outcome = ProcessingOutcome.COMPLETED
+            skip_reason = None
+            error_code = None
+            duration_ms = result.duration_ms
+        self._telemetry.emit(
+            CheckProcessed,
+            check_sequence=check_sequence,
+            pattern=safe_pattern(check.pattern),
+            template=_telemetry_template(check),
+            processing_outcome=processing_outcome,
+            skip_reason=skip_reason,
+            duration_ms=duration_ms,
+            compile_ms=timings.compile_ms,
+            parameter_resolution_ms=timings.parameter_resolution_ms,
+            sampling_population_ms=timings.sampling_population_ms,
+            baseline_resolution_ms=timings.baseline_resolution_ms,
+            read_guard_ms=(
+                sum(read_guard_durations) if read_guard_durations else timings.read_guard_ms
+            ),
+            query_ms=sum(query_durations) if query_durations else None,
+            evaluation_ms=timings.evaluation_ms,
+            query_count=len(query_durations),
+            sampled=check_sequence in self._telemetry_sampled_checks,
+            error_code=error_code,
+        )
+        self._telemetry_processed.add(check_sequence)
+
+    def _emit_unprocessed_as_not_run(self) -> None:
+        if self._telemetry is None or not self._telemetry.enabled:
+            return
+        for check_sequence, check in self._telemetry_checks:
+            if check_sequence in self._telemetry_processed:
+                continue
+            self._telemetry.emit(
+                CheckProcessed,
+                check_sequence=check_sequence,
+                pattern=safe_pattern(check.pattern),
+                template=_telemetry_template(check),
+                processing_outcome=ProcessingOutcome.SKIPPED,
+                skip_reason=TelemetrySkipReason.NOT_RUN,
+                duration_ms=None,
+                compile_ms=None,
+                parameter_resolution_ms=None,
+                sampling_population_ms=None,
+                baseline_resolution_ms=None,
+                read_guard_ms=None,
+                query_ms=None,
+                evaluation_ms=None,
+                query_count=0,
+                sampled=False,
+                error_code=None,
+            )
+            self._telemetry_processed.add(check_sequence)
+
+    def _emit_run_finished(self, results: Results, started_perf: float) -> None:
+        if self._telemetry is None or not self._telemetry.enabled:
+            return
+        self._emit_unprocessed_as_not_run()
+        finished_perf = self._monotonic()
+        status = results.run.status
+        if status is RunStatus.FAILED:
+            executed = engine_errors = generated = unsupported = 0
+            not_run = len(self._telemetry_checks)
+        else:
+            executed = sum(
+                check.verdict in {Verdict.PASS, Verdict.FAIL, Verdict.WARN}
+                for check in results.checks
+            )
+            engine_errors = sum(check.verdict is Verdict.ERRORED for check in results.checks)
+            generated = sum(check.skip_reason is SkipReason.GENERATED for check in results.checks)
+            unsupported = sum(
+                check.skip_reason is SkipReason.UNSUPPORTED for check in results.checks
+            )
+            not_run = sum(check.skip_reason is SkipReason.NOT_RUN for check in results.checks)
+        run_error_code = (
+            safe_error_code(results.run.error.code)
+            if status is RunStatus.FAILED and results.run.error is not None
+            else None
+        )
+        partial_codes = list(self._telemetry_partial_codes)
+        if status is RunStatus.PARTIAL and not partial_codes and not_run == 0:
+            partial_codes.append(PartialReasonCode.UNKNOWN)
+        self._telemetry.emit(
+            RunFinished,
+            outcome=status.value,
+            duration_ms=_duration_ms(started_perf, finished_perf),
+            selected_check_count=len(self._telemetry_checks),
+            executed_check_count=executed,
+            engine_error_count=engine_errors,
+            skipped_generated_count=generated,
+            skipped_unsupported_count=unsupported,
+            skipped_not_run_count=not_run,
+            query_count=len(self._telemetry_query_durations),
+            query_total_ms=sum(self._telemetry_query_durations),
+            query_max_ms=(
+                max(self._telemetry_query_durations) if self._telemetry_query_durations else None
+            ),
+            probe_ms=self._telemetry_probe_ms,
+            budget_remaining_ms=(
+                None
+                if self._telemetry_deadline is None
+                else max(0, round((self._telemetry_deadline - finished_perf) * 1000))
+            ),
+            early_stopped=not_run > 0,
+            deadline_exhausted=PartialReasonCode.DEADLINE_EXHAUSTED
+            in self._telemetry_partial_codes,
+            partial_reason_codes=tuple(partial_codes) if status is RunStatus.PARTIAL else (),
+            run_error_code=run_error_code
+            or (SafeErrorCode.UNKNOWN if status is RunStatus.FAILED else None),
+        )
+
+    def _add_partial_code(self, code: PartialReasonCode) -> None:
+        if code not in self._telemetry_partial_codes:
+            self._telemetry_partial_codes.append(code)
+
+    def _timing_start(self) -> float | None:
+        return (
+            self._monotonic() if self._telemetry is not None and self._telemetry.enabled else None
+        )
+
+    def _timing_finish(self, started: float | None) -> int | None:
+        if started is None or self._telemetry is None or not self._telemetry.enabled:
+            return None
+        return _duration_ms(started, self._monotonic())
 
     def _probe_target(self, deadline: float) -> RunTarget:
         probe = getattr(self.client, "probe", None)
@@ -773,7 +1272,7 @@ class Engine:
         fail_fast: bool = False,
     ) -> Results:
         status = RunStatus.FAILED
-        return Results(
+        results = Results(
             schema_version=SCHEMA_VERSION,
             run={
                 "id": run_id,
@@ -798,6 +1297,10 @@ class Engine:
             suites=[],
             checks=[],
         )
+        if self._telemetry_started_perf is not None:
+            self._telemetry_stage = EngineStage.FINALIZE
+            self._emit_run_finished(results, self._telemetry_started_perf)
+        return results
 
 
 def failed_results(
@@ -878,6 +1381,37 @@ def run_suite_yaml(
         tags=tags,
         fail_fast=fail_fast,
     )
+
+
+def _telemetry_template(check) -> object:
+    if isinstance(check.spec, ConformanceCheck):
+        return safe_template(check.spec.check)
+    return safe_template(check.pattern.value)
+
+
+def _check_may_sample(check) -> bool:
+    if not isinstance(check.spec, ConformanceCheck):
+        return False
+    try:
+        definition = builtin_pack_catalog().checks.get(check.spec.check)
+    except Exception:
+        return False
+    return bool(definition and definition.sampled)
+
+
+def _read_guard_error_outcome(code: SafeErrorCode) -> ReadGuardOutcome:
+    if code is SafeErrorCode.READ_GUARD_REJECTED:
+        return ReadGuardOutcome.REJECTED
+    return ReadGuardOutcome.ERROR
+
+
+def _telemetry_outcome(exc: Exception, raw_code: str | None) -> EventOutcome:
+    if raw_code == "engine.timeout" or isinstance(
+        exc,
+        (TimeoutError, GraphCheckTimeoutError),
+    ):
+        return EventOutcome.TIMEOUT
+    return EventOutcome.ERROR
 
 
 def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
