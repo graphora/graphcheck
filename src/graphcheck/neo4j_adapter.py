@@ -13,7 +13,7 @@ from neo4j import GraphDatabase
 
 from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,9 @@ class QueryResult:
     rows: list[dict[str, Any]]
     columns: tuple[str, ...]
     notifications: tuple[dict[str, Any], ...]
+    server_available_after_ms: int | None = None
+    server_consumed_after_ms: int | None = None
+    read_guard_ms: int | None = None
 
 
 class Neo4jClient:
@@ -142,13 +145,16 @@ class Neo4jClient:
                 database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
                 values = params or {}
+                read_guard_ms: int | None = None
                 if verify_read:
+                    guard_started = time.monotonic()
                     _assert_server_classified_read(
                         session,
                         query,
                         values,
                         timeout_s=_remaining_timeout(deadline),
                     )
+                    read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
                 driver_query = (
                     neo4j.Query(query, timeout=_remaining_timeout(deadline))
                     if timeout_s is not None
@@ -165,7 +171,14 @@ class Neo4jClient:
                 summary = consume() if callable(consume) else None
                 notifications = _summary_notifications(summary)
                 _raise_for_missing_schema_reference(notifications)
-                return QueryResult(rows=rows, columns=columns, notifications=notifications)
+                return QueryResult(
+                    rows=rows,
+                    columns=columns,
+                    notifications=notifications,
+                    server_available_after_ms=_summary_timing(summary, "result_available_after"),
+                    server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
+                    read_guard_ms=read_guard_ms,
+                )
         except GraphCheckError:
             raise
         except Exception as exc:
@@ -574,6 +587,13 @@ def _summary_notifications(summary: object | None) -> tuple[dict[str, Any], ...]
     )
 
 
+def _summary_timing(summary: object | None, name: str) -> int | None:
+    value = getattr(summary, name, None) if summary is not None else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    return round(value)
+
+
 def _notification_from_status(status: object) -> dict[str, Any] | None:
     if not isinstance(status, Mapping) or "neo4j_code" not in status:
         return None
@@ -705,7 +725,7 @@ def map_neo4j_error(exc: Exception) -> GraphCheckError:
     lowered = message.lower()
     neo4j_code = str(getattr(exc, "code", "")).lower()
     if "transactiontimedout" in neo4j_code or ("transaction" in lowered and "timed out" in lowered):
-        return GraphCheckError(
+        return GraphCheckTimeoutError(
             "neo4j.query_failed",
             "Neo4j timed out the read-only query before it completed.",
             "Narrow the check, enable sampling, or increase the run time budget.",

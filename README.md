@@ -219,6 +219,20 @@ rules.
   empty passes.
 - Result JSON is validated against its Pydantic contract and JSON Schema before it is written.
 
+## Optional anonymous telemetry
+
+Telemetry is **off by default**. GraphCheck does not create a telemetry client or send events until
+a user explicitly runs `graphcheck telemetry enable`; use `graphcheck telemetry disable` to turn it
+off again.
+
+When enabled and delivery is configured, GraphCheck sends only structural and aggregate signals
+such as command/run occurrence, timings, execution counts, operational outcomes, and coarse
+runtime information. It never sends queries, graph schema names or values, database or project
+identity, credentials, check identities, check results or verdicts, command arguments, paths, or
+free-form errors. Delivery is asynchronous and best-effort, so telemetry failures never change CLI
+behavior. See [the telemetry disclosure](docs/telemetry.md) for the complete event and field
+inventory.
+
 ## Configuration reference
 
 `graphcheck.yml` has three strict fields:

@@ -50,6 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 .test-tmp
+.vscode
 cover/
 .test-tmp/
 
@@ -220,6 +221,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # GraphCheck
+/checks/
+graphcheck.yml
 profiles.yml
 .graphcheck/
 .superpowers/
