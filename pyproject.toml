@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-graphcheck = "graphcheck.cli:app"
+graphcheck = "graphcheck.cli:cli"
 
 [dependency-groups]
 dev = [
