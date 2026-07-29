@@ -19,6 +19,7 @@ class ExecutionResult:
     server_available_after_ms: int | None = None
     server_consumed_after_ms: int | None = None
     read_guard_ms: int | None = None
+    read_guard_cache_hit: bool | None = None
     complete: bool = True
     observed_rows: int = 0
     limit: int | None = None
@@ -88,6 +89,7 @@ class ReadOnlyExecutor:
                     server_available_after_ms=getattr(result, "server_available_after_ms", None),
                     server_consumed_after_ms=getattr(result, "server_consumed_after_ms", None),
                     read_guard_ms=getattr(result, "read_guard_ms", None),
+                    read_guard_cache_hit=getattr(result, "read_guard_cache_hit", None),
                     complete=complete,
                     observed_rows=observed_rows,
                     limit=limit,

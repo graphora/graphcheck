@@ -611,24 +611,52 @@ competency:
     assert client.read_calls == []
 
 
-def test_suite_selection_skips_validation_of_unselected_files_and_writes_manifest(tmp_path):
+def test_suite_discovery_is_recursive_sorted_and_filters_resolved_suite_ids(tmp_path):
     checks = tmp_path / "checks"
-    checks.mkdir()
-    (checks / "selected.yml").write_text(
-        "suite: selected\ncompetency:\n"
+    (checks / "nested").mkdir(parents=True)
+    suite = (
+        "competency:\n"
         "  - id: value\n"
         "    question: Value?\n"
         "    query: RETURN 1 AS value\n"
-        "    expect: {rows: {exactly: 1}}\n",
-        encoding="utf-8",
+        "    expect: {rows: {exactly: 1}}\n"
     )
+    (checks / "z.yaml").write_text(suite, encoding="utf-8")
+    (checks / "a.yml").write_text(f"suite: explicit\n{suite}", encoding="utf-8")
+    (checks / "nested" / "b.YML").write_text(suite, encoding="utf-8")
+
+    all_loaded = _load_suite_inputs(checks, [])
+    selected = _load_suite_inputs(checks, ["explicit", "b"])
+
+    assert [item.suite.suite for item in all_loaded] == ["explicit", "b", "z"]
+    assert [item.suite.suite for item in selected] == ["explicit", "b"]
+
+
+def test_suite_selection_validates_unselected_files(tmp_path):
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    (checks / "selected.yml").write_text("suite: selected\n", encoding="utf-8")
     (checks / "broken.yml").write_text("suite: broken\nunknown_top_level: true\n", encoding="utf-8")
 
-    loaded = _load_suite_inputs(checks, ["selected"])
+    with pytest.raises(GraphCheckError) as caught:
+        _load_suite_inputs(checks, ["selected"])
 
-    assert [item.suite.suite for item in loaded] == ["selected"]
-    manifest = json.loads((checks / ".graphcheck-suite-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["files"]["broken.yml"]["suite"] == "broken"
+    assert caught.value.error.code == "run.suite_invalid"
+
+
+def test_suite_discovery_ignores_stale_manifest_and_never_writes_it(tmp_path):
+    checks = tmp_path / "checks"
+    checks.mkdir()
+    manifest = checks / ".graphcheck-suite-manifest.json"
+    stale = '{"schema_version": 1, "files": {"suite.yml": {"suite": "wrong"}}}\n'
+    manifest.write_text(stale, encoding="utf-8")
+    (checks / "suite.yml").write_text("suite: actual\n", encoding="utf-8")
+
+    assert [item.suite.suite for item in _load_suite_inputs(checks, ["actual"])] == ["actual"]
+    assert manifest.read_text(encoding="utf-8") == stale
+    manifest.unlink()
+    assert _load_suite_inputs(checks, ["missing"]) == []
+    assert not manifest.exists()
 
 
 def test_run_invalid_suite_is_configuration_failure(tmp_path, monkeypatch):

@@ -98,6 +98,14 @@ caller-supplied `stop_when` may end an already-decisive read earlier.
 transaction. Conditional measurement/evidence plans use it so both queries observe one graph
 snapshot and share the original monotonic deadline.
 
+Successful read classifications are cached only on the owning `Neo4jClient`, keyed by exact query
+text and database. The per-client LRU holds at most 256 entries, shares one in-flight preflight
+between concurrent identical reads, never caches rejected, unknown, timed-out, or failed
+classifications, and is cleared when the client closes. Query parameters are excluded because
+Neo4j classifies the query structure; live connector coverage verifies that changing parameter
+values does not change this behavior. Query-free hit, miss, size, and in-flight metrics are
+available through `read_guard_cache_info`.
+
 The CLI sizes `max_connection_pool_size` to effective concurrency. The driver uses explicit
 10-second connection and acquisition timeouts, fetch size `1000`, and retry budget `0`; query
 timeouts continue to use the engine's shorter remaining deadline.

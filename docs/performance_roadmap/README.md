@@ -194,3 +194,25 @@ Run the integration and performance commands specified by a brief in addition to
   - verified the combined CLI, run, report-history, telemetry, import-boundary, and startup suite
     with 175 passing tests;
   - verified the full repository gate with 938 passing, 32 opt-in skips, and 90.95% coverage.
+- Implemented PR 11, suite-manifest cache removal:
+  - removed all reads, writes, invalidation checks, suite-id hints, and serialization for
+    `.graphcheck-suite-manifest.json` without deleting pre-existing user files;
+  - made recursive sorted discovery load and validate every YAML suite directly before applying
+    resolved suite-id filters, including filename-stem fallbacks;
+  - added coverage for recursive ordering, explicit and fallback ids, malformed unselected suites,
+    empty selection, ignored stale manifests, and the absence of newly written manifests;
+  - documented direct per-command suite loading and verified the focused CLI, suite-validation,
+    and run suite with 161 passing tests.
+- Implemented PR 12, bounded per-client read-guard caching:
+  - replaced process-global classification and in-flight state with a 256-entry per-client LRU
+    keyed by database and exact query text;
+  - retained deadline-aware single-flight preflights, woke all waiters on success and failure,
+    cached only successful read classifications, and cleared cache and in-flight state on close;
+  - exposed query-free hit, miss, size, capacity, and in-flight metrics and recorded per-query
+    cache outcome plus read-guard timing in internal telemetry without query text;
+  - added client/URI isolation, parameter-independent keys, LRU eviction, cache clearing,
+    wait timeout, owner failure, rejected/unknown classification, and concurrent single-flight
+    coverage, plus an opt-in live parameter-value case;
+  - documented the connector cache contract and verified the focused connector, engine, and
+    telemetry suite with 148 passing tests;
+  - verified the full repository gate with 950 passing, 34 opt-in skips, and 91.12% coverage.

@@ -78,6 +78,28 @@ def test_engine_emits_ordered_reconciled_events_without_content():
     assert "verdict" not in payload_text
 
 
+def test_query_event_records_read_guard_cache_timing_without_query_text():
+    class GuardClient:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            return QueryResult(
+                [{"value": params["secret"]}],
+                ("value",),
+                (),
+                read_guard_ms=3,
+                read_guard_cache_hit=True,
+            )
+
+    collector = TelemetryCollector()
+    Engine(GuardClient(), event_sink=collector).run(
+        [SuiteInput.from_yaml(SUITE)],
+        target=TARGET,
+    )
+
+    query = next(event for event in collector.events if isinstance(event, QueryFinished))
+    assert (query.read_guard_ms, query.read_guard_cache_hit) == (3, True)
+    assert "RETURN $secret" not in repr(query)
+
+
 def test_concurrent_checks_keep_query_telemetry_attributed_and_reconciled():
     barrier = threading.Barrier(2)
     suite = """\

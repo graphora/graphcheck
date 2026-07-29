@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from graphcheck.reporting.history import ReportRun
 
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
-_SUITE_MANIFEST = ".graphcheck-suite-manifest.json"
 
 
 def _call(module: str, name: str, *args, **kwargs):
@@ -1573,38 +1572,11 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["S
             "Check the configured checks path and its filesystem permissions.",
         ) from exc
 
-    manifest = _read_suite_manifest(checks_dir / _SUITE_MANIFEST)
-    manifest_entries: dict[str, dict[str, object]] = {}
     requested = set(requested_suites)
     loaded: list[SuiteInput] = []
     for path in paths:
-        relative = path.relative_to(checks_dir).as_posix()
         try:
-            stat = path.stat()
-            cached = manifest.get(relative)
-            cached_id = (
-                cached.get("suite")
-                if isinstance(cached, dict)
-                and cached.get("mtime_ns") == stat.st_mtime_ns
-                and cached.get("size") == stat.st_size
-                else None
-            )
-            suite_hint = cached_id if isinstance(cached_id, str) else None
-            text: str | None = None
-            if requested and suite_hint is None:
-                text = path.read_text(encoding="utf-8")
-                suite_hint = _suite_id_hint(text, path)
-            manifest_entries[relative] = {
-                "mtime_ns": stat.st_mtime_ns,
-                "size": stat.st_size,
-                "suite": suite_hint or path.stem,
-            }
-            if requested and suite_hint not in requested:
-                continue
-            text = text if text is not None else path.read_text(encoding="utf-8")
-            suite_input = SuiteInput.from_yaml(text, source=str(path))
-            manifest_entries[relative]["suite"] = suite_input.suite.suite
-            loaded.append(suite_input)
+            loaded.append(SuiteInput.from_yaml(path.read_text(encoding="utf-8"), source=str(path)))
         except Exception as exc:
             raise GraphCheckError(
                 "run.suite_invalid",
@@ -1612,43 +1584,7 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["S
                 "Fix the suite YAML and remove unknown keys, then run it again.",
             ) from exc
 
-    _write_suite_manifest(checks_dir / _SUITE_MANIFEST, manifest_entries)
-    return loaded
-
-
-def _suite_id_hint(text: str, path: Path) -> str:
-    line = next((line for line in text.splitlines() if line.startswith("suite:")), None)
-    if line is None:
-        return path.stem
-    try:
-        raw = _call("graphcheck.contracts.check", "load_suite_yaml", line + "\n")
-    except Exception:
-        return path.stem
-    hinted = raw.get("suite")
-    return hinted if isinstance(hinted, str) else path.stem
-
-
-def _read_suite_manifest(path: Path) -> dict[str, dict[str, object]]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    files = payload.get("files") if isinstance(payload, dict) else None
-    return files if isinstance(files, dict) else {}
-
-
-def _write_suite_manifest(path: Path, entries: dict[str, dict[str, object]]) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps({"schema_version": 1, "files": entries}, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-    except OSError:
-        pass
-    finally:
-        temporary.unlink(missing_ok=True)
+    return [item for item in loaded if not requested or item.suite.suite in requested]
 
 
 def _project_path(root: Path, configured: str) -> Path:

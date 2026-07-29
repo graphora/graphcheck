@@ -245,8 +245,10 @@ concurrency: 1
 ```
 
 Relative `checks` and `artifacts` paths are resolved from the project root. Suite discovery is
-recursive and includes `.yml` and `.yaml` files. `concurrency` is a positive worker limit; the
-default is `1`, and `graphcheck run --concurrency N` overrides the project value.
+recursive and includes `.yml` and `.yaml` files. Every discovered suite is read and validated
+directly on each command before suite-id filtering; GraphCheck does not create a suite-discovery
+cache file. `concurrency` is a positive worker limit; the default is `1`, and
+`graphcheck run --concurrency N` overrides the project value.
 
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 

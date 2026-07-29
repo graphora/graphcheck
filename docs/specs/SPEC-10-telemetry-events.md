@@ -138,6 +138,8 @@ Emitted after each database operation known to the engine. There is intentionall
 | `server_available_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `server_consumed_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `read_guard_outcome` | `allowed`, `rejected`, `error`, or `not_run` | Result of the read-only guard. |
+| `read_guard_ms` | non-negative integer or null | Read-guard time for either a cache hit or miss. |
+| `read_guard_cache_hit` | boolean or null | Whether a successful guard used this client's cache. |
 | `notification_count` | non-negative integer or null | Count only. |
 | `error_code` | safe error code or null | Stable allowlisted code. |
 

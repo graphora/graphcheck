@@ -1132,6 +1132,8 @@ class Engine:
             ),
             server_available_after_ms=execution.server_available_after_ms,
             server_consumed_after_ms=execution.server_consumed_after_ms,
+            read_guard_ms=execution.read_guard_ms,
+            read_guard_cache_hit=execution.read_guard_cache_hit,
             notification_count=execution.notification_count,
         )
         active_check = self._active_check_context.get()
@@ -1152,6 +1154,8 @@ class Engine:
         read_guard_outcome: ReadGuardOutcome,
         server_available_after_ms: int | None = None,
         server_consumed_after_ms: int | None = None,
+        read_guard_ms: int | None = None,
+        read_guard_cache_hit: bool | None = None,
         notification_count: int | None = None,
     ) -> None:
         if self._telemetry is None or not self._telemetry.enabled:
@@ -1178,6 +1182,8 @@ class Engine:
                 server_available_after_ms=server_available_after_ms,
                 server_consumed_after_ms=server_consumed_after_ms,
                 read_guard_outcome=read_guard_outcome,
+                read_guard_ms=read_guard_ms,
+                read_guard_cache_hit=read_guard_cache_hit,
                 notification_count=notification_count,
                 error_code=error_code,
             )

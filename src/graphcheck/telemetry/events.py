@@ -208,6 +208,8 @@ class QueryFinished(_EngineEventBase):
     read_guard_outcome: ReadGuardOutcome
     notification_count: NonNegativeInt | None
     error_code: SafeErrorCode | None
+    read_guard_ms: NonNegativeInt | None = None
+    read_guard_cache_hit: bool | None = None
 
     @model_validator(mode="after")
     def fields_are_consistent(self) -> QueryFinished:

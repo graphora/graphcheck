@@ -5,6 +5,7 @@ import json
 import math
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,9 +18,7 @@ from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
-_READ_CLASSIFICATION_CACHE: set[tuple[str, str]] = set()
-_READ_CLASSIFICATION_INFLIGHT: dict[tuple[str, str], threading.Event] = {}
-_READ_CLASSIFICATION_LOCK = threading.Lock()
+READ_GUARD_CACHE_CAPACITY = 256
 
 
 @dataclass(frozen=True)
@@ -86,6 +85,7 @@ class QueryResult:
     server_available_after_ms: int | None = None
     server_consumed_after_ms: int | None = None
     read_guard_ms: int | None = None
+    read_guard_cache_hit: bool | None = None
     complete: bool = True
     observed_rows: int = 0
     limit: int | None = None
@@ -107,20 +107,133 @@ class ResultPolicy:
             raise ValueError("max_rows must be a positive integer or None")
 
 
+@dataclass(frozen=True)
+class ReadGuardCacheInfo:
+    """Query-free, per-client read-classification cache metrics."""
+
+    max_size: int
+    size: int
+    in_flight: int
+    hits: int
+    misses: int
+
+
+class _ReadClassificationCache:
+    def __init__(self, max_size: int) -> None:
+        self._max_size = max_size
+        self._entries: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._inflight: dict[tuple[str, str], threading.Event] = {}
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+        self._closed = False
+
+    def ensure_read(
+        self,
+        session: object,
+        query: str,
+        params: dict[str, object],
+        *,
+        database: str,
+        deadline: float | None,
+        attach_timeout: bool,
+    ) -> bool:
+        key = (database, query)
+        while True:
+            with self._lock:
+                if key in self._entries:
+                    self._entries.move_to_end(key)
+                    self._hits += 1
+                    return True
+                if self._closed:
+                    pending, owner = None, True
+                    self._misses += 1
+                else:
+                    pending = self._inflight.get(key)
+                    owner = pending is None
+                    if owner:
+                        pending = threading.Event()
+                        self._inflight[key] = pending
+                        self._misses += 1
+            if owner:
+                break
+            assert pending is not None
+            pending.wait(_remaining_timeout(deadline))
+
+        try:
+            _assert_server_classified_read(
+                session,
+                query,
+                params,
+                timeout_s=_remaining_timeout(deadline),
+                attach_timeout=attach_timeout,
+            )
+        except BaseException:
+            if pending is not None:
+                with self._lock:
+                    if self._inflight.get(key) is pending:
+                        self._inflight.pop(key)
+                    pending.set()
+            raise
+        if pending is not None:
+            with self._lock:
+                if not self._closed and self._inflight.get(key) is pending:
+                    self._entries[key] = None
+                    self._entries.move_to_end(key)
+                    if len(self._entries) > self._max_size:
+                        self._entries.popitem(last=False)
+                    self._inflight.pop(key)
+                pending.set()
+        return False
+
+    def info(self) -> ReadGuardCacheInfo:
+        with self._lock:
+            return ReadGuardCacheInfo(
+                max_size=self._max_size,
+                size=len(self._entries),
+                in_flight=len(self._inflight),
+                hits=self._hits,
+                misses=self._misses,
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._entries.clear()
+            pending = tuple(self._inflight.values())
+            self._inflight.clear()
+            self._hits = self._misses = 0
+            for event in pending:
+                event.set()
+
+
 class _EarlyResultStop(Exception):
     def __init__(self, result: QueryResult) -> None:
         self.result = result
 
 
 class Neo4jClient:
-    def __init__(self, profile: ConnectionProfile, *, max_concurrency: int = 1) -> None:
+    def __init__(
+        self,
+        profile: ConnectionProfile,
+        *,
+        max_concurrency: int = 1,
+        read_guard_cache_capacity: int = READ_GUARD_CACHE_CAPACITY,
+    ) -> None:
         if (
             isinstance(max_concurrency, bool)
             or not isinstance(max_concurrency, int)
             or max_concurrency < 1
         ):
             raise ValueError("max_concurrency must be a positive integer")
+        if (
+            isinstance(read_guard_cache_capacity, bool)
+            or not isinstance(read_guard_cache_capacity, int)
+            or read_guard_cache_capacity < 1
+        ):
+            raise ValueError("read_guard_cache_capacity must be a positive integer")
         self._profile = profile
+        self._read_classifications = _ReadClassificationCache(read_guard_cache_capacity)
         self._driver = GraphDatabase.driver(
             profile.uri,
             auth=(profile.user, profile.password),
@@ -132,7 +245,12 @@ class Neo4jClient:
         )
 
     def close(self) -> None:
+        self._read_classifications.close()
         self._driver.close()
+
+    @property
+    def read_guard_cache_info(self) -> ReadGuardCacheInfo:
+        return self._read_classifications.info()
 
     @contextmanager
     def read_transaction(self, *, timeout_s: float | None = None):
@@ -147,7 +265,12 @@ class Neo4jClient:
                 ) as session,
                 session.begin_transaction(timeout=_remaining_timeout(deadline)) as transaction,
             ):
-                yield _TransactionReader(transaction, self._profile.database, deadline)
+                yield _TransactionReader(
+                    transaction,
+                    self._profile.database,
+                    deadline,
+                    self._read_classifications,
+                )
         except GraphCheckError:
             raise
         except Exception as exc:
@@ -231,12 +354,14 @@ class Neo4jClient:
             ) as session:
                 values = params or {}
                 read_guard_ms: int | None = None
+                read_guard_cache_hit: bool | None = None
                 if verify_read:
                     guard_started = time.monotonic()
-                    _ensure_server_classified_read(
+                    read_guard_cache_hit = _ensure_server_classified_read(
                         session,
                         query,
                         values,
+                        cache=self._read_classifications,
                         database=self._profile.database,
                         deadline=deadline,
                     )
@@ -281,6 +406,7 @@ class Neo4jClient:
                             columns=columns,
                             notifications=(),
                             read_guard_ms=read_guard_ms,
+                            read_guard_cache_hit=read_guard_cache_hit,
                             complete=False,
                             observed_rows=observed_rows,
                             limit=policy.max_rows if policy is not None else None,
@@ -297,6 +423,7 @@ class Neo4jClient:
                     server_available_after_ms=_summary_timing(summary, "result_available_after"),
                     server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
                     read_guard_ms=read_guard_ms,
+                    read_guard_cache_hit=read_guard_cache_hit,
                     complete=complete,
                     observed_rows=observed_rows,
                     limit=policy.max_rows if policy is not None else None,
@@ -551,10 +678,17 @@ class Neo4jClient:
 class _TransactionReader:
     """Read-result facade over one explicit Neo4j transaction."""
 
-    def __init__(self, transaction: object, database: str, deadline: float | None) -> None:
+    def __init__(
+        self,
+        transaction: object,
+        database: str,
+        deadline: float | None,
+        read_classifications: _ReadClassificationCache,
+    ) -> None:
         self._transaction = transaction
         self._database = database
         self._deadline = deadline
+        self._read_classifications = read_classifications
 
     def run_read_result(
         self,
@@ -576,10 +710,11 @@ class _TransactionReader:
             guard_started = time.monotonic()
             # Transaction.run rejects neo4j.Query objects; the transaction-level timeout was
             # already attached by begin_transaction(), so both EXPLAIN and execution stay strings.
-            _ensure_server_classified_read(
+            read_guard_cache_hit = _ensure_server_classified_read(
                 self._transaction,
                 query,
                 values,
+                cache=self._read_classifications,
                 database=self._database,
                 deadline=deadline,
                 attach_timeout=False,
@@ -599,6 +734,7 @@ class _TransactionReader:
                 server_available_after_ms=_summary_timing(summary, "result_available_after"),
                 server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
                 read_guard_ms=read_guard_ms,
+                read_guard_cache_hit=read_guard_cache_hit,
                 observed_rows=len(rows),
             )
         except GraphCheckError:
@@ -760,43 +896,19 @@ def _ensure_server_classified_read(
     query: str,
     params: dict[str, object],
     *,
+    cache: _ReadClassificationCache,
     database: str,
     deadline: float | None,
     attach_timeout: bool = True,
-) -> None:
-    cache_key = (query, database)
-    while True:
-        with _READ_CLASSIFICATION_LOCK:
-            if cache_key in _READ_CLASSIFICATION_CACHE:
-                return
-            pending = _READ_CLASSIFICATION_INFLIGHT.get(cache_key)
-            owner = pending is None
-            if owner:
-                pending = threading.Event()
-                _READ_CLASSIFICATION_INFLIGHT[cache_key] = pending
-        if owner:
-            break
-        assert pending is not None
-        pending.wait(_remaining_timeout(deadline))
-
-    assert pending is not None
-    try:
-        _assert_server_classified_read(
-            session,
-            query,
-            params,
-            timeout_s=_remaining_timeout(deadline),
-            attach_timeout=attach_timeout,
-        )
-    except BaseException:
-        with _READ_CLASSIFICATION_LOCK:
-            _READ_CLASSIFICATION_INFLIGHT.pop(cache_key, None)
-            pending.set()
-        raise
-    with _READ_CLASSIFICATION_LOCK:
-        _READ_CLASSIFICATION_CACHE.add(cache_key)
-        _READ_CLASSIFICATION_INFLIGHT.pop(cache_key, None)
-        pending.set()
+) -> bool:
+    return cache.ensure_read(
+        session,
+        query,
+        params,
+        database=database,
+        deadline=deadline,
+        attach_timeout=attach_timeout,
+    )
 
 
 def _summary_notifications(summary: object | None) -> tuple[dict[str, Any], ...]:

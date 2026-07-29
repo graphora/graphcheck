@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
@@ -13,6 +16,7 @@ from graphcheck.neo4j_adapter import (
     _fingerprint,
     _is_apoc_absent_error,
     _plan_has_operator,
+    _ReadClassificationCache,
     debug_trace,
     error_json,
     init_trace,
@@ -77,6 +81,20 @@ def test_driver_rejects_invalid_workload_concurrency(invalid):
                 database="neo4j",
             ),
             max_concurrency=invalid,
+        )
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
+def test_driver_rejects_invalid_read_guard_cache_capacity(invalid):
+    with pytest.raises(ValueError, match="read_guard_cache_capacity"):
+        Neo4jClient(
+            ConnectionProfile(
+                uri="bolt://example",
+                user="neo4j",
+                password="secret",
+                database="neo4j",
+            ),
+            read_guard_cache_capacity=invalid,
         )
 
 
@@ -1450,26 +1468,25 @@ def test_unknown_relationship_type_notification_is_a_query_error():
     assert "OWNZ" in caught.value.error.message
 
 
-def test_successful_read_classification_is_cached_by_query_and_database(monkeypatch):
+def test_read_classification_cache_is_bounded_per_client_and_cleared_on_close(monkeypatch):
     import neo4j
 
-    import graphcheck.neo4j_adapter as adapter
-
-    query = "RETURN 424242 AS cache_probe"
-    adapter._READ_CLASSIFICATION_CACHE.discard((query, "neo4j"))
-    calls: list[str] = []
+    drivers = []
 
     class _ExecutionResult:
         def keys(self):
-            return ("cache_probe",)
+            return ("value",)
 
         def __iter__(self):
-            return iter([{"cache_probe": 424242}])
+            return iter([{"value": 1}])
 
         def consume(self):
             return object()
 
     class _Session:
+        def __init__(self, driver):
+            self.driver = driver
+
         def __enter__(self):
             return self
 
@@ -1478,25 +1495,233 @@ def test_successful_read_classification_is_cached_by_query_and_database(monkeypa
 
         def run(self, statement, params):
             text = str(getattr(statement, "text", statement))
-            calls.append(text)
+            self.driver.calls.append(text)
             return _ReadPlanResult() if text.startswith("EXPLAIN ") else _ExecutionResult()
 
     class _Driver:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+            drivers.append(self)
+
         def session(self, **kwargs):
-            return _Session()
+            return _Session(self)
 
         def close(self):
-            pass
+            self.closed = True
 
     monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *args, **kwargs: _Driver())
-    client = Neo4jClient(
-        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    first = Neo4jClient(
+        ConnectionProfile(uri="bolt://first", user="u", password="p", database="neo4j"),
+        read_guard_cache_capacity=2,
+    )
+    second = Neo4jClient(
+        ConnectionProfile(uri="bolt://second", user="other", password="p", database="neo4j"),
+        read_guard_cache_capacity=2,
     )
 
-    client.run_read_result(query)
-    client.run_read_result(query)
+    first.run_read_result("RETURN $value AS value", {"value": 1})
+    first.run_read_result("RETURN $value AS value", {"value": 2})
+    second.run_read_result("RETURN $value AS value", {"value": 3})
+    first.run_read_result("RETURN 2 AS value")
+    first.run_read_result("RETURN $value AS value", {"value": 4})
+    first.run_read_result("RETURN 3 AS value")
+    first.run_read_result("RETURN 2 AS value")
 
-    assert calls == [f"EXPLAIN {query}", query, query]
+    assert drivers[0].calls.count("EXPLAIN RETURN $value AS value") == 1
+    assert drivers[1].calls.count("EXPLAIN RETURN $value AS value") == 1
+    assert drivers[0].calls.count("EXPLAIN RETURN 2 AS value") == 2
+    assert first.run_read_result("RETURN 2 AS value").read_guard_cache_hit is True
+    assert first.read_guard_cache_info == (
+        type(first.read_guard_cache_info)(max_size=2, size=2, in_flight=0, hits=3, misses=4)
+    )
+    first.close()
+    assert drivers[0].closed is True
+    assert first.read_guard_cache_info.size == 0
+    assert first.read_guard_cache_info.hits == first.read_guard_cache_info.misses == 0
+
+
+@pytest.mark.parametrize(
+    "query_type, code", [("w", "neo4j.write_rejected"), ("", "neo4j.read_guard_unavailable")]
+)
+def test_failed_and_unknown_read_classifications_are_never_cached(query_type, code):
+    calls = 0
+
+    class _Summary:
+        pass
+
+    _Summary.query_type = query_type
+
+    class _Result:
+        def consume(self):
+            return _Summary()
+
+    class _Session:
+        def run(self, query, params):
+            nonlocal calls
+            calls += 1
+            return _Result()
+
+    cache = _ReadClassificationCache(2)
+    for _ in range(2):
+        with pytest.raises(GraphCheckError) as caught:
+            cache.ensure_read(
+                _Session(),
+                "CREATE (:Forbidden)",
+                {},
+                database="neo4j",
+                deadline=None,
+                attach_timeout=True,
+            )
+        assert caught.value.error.code == code
+
+    assert calls == 2
+    assert (cache.info().size, cache.info().misses) == (0, 2)
+
+
+def test_read_classification_single_flight_wakes_waiters_on_success():
+    cache = _ReadClassificationCache(2)
+    owner_started = threading.Event()
+    release_owner = threading.Event()
+    calls = 0
+    errors = []
+
+    class _Session:
+        def run(self, query, params):
+            nonlocal calls
+            calls += 1
+            owner_started.set()
+            assert release_owner.wait(2)
+            return _ReadPlanResult()
+
+    def classify():
+        try:
+            cache.ensure_read(
+                _Session(),
+                "RETURN 1",
+                {},
+                database="neo4j",
+                deadline=time.monotonic() + 2,
+                attach_timeout=True,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    owner = threading.Thread(target=classify)
+    waiter = threading.Thread(target=classify)
+    owner.start()
+    assert owner_started.wait(1)
+    waiter.start()
+    time.sleep(0.02)
+    release_owner.set()
+    owner.join(2)
+    waiter.join(2)
+
+    assert not owner.is_alive() and not waiter.is_alive()
+    assert errors == []
+    assert calls == 1
+    assert (cache.info().hits, cache.info().misses) == (1, 1)
+
+
+def test_read_classification_wait_respects_its_deadline():
+    cache = _ReadClassificationCache(2)
+    owner_started = threading.Event()
+    release_owner = threading.Event()
+    owner_error = []
+
+    class _Session:
+        def run(self, query, params):
+            owner_started.set()
+            assert release_owner.wait(2)
+            return _ReadPlanResult()
+
+    def own():
+        try:
+            cache.ensure_read(
+                _Session(),
+                "RETURN 1",
+                {},
+                database="neo4j",
+                deadline=time.monotonic() + 2,
+                attach_timeout=True,
+            )
+        except BaseException as exc:
+            owner_error.append(exc)
+
+    owner = threading.Thread(target=own)
+    owner.start()
+    assert owner_started.wait(1)
+    with pytest.raises(GraphCheckError) as caught:
+        cache.ensure_read(
+            _Session(),
+            "RETURN 1",
+            {},
+            database="neo4j",
+            deadline=time.monotonic() + 0.01,
+            attach_timeout=True,
+        )
+    release_owner.set()
+    owner.join(2)
+
+    assert caught.value.error.code == "engine.timeout"
+    assert owner_error == []
+
+
+def test_read_classification_owner_failure_wakes_a_waiter():
+    cache = _ReadClassificationCache(2)
+    owner_started = threading.Event()
+    release_owner = threading.Event()
+    calls = 0
+    outcomes = []
+
+    class _Summary:
+        def __init__(self, query_type):
+            self.query_type = query_type
+
+    class _Result:
+        def __init__(self, query_type):
+            self.query_type = query_type
+
+        def consume(self):
+            return _Summary(self.query_type)
+
+    class _Session:
+        def run(self, query, params):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                owner_started.set()
+                assert release_owner.wait(2)
+                return _Result("w")
+            return _Result("r")
+
+    def classify():
+        try:
+            cache.ensure_read(
+                _Session(),
+                "RETURN 1",
+                {},
+                database="neo4j",
+                deadline=time.monotonic() + 2,
+                attach_timeout=True,
+            )
+            outcomes.append("read")
+        except GraphCheckError as exc:
+            outcomes.append(exc.error.code)
+
+    owner = threading.Thread(target=classify)
+    waiter = threading.Thread(target=classify)
+    owner.start()
+    assert owner_started.wait(1)
+    waiter.start()
+    time.sleep(0.02)
+    release_owner.set()
+    owner.join(2)
+    waiter.join(2)
+
+    assert sorted(outcomes) == ["neo4j.write_rejected", "read"]
+    assert calls == 2
+    assert (cache.info().size, cache.info().in_flight) == (1, 0)
 
 
 def test_unknown_property_key_notification_is_a_query_error():

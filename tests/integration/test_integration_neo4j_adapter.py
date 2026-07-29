@@ -59,6 +59,21 @@ def test_bounded_read_stops_a_large_stream_and_client_remains_usable(neo4j_profi
     assert follow_up.rows == [{"healthy": 1}]
 
 
+def test_read_classification_cache_key_does_not_include_parameters(neo4j_profile):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        first = client.run_read_result("RETURN $value AS value", {"value": 1})
+        second = client.run_read_result("RETURN $value AS value", {"value": 2})
+        info = client.read_guard_cache_info
+    finally:
+        client.close()
+
+    assert first.rows == [{"value": 1}]
+    assert second.rows == [{"value": 2}]
+    assert (first.read_guard_cache_hit, second.read_guard_cache_hit) == (False, True)
+    assert (info.hits, info.misses, info.size) == (1, 1, 1)
+
+
 def test_restricted_user_real_probe_reports_blocked_read_check(
     neo4j_restricted_profile, tmp_path, monkeypatch
 ):
