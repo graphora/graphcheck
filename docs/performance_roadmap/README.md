@@ -59,3 +59,32 @@ uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 ```
 
 Run the integration and performance commands specified by a brief in addition to this gate.
+
+## Changelog
+
+### 2026-07-29
+
+- Implemented PR 01, hermetic telemetry/profile tests:
+  - isolated telemetry consent and installation identity under each test's temporary directory;
+  - cleared inherited process telemetry and delivery-key configuration;
+  - normalized the profile injection seam so observer keywords are always supplied, using `None`
+    when telemetry is inactive;
+  - added enabled/disabled consent coverage, prevented real transport construction, and proved an
+    external enabled consent file cannot influence profile tests;
+  - stabilized setup-failure coverage so an unrelated parent project cannot affect the result;
+  - verified the focused CLI/telemetry suite with 126 passing tests.
+- Implemented PR 02, performance measurement foundations:
+  - added schema-validated JSON benchmark records with commit, OS, architecture, Python, Neo4j
+    driver, server, and Cypher version dimensions;
+  - added ten-sample fresh-process baselines for CLI version, help, telemetry status, and invalid
+    command handling, with an explicit discarded warm-up policy;
+  - added recursive mapping/object Neo4j plan extraction and live plan capture for label counts,
+    relationship counts, completeness, uniqueness, hub sampling, and PII sampling;
+  - added lazy high-cardinality result, allocation-retention, and separate client/server query
+    timing helpers;
+  - extended the opt-in 10-million-node benchmark with concurrency, per-check-family timings, and
+    per-query client/server timings without adding a cross-machine timing threshold;
+  - documented benchmark commands, output locations, record interpretation, and the
+    measurement-only policy in `docs/performance.md`;
+  - verified the local performance suite with 6 passing tests and the live-only 10M case skipped;
+    live Neo4j plan cases remain opt-in through `GRAPHCHECK_NEO4J_INTEGRATION=1`.

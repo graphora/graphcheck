@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -10,6 +12,14 @@ from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import RunStatus
 from graphcheck.engine.runner import Engine, EngineConfig
 from graphcheck.neo4j_adapter import Neo4jClient
+from graphcheck.telemetry.collector import TelemetryCollector
+from graphcheck.telemetry.events import QueryFinished
+from tests.performance.helpers import (
+    BenchmarkRecord,
+    cypher_version_for_server,
+    validate_record,
+    write_records,
+)
 
 URI = os.environ.get("GRAPHCHECK_PERFORMANCE_URI")
 PASSWORD = os.environ.get("GRAPHCHECK_PERFORMANCE_PASSWORD")
@@ -26,7 +36,7 @@ pytestmark = [
 ]
 
 
-def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
+def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_path):
     profile = ConnectionProfile(
         uri=URI,
         user=os.environ.get("GRAPHCHECK_PERFORMANCE_USER", "neo4j"),
@@ -34,11 +44,15 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
         database=os.environ.get("GRAPHCHECK_PERFORMANCE_DATABASE", "neo4j"),
     )
     client = Neo4jClient(profile)
+    collector = TelemetryCollector()
+    config = EngineConfig()
     try:
-        node_count = client.run_read("MATCH (n) RETURN count(n) AS count")[0]["count"]
-        relationship_count = client.run_read("MATCH ()-[r]->() RETURN count(r) AS count")[0][
-            "count"
-        ]
+        target, visibility, counts = client.probe()
+        assert visibility.can_read is True
+        assert counts.nodes is not None
+        assert counts.relationships is not None
+        node_count = counts.nodes
+        relationship_count = counts.relationships
         assert node_count >= 10_000_000, "performance target must contain at least 10M nodes"
         label_rows = client.run_read(
             "MATCH (n) UNWIND labels(n) AS label "
@@ -131,21 +145,80 @@ def test_thirty_check_run_on_ten_million_nodes_finishes_inside_five_minutes():
         started = time.monotonic()
         results = Engine(
             client,
-            config=EngineConfig(),
+            config=config,
             baselines={
                 "performance": {
                     "node_count": node_count,
                     "relationship_count": relationship_count,
                 }
             },
+            event_sink=collector,
         ).run_yaml(yaml.safe_dump(suite))
-        elapsed = time.monotonic() - started
+        elapsed_ms = (time.monotonic() - started) * 1000
     finally:
         client.close()
 
-    assert elapsed < 300
     assert results.totals.checks == 30
     assert results.totals.errored == 0
     assert results.totals.skipped == 0
     assert results.run.status is RunStatus.COMPLETE
     assert results.run.partial_reason is None
+    family_timings: dict[str, list[int]] = {}
+    for check in results.checks:
+        family_timings.setdefault(_family(check.id), []).append(check.duration_ms or 0)
+    query_timings = [
+        {
+            "check_sequence": event.check_sequence,
+            "role": event.query_role.value,
+            "client_wall_ms": event.duration_ms,
+            "server_available_after_ms": event.server_available_after_ms,
+            "server_consumed_after_ms": event.server_consumed_after_ms,
+        }
+        for event in collector.events
+        if isinstance(event, QueryFinished)
+    ]
+    record = BenchmarkRecord.from_samples(
+        "engine-30-check-10m",
+        [elapsed_ms],
+        server=target.server_version,
+        cypher=cypher_version_for_server(target.server_version),
+        details={
+            "concurrency": config.max_concurrency,
+            "per_check_family_ms": {
+                family: {
+                    "checks": len(durations),
+                    "total_ms": sum(durations),
+                    "maximum_ms": max(durations),
+                }
+                for family, durations in sorted(family_timings.items())
+            },
+            "queries": query_timings,
+        },
+    )
+    output = Path(os.environ.get("GRAPHCHECK_PERFORMANCE_OUTPUT", tmp_path / "engine-10m.json"))
+    write_records([record], output)
+    payload = json.loads(output.read_text(encoding="utf-8"))[0]
+    validate_record(payload)
+    assert payload["details"]["concurrency"] == config.max_concurrency
+    assert payload["details"]["queries"]
+    assert all("client_wall_ms" in timing for timing in payload["details"]["queries"])
+
+
+def _family(check_id: str) -> str:
+    return next(
+        (
+            family
+            for prefix, family in (
+                ("count-store-", "competency-count-store"),
+                ("property-scan-", "competency-property-scan"),
+                ("node-count-", "drift-node-count"),
+                ("relationship-count-", "drift-relationship-count"),
+                ("hub-outlier-", "conformance-hub-sampling"),
+                ("pii-name-", "conformance-pii-name-sampling"),
+                ("pii-value-", "conformance-pii-value-sampling"),
+                ("orphan-", "conformance-orphan"),
+            )
+            if check_id.startswith(prefix)
+        ),
+        "unknown",
+    )

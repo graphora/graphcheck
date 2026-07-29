@@ -620,9 +620,11 @@ through a real C2 session on supported server versions.
 The opt-in performance test requires a preloaded target of at least 10 million nodes through
 `GRAPHCHECK_PERFORMANCE_URI` and `GRAPHCHECK_PERFORMANCE_PASSWORD`. It runs 30 representative
 competency, drift, core conformance, hub sampling, and PII sampling checks; it requires no errors or
-skips and a complete result in under five minutes. Findings are allowed because the target is a
-customer-scale graph, not a synthetic all-pass fixture. The default 295-second engine budget
-reserves the remaining wall time for artifact serialization/reporting.
+skips and a complete result. It records overall, per-check-family, and per-query timings with
+concurrency and environment metadata, but does not enforce a cross-machine timing threshold.
+Findings are allowed because the target is a customer-scale graph, not a synthetic all-pass fixture.
+The default 295-second engine budget reserves the remaining wall time for artifact
+serialization/reporting.
 
 ## Deferred v0 integration
 
@@ -642,6 +644,7 @@ both preflight paths without a CLI-maintained requirement table.
   the run command.
 - `tests/engine/` and `tests/property/` — unit and property-based coverage.
 - `tests/integration/test_integration_engine.py` — opt-in real-Neo4j engine coverage.
-- `tests/performance/test_engine_budget.py` — opt-in 10M-node/30-check budget contract.
+- `tests/performance/` — repeatable cold CLI, allocation, plan-support, and opt-in
+  10M-node/30-check measurement baselines.
 - `tests/test_run_cli.py` — selection, artifacts, summary, connection/configuration, and exit-code
   coverage.

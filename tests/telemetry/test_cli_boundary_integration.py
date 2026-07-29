@@ -11,6 +11,7 @@ from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
 from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.writer import load_results
@@ -432,6 +433,13 @@ def test_profile_setup_failure_still_emits_dedicated_completion(
     recording_transport,
 ):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "find_project_root",
+        lambda: (_ for _ in ()).throw(
+            GraphCheckError("project.missing", "No graphcheck.yml found.", "Run graphcheck init.")
+        ),
+    )
 
     exit_code = _invoke_entrypoint(monkeypatch, "profile")
 

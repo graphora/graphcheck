@@ -136,7 +136,9 @@ def test_find_project_root_accepts_file_path(tmp_path: Path):
     assert find_project_root(suite) == tmp_path
 
 
-def test_find_project_root_missing_is_loud(tmp_path: Path):
+def test_find_project_root_missing_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("graphcheck.project.PROJECT_FILE", f".missing-{tmp_path.name}.yml")
+
     with pytest.raises(GraphCheckError) as caught:
         find_project_root(tmp_path)
 

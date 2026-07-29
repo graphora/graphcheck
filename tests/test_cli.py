@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -46,7 +48,10 @@ def _configure_profile_command(tmp_path, monkeypatch, baseline: BaselineProfile)
         lambda profiles, name: ("local", object()),
     )
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: client)
-    monkeypatch.setattr("graphcheck.cli.build_profile", lambda selected_client: baseline)
+    monkeypatch.setattr(
+        "graphcheck.cli.build_profile",
+        lambda selected_client, **kwargs: baseline,
+    )
     return client
 
 
@@ -239,7 +244,10 @@ def test_profile_writes_baseline_and_prints_summary(tmp_path, monkeypatch):
         lambda profiles, name: ("local", object()),
     )
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: FakeClient())
-    monkeypatch.setattr("graphcheck.cli.build_profile", lambda client: baseline)
+    monkeypatch.setattr(
+        "graphcheck.cli.build_profile",
+        lambda client, *, telemetry_observer=None, telemetry_result_observer=None: baseline,
+    )
 
     result = runner.invoke(app, ["profile"])
 
@@ -284,7 +292,10 @@ def test_profile_json_prints_complete_baseline_without_human_summary(tmp_path, m
         lambda profiles, name: ("local", object()),
     )
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: FakeClient())
-    monkeypatch.setattr("graphcheck.cli.build_profile", lambda client: baseline)
+    monkeypatch.setattr(
+        "graphcheck.cli.build_profile",
+        lambda client, *, telemetry_observer=None, telemetry_result_observer=None: baseline,
+    )
 
     result = runner.invoke(app, ["profile", "--json"])
 
@@ -317,7 +328,10 @@ def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
         lambda profiles, name: ("local", object()),
     )
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda selected: FakeClient())
-    monkeypatch.setattr("graphcheck.cli.build_profile", lambda client: baseline)
+    monkeypatch.setattr(
+        "graphcheck.cli.build_profile",
+        lambda client, *, telemetry_observer=None, telemetry_result_observer=None: baseline,
+    )
 
     result = runner.invoke(app, ["profile"])
 
@@ -345,7 +359,7 @@ def test_profile_prints_partial_reason_and_summary(tmp_path, monkeypatch):
 def test_profile_handles_graphcheck_error(tmp_path, monkeypatch):
     _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
 
-    def fail_profile(client):
+    def fail_profile(client, *, telemetry_observer=None, telemetry_result_observer=None):
         raise GraphCheckError(
             "neo4j.query_failed",
             "Profiling query failed.",
@@ -373,7 +387,12 @@ def test_profile_closes_client_after_success(tmp_path, monkeypatch):
 def test_profile_closes_client_when_profiling_fails(tmp_path, monkeypatch):
     client = _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
 
-    def fail_profile(selected_client):
+    def fail_profile(
+        selected_client,
+        *,
+        telemetry_observer=None,
+        telemetry_result_observer=None,
+    ):
         raise GraphCheckError("neo4j.query_failed", "Profiling query failed.", "Retry.")
 
     monkeypatch.setattr("graphcheck.cli.build_profile", fail_profile)
@@ -382,6 +401,77 @@ def test_profile_closes_client_when_profiling_fails(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert client.closed is True
+
+
+@pytest.mark.parametrize("telemetry_enabled", [False, True], ids=["disabled", "enabled"])
+def test_profile_uses_stable_telemetry_signature(
+    tmp_path,
+    monkeypatch,
+    isolated_telemetry_config,
+    telemetry_enabled,
+):
+    from graphcheck.telemetry.policy import enable_telemetry
+
+    baseline = _baseline_fixture()
+    _configure_profile_command(tmp_path, monkeypatch, baseline)
+    observed = {}
+    if telemetry_enabled:
+        enable_telemetry(path=isolated_telemetry_config)
+    monkeypatch.setattr(
+        "graphcheck.telemetry.posthog.HttpPostHogTransport",
+        lambda *args, **kwargs: pytest.fail("real telemetry transport was constructed"),
+    )
+
+    def build(
+        client,
+        *,
+        telemetry_observer=None,
+        telemetry_result_observer=None,
+    ):
+        observed["observers"] = telemetry_observer, telemetry_result_observer
+        return baseline
+
+    monkeypatch.setattr("graphcheck.cli.build_profile", build)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 0
+    assert tuple(observer is not None for observer in observed["observers"]) == (
+        telemetry_enabled,
+        telemetry_enabled,
+    )
+
+
+def test_external_consent_file_cannot_affect_profile_tests(tmp_path):
+    from graphcheck.telemetry.policy import enable_telemetry
+
+    external_config = tmp_path / "external" / "telemetry.json"
+    consent = enable_telemetry(path=external_config)
+    environment = os.environ.copy()
+    environment["GRAPHCHECK_TELEMETRY_CONFIG"] = str(external_config)
+    environment.pop("GRAPHCHECK_TELEMETRY", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_cli.py::test_profile_uses_stable_telemetry_signature[disabled]",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--basetemp",
+            str(tmp_path / "subprocess-pytest"),
+        ],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert external_config.read_text(encoding="utf-8").find(str(consent.distinct_id)) >= 0
 
 
 def test_profile_json_prints_partial_profile_without_human_summary(tmp_path, monkeypatch):

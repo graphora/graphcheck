@@ -528,6 +528,13 @@ def test_run_invalid_selector_is_configuration_failure(tmp_path, monkeypatch):
 
 def test_run_without_a_project_is_exit_three_with_a_fix(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "find_project_root",
+        lambda: (_ for _ in ()).throw(
+            GraphCheckError("project.missing", "No graphcheck.yml found.", "Run graphcheck init.")
+        ),
+    )
 
     result = runner.invoke(app, ["run"])
 

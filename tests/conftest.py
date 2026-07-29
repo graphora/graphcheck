@@ -13,6 +13,8 @@ gate any module that uses them with::
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
@@ -23,13 +25,17 @@ _NEO4J_RESTRICTED_PASSWORD = "graphora-restricted-test"
 
 
 @pytest.fixture(autouse=True)
-def prevent_real_posthog_delivery(monkeypatch):
-    """Tests may inject a fake transport, but never inherit a release/operator project key."""
+def isolated_telemetry_config(tmp_path: Path, monkeypatch) -> Path:
+    """Keep consent, identity, and delivery configuration inside each test."""
 
     from graphcheck.telemetry import posthog
 
+    config = tmp_path / "telemetry.json"
+    monkeypatch.setenv("GRAPHCHECK_TELEMETRY_CONFIG", str(config))
+    monkeypatch.delenv("GRAPHCHECK_TELEMETRY", raising=False)
     monkeypatch.delenv("GRAPHCHECK_POSTHOG_API_KEY", raising=False)
     monkeypatch.setattr(posthog, "POSTHOG_PROJECT_API_KEY", None)
+    return config
 
 
 @pytest.fixture(params=NEO4J_IMAGES)

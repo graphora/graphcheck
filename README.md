@@ -268,6 +268,8 @@ uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 Real-Neo4j integration tests are opt-in with `GRAPHCHECK_NEO4J_INTEGRATION=1`; the testcontainers
 suite covers the connector and engine against supported Neo4j versions. The customer-scale
 performance test is separately opt-in and requires a preloaded graph of at least 10 million nodes.
+See [Performance measurements](docs/performance.md) for the repeatable CLI, allocation, plan, and
+customer-scale baseline commands and JSON record format.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch workflow, definition of done, and decision
 rights.

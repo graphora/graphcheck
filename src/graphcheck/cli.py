@@ -497,14 +497,10 @@ def profile(
                 if telemetry is not None and telemetry.enabled
                 else None
             )
-            baseline = (
-                build_profile(
-                    client,
-                    telemetry_observer=observer,
-                    telemetry_result_observer=result_observer,
-                )
-                if observer is not None
-                else build_profile(client)
+            baseline = build_profile(
+                client,
+                telemetry_observer=observer,
+                telemetry_result_observer=result_observer,
             )
         finally:
             client.close()
