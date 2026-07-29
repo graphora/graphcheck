@@ -9,15 +9,25 @@ import pytest
 import yaml
 
 from graphcheck.connection_profiles import ConnectionProfile
-from graphcheck.contracts.results import RunStatus
+from graphcheck.contracts.check import load_suite
+from graphcheck.contracts.results import RunStatus, Verdict
+from graphcheck.engine.compiler import CypherCompiler
 from graphcheck.engine.runner import Engine, EngineConfig
 from graphcheck.neo4j_adapter import Neo4jClient
 from graphcheck.telemetry.collector import TelemetryCollector
 from graphcheck.telemetry.events import QueryFinished
+from tests.performance.gates import (
+    assert_required_gates,
+    evaluate_record,
+    load_reference_budgets,
+    write_gate_results,
+)
 from tests.performance.helpers import (
     BenchmarkRecord,
     cypher_version_for_server,
+    percentile,
     validate_record,
+    walk_plan,
     write_records,
 )
 
@@ -61,33 +71,44 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
         )
         assert label_rows, "performance target must contain at least one labeled node"
         busiest_label = label_rows[0]["label"]
+        competency_queries = (
+            ("node-count", "MATCH (n) RETURN count(n) AS total"),
+            ("relationship-count", "MATCH ()-[r]->() RETURN count(r) AS total"),
+        )
+        property_queries = (
+            ("sum", "MATCH (n) RETURN sum(size(keys(n))) AS property_slots"),
+            ("max", "MATCH (n) RETURN max(size(keys(n))) AS property_slots"),
+            ("min", "MATCH (n) RETURN min(size(keys(n))) AS property_slots"),
+            ("average", "MATCH (n) RETURN avg(size(keys(n))) AS property_slots"),
+        )
         suite = {
             "suite": "ten-million-budget",
             "competency": [
                 {
-                    "id": f"count-store-{index:02d}",
-                    "question": f"Can count-store query {index:02d} answer?",
-                    "query": "MATCH (n) RETURN count(n) AS total",
+                    "id": f"count-store-{kind}-{index:02d}",
+                    "question": f"Can {kind} count-store query {index:02d} answer?",
+                    "query": query,
                     "expect": {
                         "rows": {"exactly": 1},
                         "columns": ["total"],
                         "unique": True,
                     },
                 }
-                for index in range(6)
+                for kind, query in competency_queries
+                for index in range(3)
             ]
             + [
                 {
-                    "id": f"property-scan-{index:02d}",
-                    "question": f"Can full property scan {index:02d} answer?",
-                    "query": "MATCH (n) RETURN sum(size(keys(n))) AS property_slots",
+                    "id": f"property-scan-{kind}",
+                    "question": f"Can full property {kind} scan answer?",
+                    "query": query,
                     "expect": {
                         "rows": {"exactly": 1},
                         "columns": ["property_slots"],
                         "unique": True,
                     },
                 }
-                for index in range(4)
+                for kind, query in property_queries
             ],
             "drift": [
                 {
@@ -144,6 +165,7 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
         }
 
         started = time.monotonic()
+        suite_yaml = yaml.safe_dump(suite)
         results = Engine(
             client,
             config=config,
@@ -154,8 +176,18 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
                 }
             },
             event_sink=collector,
-        ).run_yaml(yaml.safe_dump(suite))
+        ).run_yaml(suite_yaml)
         elapsed_ms = (time.monotonic() - started) * 1000
+        cypher_version = cypher_version_for_server(
+            target.server_version,
+            configured=os.environ.get("GRAPHCHECK_PERFORMANCE_CYPHER"),
+        )
+        representative_plans = _representative_plans(
+            client,
+            suite_yaml,
+            server=target.server_version,
+            cypher=cypher_version,
+        )
     finally:
         client.close()
 
@@ -164,6 +196,14 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
     assert results.totals.skipped == 0
     assert results.run.status is RunStatus.COMPLETE
     assert results.run.partial_reason is None
+    assert all(check.measured is not None for check in results.checks)
+    assert all(
+        check.verdict is Verdict.PASS
+        for check in results.checks
+        if check.id.startswith(
+            ("count-store-", "property-scan-", "node-count-", "relationship-count-")
+        )
+    )
     family_timings: dict[str, list[int]] = {}
     for check in results.checks:
         family_timings.setdefault(_family(check.id), []).append(check.duration_ms or 0)
@@ -178,18 +218,35 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
         for event in collector.events
         if isinstance(event, QueryFinished)
     ]
+    family_records = [
+        BenchmarkRecord.from_samples(
+            f"customer-10m-concurrency-{concurrency}-{family}",
+            durations,
+            server=target.server_version,
+            cypher=cypher_version,
+            details={
+                "family": family,
+                "concurrency": concurrency,
+                "representative_plan": representative_plans[family],
+            },
+        )
+        for family, durations in sorted(family_timings.items())
+    ]
     record = BenchmarkRecord.from_samples(
         f"engine-30-check-10m-concurrency-{concurrency}",
         [elapsed_ms],
         server=target.server_version,
-        cypher=cypher_version_for_server(target.server_version),
+        cypher=cypher_version,
         details={
             "concurrency": config.max_concurrency,
             "per_check_family_ms": {
                 family: {
                     "checks": len(durations),
                     "total_ms": sum(durations),
+                    "median_ms": percentile(durations, 0.5),
+                    "p95_ms": percentile(durations, 0.95),
                     "maximum_ms": max(durations),
+                    "representative_plan": representative_plans[family],
                 }
                 for family, durations in sorted(family_timings.items())
             },
@@ -204,12 +261,14 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
         if configured_output
         else tmp_path / f"engine-10m-concurrency-{concurrency}.json"
     )
-    write_records([record], output)
-    payload = json.loads(output.read_text(encoding="utf-8"))[0]
-    validate_record(payload)
-    assert payload["details"]["concurrency"] == config.max_concurrency
-    assert payload["details"]["queries"]
-    assert all("client_wall_ms" in timing for timing in payload["details"]["queries"])
+    write_records([record, *family_records], output)
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    for item in payload:
+        validate_record(item)
+    assert payload[0]["details"]["concurrency"] == config.max_concurrency
+    assert payload[0]["details"]["queries"]
+    assert all("client_wall_ms" in timing for timing in payload[0]["details"]["queries"])
+    _enforce_family_budgets(family_records, output, concurrency)
 
 
 def _family(check_id: str) -> str:
@@ -217,7 +276,8 @@ def _family(check_id: str) -> str:
         (
             family
             for prefix, family in (
-                ("count-store-", "competency-count-store"),
+                ("count-store-node-count-", "competency-node-count-store"),
+                ("count-store-relationship-count-", "competency-relationship-count-store"),
                 ("property-scan-", "competency-property-scan"),
                 ("node-count-", "drift-node-count"),
                 ("relationship-count-", "drift-relationship-count"),
@@ -230,3 +290,46 @@ def _family(check_id: str) -> str:
         ),
         "unknown",
     )
+
+
+def _representative_plans(client, suite_yaml, *, server, cypher):
+    plans = {}
+    compiler = CypherCompiler()
+    for check in load_suite(suite_yaml).checks:
+        family = _family(check.id)
+        if family in plans:
+            continue
+        compiled = compiler.compile(check, sample_seed=0)
+        plans[family] = {
+            "query": compiled.query,
+            "operators": walk_plan(client.explain_read(compiled.query, compiled.params)),
+            "server": server,
+            "cypher": cypher,
+        }
+    return plans
+
+
+def _enforce_family_budgets(records, output, concurrency):
+    budget_path = os.environ.get("GRAPHCHECK_PERFORMANCE_BUDGETS")
+    if budget_path is None:
+        return
+    reference = os.environ.get("GRAPHCHECK_PERFORMANCE_GATE")
+    if reference is None:
+        raise ValueError(
+            "GRAPHCHECK_PERFORMANCE_GATE must name the customer-scale reference environment"
+        )
+    budgets = load_reference_budgets(Path(budget_path), reference)
+    results = [
+        evaluate_record(
+            record,
+            budgets[record.benchmark],
+            gate="customer-scale-family",
+            details={"family": record.details["family"], "concurrency": concurrency},
+        )
+        for record in records
+    ]
+    write_gate_results(
+        results,
+        output.with_name(f"{output.stem}-family-gates{output.suffix}"),
+    )
+    assert_required_gates(results)

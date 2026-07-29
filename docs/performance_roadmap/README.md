@@ -246,3 +246,23 @@ Run the integration and performance commands specified by a brief in addition to
   - verified the compatibility-focused suite with 238 passing tests and the full repository gate
     with 971 passing, 52 opt-in skips, and 91.12% coverage; the Docker-backed live matrix remains
     assigned to CI because Docker is unavailable in the local environment.
+- Implemented PR 15, performance regression gates:
+  - added a named Windows AMD64/Python 3.12 cold-CLI reference with three-run repeatability
+    evidence, 20% median regression budgets, raw median/p95/maximum samples, and a confirmation
+    batch before a noisy initial failure becomes required;
+  - added a dedicated Windows CI job that enforces CLI and logical memory budgets and retains
+    machine-readable gate artifacts on success or failure;
+  - enforced decisive-consumption, retained-row, evidence-cap, full-result safety-ceiling, and
+    version-tolerant peak-allocation bounds over million-row lazy results;
+  - strengthened live plan gates with count-store, typed-relationship, and indexed-lookup
+    anti-regression assertions on a stable 1,000-node fixture, with query text, operator trees,
+    server version, and Cypher version in failures;
+  - diversified the opt-in 10-million-node workload, emitted per-family p50/p95 records and
+    representative plans at concurrency 1, 2, and 4, and added named external family budgets whose
+    failures identify the regressing family and concurrency;
+  - documented report-only observation, promotion to required gates, artifact interpretation, and
+    the reviewed emergency fallback that preserves measurement collection;
+  - verified the local performance suite with 14 passing tests and 3 customer-scale skips, the
+    required Windows CLI gate with machine-readable diagnostics, and the full repository gate with
+    977 passing, 52 opt-in skips, and 91.12% coverage; the three Docker-backed plan lanes remain
+    assigned to CI because Docker is unavailable locally.

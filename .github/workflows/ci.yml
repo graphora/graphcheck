@@ -66,6 +66,33 @@ jobs:
       - run: uv sync --group dev
       - run: uv run pytest tests/integration -v
 
+  performance-gates:
+    runs-on: windows-latest
+    env:
+      GRAPHCHECK_PERFORMANCE_GATE: windows-amd64-python-3.12
+      GRAPHCHECK_PERFORMANCE_OUTPUT: .performance-artifacts/cli-cold-start.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv with the reference Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      - name: Enforce cold CLI and logical memory budgets
+        run: >
+          uv run pytest
+          tests/performance/test_cli_startup.py
+          tests/performance/test_memory_gates.py
+          tests/performance/test_regression_gates.py
+          -v
+      - name: Retain raw samples and gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-gates-windows-python-3.12
+          path: .performance-artifacts/
+          if-no-files-found: warn
+
   installed-wheel:
     runs-on: ubuntu-latest
     steps:
