@@ -8,10 +8,12 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from graphcheck.application.artifacts import write_run_artifacts
 
 import typer
 from pydantic import ValidationError
-
+from graphcheck.application.suites import load_suite_inputs
+from graphcheck.application.paths import project_path
 from graphcheck import __version__
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
@@ -642,11 +644,11 @@ def run_command(
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
         config = load_project_config(root)
-        artifacts = _project_path(root, config.artifacts)
+        artifacts = project_path(root, config.artifacts)
         runs_dir = artifacts / "runs"
         tags = _selection_tags(select or [])
-        suite_inputs = _load_suite_inputs(
-            _project_path(root, config.checks),
+        suite_inputs = load_suite_inputs(
+            project_path(root, config.artifacts),
             requested_suites,
         )
         profiles = load_profiles(root)
@@ -697,7 +699,7 @@ def run_command(
 
     try:
         assert runs_dir is not None
-        results_path, report_path = _write_run_artifacts(results, runs_dir)
+        results_path, report_path = write_run_artifacts(results, runs_dir)
     except Exception as exc:
         typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
         typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
@@ -761,101 +763,6 @@ def _selection_tags(selectors: list[str]) -> list[str]:
         if tag not in tags:
             tags.append(tag)
     return tags
-
-
-def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[SuiteInput]:
-    if not checks_dir.is_dir():
-        raise GraphCheckError(
-            "run.checks_missing",
-            f"Configured checks directory was not found: {checks_dir}",
-            "Create the directory or fix `checks` in graphcheck.yml.",
-        )
-    try:
-        paths = sorted(
-            path
-            for path in checks_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".yml", ".yaml"}
-        )
-    except OSError as exc:
-        raise GraphCheckError(
-            "run.checks_unreadable",
-            f"Could not enumerate check suites in {checks_dir}: {exc}",
-            "Check the configured checks path and its filesystem permissions.",
-        ) from exc
-
-    loaded: list[SuiteInput] = []
-    for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-            loaded.append(SuiteInput.from_yaml(text, source=str(path)))
-        except Exception as exc:
-            raise GraphCheckError(
-                "run.suite_invalid",
-                f"Suite {path} is invalid: {type(exc).__name__}: {exc}",
-                "Fix the suite YAML and remove unknown keys, then run it again.",
-            ) from exc
-
-    if not requested_suites:
-        return loaded
-    requested = set(requested_suites)
-    return [item for item in loaded if item.suite.suite in requested]
-
-
-def _project_path(root: Path, configured: str) -> Path:
-    path = Path(configured)
-    return path if path.is_absolute() else root / path
-
-
-def _write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    resolved_runs = runs_dir.resolve()
-    historical_dir = runs_dir / results.run.id
-    if (
-        historical_dir.name.casefold() == "latest"
-        or historical_dir.resolve().parent != resolved_runs
-    ):
-        raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
-
-    _publish_run_directory(results, historical_dir)
-    latest_dir = runs_dir / "latest"
-    _publish_run_directory(results, latest_dir)
-    return latest_dir / "results.json", latest_dir / "report.html"
-
-
-def _publish_run_directory(results: Results, directory: Path) -> None:
-    """Stage and swap a complete results/report pair without exposing a mixed pair."""
-
-    parent = directory.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex
-    staging = parent / f".{directory.name}.staging-{token}"
-    backup = parent / f".{directory.name}.backup-{token}"
-    staging.mkdir()
-    previous_moved = False
-    try:
-        write_results(results, staging / "results.json")
-        write_html_report(results, staging / "report.html")
-
-        if directory.exists():
-            is_junction = getattr(directory, "is_junction", lambda: False)
-            if not directory.is_dir() or directory.is_symlink() or is_junction():
-                raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
-            directory.replace(backup)
-            previous_moved = True
-        staging.replace(directory)
-    except Exception:
-        if previous_moved and backup.exists():
-            if directory.exists():
-                shutil.rmtree(directory)
-            backup.replace(directory)
-        raise
-    else:
-        if backup.exists():
-            shutil.rmtree(backup)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
-
 
 def _print_setup_error(error: CheckError) -> None:
     typer.echo(f"{error.code}: {error.message}", err=True)
