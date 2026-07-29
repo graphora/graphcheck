@@ -519,10 +519,12 @@ def _compile_hub_outlier(
           WITH population
           CALL {{
             WITH population
+            WITH population
             WHERE population <= $exhaustive_limit
             MATCH {node}
             RETURN n
             UNION
+            WITH population
             WITH population
             WHERE population > $exhaustive_limit
             MATCH {node}

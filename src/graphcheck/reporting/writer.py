@@ -5,11 +5,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import jsonschema
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from graphcheck.contracts.results import SCHEMA_VERSION, Results
-from graphcheck.contracts.schemas import results_schema
 
 _JSON_VALUE = TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
 
@@ -61,7 +59,6 @@ def validated_results_json(results: Results | dict[str, Any]) -> tuple[Results, 
 
     model = load_results(results)
     payload = json_compatible(model)
-    jsonschema.validate(payload, results_schema())
     return model, json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 

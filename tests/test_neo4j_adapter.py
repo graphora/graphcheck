@@ -869,6 +869,7 @@ def test_read_transaction_runs_measurement_and_evidence_on_one_transaction(monke
             return False
 
         def run(self, query, params):
+            assert isinstance(query, str)
             text = str(getattr(query, "text", query))
             executed.append(text)
             return (

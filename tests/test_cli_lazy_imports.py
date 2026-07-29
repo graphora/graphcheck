@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from graphcheck import __version__
+
 _COMMAND_MODULES = {
     "graphcheck.baselines",
     "graphcheck.connection_profiles",
@@ -18,6 +20,19 @@ _COMMAND_MODULES = {
     "graphcheck.profiler",
     "graphcheck.project",
     "graphcheck.reporting",
+}
+_TELEMETRY_MODEL_MODULES = {
+    "graphcheck.telemetry.collector",
+    "graphcheck.telemetry.events",
+    "graphcheck.telemetry.policy",
+    "graphcheck.telemetry.posthog",
+    "graphcheck.telemetry.runtime",
+}
+_VERSION_FORBIDDEN_MODULES = _TELEMETRY_MODEL_MODULES | {
+    "graphcheck.cli",
+    "neo4j",
+    "pydantic",
+    "typer",
 }
 
 
@@ -47,3 +62,103 @@ def test_fast_cli_paths_do_not_import_command_modules(arguments):
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == []
+
+
+def test_console_version_fast_path_is_standard_library_only():
+    completed = _run_bootstrap(["--version"], telemetry="0")
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines()[0] == f"graphcheck {__version__}"
+    assert _modules(completed) == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--help"],
+        ["init", "--help"],
+        ["debug", "--help"],
+        ["profile", "--help"],
+        ["report", "--help"],
+        ["diff", "--help"],
+        ["run", "--help"],
+        ["baseline", "--help"],
+    ],
+)
+def test_disabled_console_help_does_not_import_telemetry_models(arguments):
+    completed = _run_bootstrap(arguments, telemetry="0")
+
+    assert completed.returncode == 0, completed.stderr
+    assert _modules(completed) == []
+
+
+@pytest.mark.parametrize("persisted", [False, True], ids=["process", "persisted"])
+def test_enabled_consent_loads_full_telemetry_only_after_bootstrap(tmp_path, persisted):
+    config = tmp_path / "telemetry.json"
+    if persisted:
+        config.write_text(
+            json.dumps(
+                {
+                    "enabled": True,
+                    "consent_version": "1.0",
+                    "distinct_id": "55a068c3-fcd1-4f98-ae25-b66a3843b9d1",
+                }
+            ),
+            encoding="utf-8",
+        )
+    completed = _run_bootstrap(
+        ["--help"],
+        telemetry=None if persisted else "1",
+        config=config,
+        patch_delivery=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "graphcheck.telemetry.runtime" in _modules(completed)
+
+
+def _run_bootstrap(
+    arguments,
+    *,
+    telemetry,
+    config=None,
+    patch_delivery=False,
+):
+    source = Path(__file__).parents[1] / "src"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(source), environment.get("PYTHONPATH")) if path
+    )
+    if telemetry is None:
+        environment.pop("GRAPHCHECK_TELEMETRY", None)
+    else:
+        environment["GRAPHCHECK_TELEMETRY"] = telemetry
+    environment["GRAPHCHECK_TELEMETRY_CONFIG"] = str(config or source / "missing-consent.json")
+    environment.pop("DO_NOT_TRACK", None)
+    modules = _VERSION_FORBIDDEN_MODULES if arguments == ["--version"] else _TELEMETRY_MODEL_MODULES
+    delivery_patch = (
+        "import graphcheck.telemetry.release as release;release.POSTHOG_PROJECT_API_KEY=None;"
+        if patch_delivery
+        else ""
+    )
+    script = (
+        "import json,sys;"
+        f"sys.argv={['graphcheck', *arguments]!r};"
+        f"{delivery_patch}"
+        "from graphcheck.bootstrap import cli;"
+        "exit_code=0;"
+        "\ntry: cli()\n"
+        "except SystemExit as exc: exit_code=int(exc.code or 0)\n"
+        f"print(json.dumps({{'exit_code':exit_code,'modules':sorted({modules!r}&sys.modules.keys())}}))"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+
+def _modules(completed):
+    return json.loads(completed.stdout.splitlines()[-1])["modules"]

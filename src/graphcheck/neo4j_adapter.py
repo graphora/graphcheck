@@ -574,16 +574,18 @@ class _TransactionReader:
         )
         try:
             guard_started = time.monotonic()
+            # Transaction.run rejects neo4j.Query objects; the transaction-level timeout was
+            # already attached by begin_transaction(), so both EXPLAIN and execution stay strings.
             _ensure_server_classified_read(
                 self._transaction,
                 query,
                 values,
                 database=self._database,
                 deadline=deadline,
+                attach_timeout=False,
             )
             read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
-            driver_query = neo4j.Query(query, timeout=_remaining_timeout(deadline))
-            result = self._transaction.run(driver_query, values)
+            result = self._transaction.run(query, values)
             rows = [_raw_record(record) for record in result]
             columns = _result_columns(result) or (tuple(rows[0]) if rows else ())
             consume = getattr(result, "consume", None)
@@ -712,6 +714,7 @@ def _assert_server_classified_read(
     params: dict[str, object],
     *,
     timeout_s: float | None,
+    attach_timeout: bool = True,
 ) -> None:
     """Fail closed unless Neo4j's planner classifies the statement as read-only."""
 
@@ -723,7 +726,9 @@ def _assert_server_classified_read(
             "Use the supported Neo4j driver and a dedicated read-only database credential.",
         )
     text = f"EXPLAIN {query}"
-    driver_query = neo4j.Query(text, timeout=timeout_s) if timeout_s is not None else text
+    driver_query = (
+        neo4j.Query(text, timeout=timeout_s) if attach_timeout and timeout_s is not None else text
+    )
     result = run(driver_query, params)
     consume = getattr(result, "consume", None)
     if not callable(consume):
@@ -757,6 +762,7 @@ def _ensure_server_classified_read(
     *,
     database: str,
     deadline: float | None,
+    attach_timeout: bool = True,
 ) -> None:
     cache_key = (query, database)
     while True:
@@ -780,6 +786,7 @@ def _ensure_server_classified_read(
             query,
             params,
             timeout_s=_remaining_timeout(deadline),
+            attach_timeout=attach_timeout,
         )
     except BaseException:
         with _READ_CLASSIFICATION_LOCK:

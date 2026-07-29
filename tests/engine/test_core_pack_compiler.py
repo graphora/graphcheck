@@ -294,6 +294,9 @@ def test_hub_sampling_is_seeded_deterministic_and_reports_actual_sample_size():
     assert "$sample_gate_hash_a" in first.query
     assert "_gc_gate_key" in first.query
     assert "ORDER BY _gc_sample_key, id(n)" in first.query
+    import_with = "WITH population\n            WITH population\n            WHERE population "
+    assert f"{import_with}<=" in first.query
+    assert f"{import_with}>" in first.query
 
 
 def test_compiler_applies_pack_defaults_when_optional_values_are_normalized_to_none():

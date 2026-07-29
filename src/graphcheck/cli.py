@@ -17,26 +17,26 @@ from typing import TYPE_CHECKING
 import typer
 
 from graphcheck import __version__
-from graphcheck.telemetry.events import EventOutcome
-from graphcheck.telemetry.policy import (
+from graphcheck.telemetry.consent import (
+    disable_telemetry,
+    enable_telemetry,
+    reset_installation_id,
+    resolve_consent,
+)
+from graphcheck.telemetry.types import (
     CONSENT_VERSION,
     TELEMETRY_SCHEMA_VERSION,
     ArtifactOutcome,
     CliFailureStage,
     CommandAction,
     CommandName,
+    ConsentState,
+    EventOutcome,
     OutputMode,
     ProcessOutcome,
     SafeErrorCode,
-    assert_private_payload,
-    disable_telemetry,
-    enable_telemetry,
-    reset_installation_id,
-    resolve_consent,
     safe_command,
 )
-from graphcheck.telemetry.posthog import telemetry_delivery_configured
-from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 
 if TYPE_CHECKING:
     from graphcheck.contracts.profile import BaselineProfile
@@ -125,7 +125,7 @@ app.add_typer(telemetry_app, name="telemetry")
 baseline_app = typer.Typer(help="Manage baseline snapshots.")
 app.add_typer(baseline_app, name="baseline")
 
-_COMMAND_TELEMETRY: ContextVar[CommandTelemetryRuntime | None] = ContextVar(
+_COMMAND_TELEMETRY: ContextVar[object | None] = ContextVar(
     "graphcheck_command_telemetry",
     default=None,
 )
@@ -142,7 +142,7 @@ def _telemetry_command(command: CommandName):
                 output_mode = (
                     OutputMode.JSON if kwargs.get("json_output") is True else OutputMode.HUMAN
                 )
-                runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+                runtime = _start_telemetry_runtime(command, output_mode=output_mode)
                 token = _COMMAND_TELEMETRY.set(runtime)
             runtime.mark_callback_entered()
             try:
@@ -169,11 +169,11 @@ def _telemetry_command(command: CommandName):
     return decorate
 
 
-def _command_telemetry() -> CommandTelemetryRuntime | None:
+def _command_telemetry():
     return _COMMAND_TELEMETRY.get()
 
 
-def cli() -> None:
+def cli(*, consent: ConsentState | None = None) -> None:
     """Run Typer behind the true command boundary, including argument-parsing failures."""
 
     arguments = tuple(sys.argv[1:])
@@ -183,7 +183,7 @@ def cli() -> None:
         return
 
     output_mode = OutputMode.JSON if "--json" in arguments else OutputMode.HUMAN
-    runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+    runtime = _start_telemetry_runtime(command, output_mode=output_mode, consent=consent)
     token = _COMMAND_TELEMETRY.set(runtime)
     try:
         app()
@@ -218,6 +218,40 @@ def _command_from_argv(arguments: Sequence[str]) -> CommandName:
     return CommandName.OTHER
 
 
+def _start_telemetry_runtime(
+    command: CommandName,
+    *,
+    output_mode: OutputMode,
+    consent: ConsentState | None = None,
+    action: CommandAction | str | None = None,
+):
+    state = consent
+    if state is None:
+        try:
+            state = resolve_consent()
+        except Exception:
+            from graphcheck.telemetry.types import ConsentSource
+
+            state = ConsentState(False, ConsentSource.DEFAULT)
+    if state.enabled:
+        from graphcheck.telemetry.runtime import CommandTelemetryRuntime
+
+        return CommandTelemetryRuntime.start(
+            command,
+            action=action,
+            output_mode=output_mode,
+            consent=state,
+        )
+    from graphcheck.telemetry.inactive import InactiveCommandTelemetryRuntime
+
+    return InactiveCommandTelemetryRuntime.start(
+        command,
+        action=action,
+        output_mode=output_mode,
+        consent=state,
+    )
+
+
 def _version(value: bool) -> None:
     if value:
         typer.echo(f"graphcheck {__version__}")
@@ -247,16 +281,17 @@ def telemetry_enable() -> None:
     enable_telemetry()
     state = resolve_consent()
     typer.echo("Anonymous GraphCheck telemetry is enabled.")
-    if not telemetry_delivery_configured():
+    if not _telemetry_delivery_configured():
         typer.echo("Telemetry delivery is not configured in this build; consent remains stored.")
     # This is the single telemetry control action that may emit: consent exists only after the
     # state has been stored, so construct the command runtime at that point.
     try:
         if before.enabled or not state.enabled:
             return
-        runtime = CommandTelemetryRuntime.start(
+        runtime = _start_telemetry_runtime(
             CommandName.TELEMETRY,
             action=CommandAction.ENABLE,
+            output_mode=OutputMode.HUMAN,
             consent=state,
         )
         runtime.started_perf = started
@@ -280,7 +315,8 @@ def telemetry_status() -> None:
     state = resolve_consent()
     typer.echo(f"Telemetry: {'enabled' if state.enabled else 'disabled'}")
     typer.echo(f"Source: {state.source.value}")
-    typer.echo(f"Delivery: {'configured' if telemetry_delivery_configured() else 'not configured'}")
+    delivery = "configured" if _telemetry_delivery_configured() else "not configured"
+    typer.echo(f"Delivery: {delivery}")
     if state.renewal_required:
         typer.echo("Consent renewal is required for the current telemetry consent version.")
 
@@ -1096,6 +1132,8 @@ def _cli_stage_for_error(code: str) -> CliFailureStage:
 
 
 def _telemetry_preview_payload() -> dict[str, object]:
+    from graphcheck.telemetry.policy import assert_private_payload
+
     common = {
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "consent_version": CONSENT_VERSION,
@@ -1188,6 +1226,12 @@ def _telemetry_preview_payload() -> dict[str, object]:
     for event in events:
         assert_private_payload(event["properties"])
     return {"sent": False, "events": events}
+
+
+def _telemetry_delivery_configured() -> bool:
+    from graphcheck.telemetry.posthog import telemetry_delivery_configured
+
+    return telemetry_delivery_configured()
 
 
 def _print_report_command_help() -> None:

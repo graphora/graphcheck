@@ -148,6 +148,8 @@ Run the integration and performance commands specified by a brief in addition to
     capped pointers;
   - made evidence-query failures and malformed evidence results errored checks and added distinct
     measurement/evidence telemetry roles;
+  - corrected the explicit-transaction connector boundary to pass plain Cypher strings, as required
+    by the Neo4j driver, while retaining the shared transaction-level deadline;
   - verified the focused core compiler/runner suite with 89 passing tests.
 - Implemented PR 08, sampling and concurrency tuning:
   - removed the hub population-preflight round trip by computing exact population and selection in
@@ -160,6 +162,35 @@ Run the integration and performance commands specified by a brief in addition to
     documented CLI-over-project-over-engine precedence and a conservative default of one worker;
   - matched the Neo4j connection pool to effective concurrency and set explicit connection,
     acquisition, fetch-size, and retry settings;
+  - made both hub-sampling UNION branches Neo4j 4.4/5 compatible by separating correlated variable
+    import from the subsequent population predicate;
   - expanded the opt-in 10M benchmark to concurrency 1, 2, and 4 and verified the focused sampling,
     runner, PII, project, connector, and CLI suite with 229 passing tests;
   - verified the full repository gate with 926 passing, 32 opt-in skips, and 91.20% coverage.
+- Implemented PR 09, development-only JSON Schema validation:
+  - removed the duplicate `jsonschema` validation pass from normal result serialization while
+    retaining Pydantic as the canonical semantic artifact boundary;
+  - separated schema generation from optional instance validation by lazily importing the
+    development validator only inside explicit validation helpers;
+  - moved `jsonschema` and its transitive validator dependencies out of production metadata and
+    added a byte-for-byte serialized result regression fixture;
+  - built and installed an isolated wheel without development dependencies, inspected its
+    `Requires-Dist` metadata, and verified that JSON and HTML artifacts write without importing
+    `jsonschema`;
+  - measured 200 complete-result serializations after one warm-up: median improved from 77.745 ms
+    to 1.701 ms and p95 from 129.759 ms to 2.900 ms with identical bytes;
+  - verified the focused contract/reporting suite with 192 passing tests.
+- Implemented PR 10, lazy CLI and telemetry imports:
+  - added a standard-library-only console bootstrap whose exact `--version` fast path imports
+    neither Typer, Pydantic, Neo4j, command implementations, nor telemetry;
+  - split standard-library consent storage and shared telemetry enums from Pydantic payload models,
+    and added a no-op inactive runtime for disabled commands;
+  - deferred event, collector, runtime, and PostHog imports until enabled consent is established,
+    while retaining process-enabled, persisted-enabled, and telemetry-management behavior;
+  - added fresh-process import-boundary coverage for top-level and per-command help, process and
+    persisted consent, and verified the installed-wheel console entry point;
+  - measured 20 cold `--version` samples after one discarded warm-up: median improved from
+    311.50 ms to 72.49 ms and p95 from 457.27 ms to 86.17 ms;
+  - verified the combined CLI, run, report-history, telemetry, import-boundary, and startup suite
+    with 175 passing tests;
+  - verified the full repository gate with 938 passing, 32 opt-in skips, and 90.95% coverage.

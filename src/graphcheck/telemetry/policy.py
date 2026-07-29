@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import re
 import sys
-import uuid
 from collections.abc import Iterable, Mapping
-from contextlib import suppress
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
 from typing import Annotated
-from uuid import UUID
 
 from pydantic import (
     UUID4,
@@ -26,17 +19,57 @@ from pydantic import (
     model_validator,
 )
 
+from graphcheck.telemetry.consent import (
+    disable_telemetry as disable_telemetry,
+)
+from graphcheck.telemetry.consent import (
+    enable_telemetry as enable_telemetry,
+)
+from graphcheck.telemetry.consent import (
+    reset_installation_id as reset_installation_id,
+)
+from graphcheck.telemetry.consent import (
+    resolve_consent as resolve_consent,
+)
+from graphcheck.telemetry.consent import (
+    user_config_path as user_config_path,
+)
 from graphcheck.telemetry.events import (
-    EventOutcome,
     Pattern,
-    SafeErrorCode,
     SafeExceptionType,
     Template,
 )
+from graphcheck.telemetry.types import (
+    CONSENT_VERSION as CONSENT_VERSION,
+)
+from graphcheck.telemetry.types import (
+    TELEMETRY_SCHEMA_VERSION as TELEMETRY_SCHEMA_VERSION,
+)
+from graphcheck.telemetry.types import (
+    ArtifactOutcome,
+    CliFailureStage,
+    CommandAction,
+    CommandName,
+    EventOutcome,
+    OsFamily,
+    OutputMode,
+    ProcessOutcome,
+    ProfileOutcome,
+    ProfilePartialReason,
+    ProfilerStage,
+    SafeErrorCode,
+    safe_action,
+)
+from graphcheck.telemetry.types import (
+    ConsentSource as ConsentSource,
+)
+from graphcheck.telemetry.types import (
+    ConsentState as ConsentState,
+)
+from graphcheck.telemetry.types import (
+    safe_command as safe_command,
+)
 
-TELEMETRY_SCHEMA_VERSION = "1.1"
-CONSENT_VERSION = "1.0"
-_CONFIG_ENV = "GRAPHCHECK_TELEMETRY_CONFIG"
 _CI_INDICATORS = frozenset(
     {
         "CI",
@@ -54,127 +87,6 @@ _CI_INDICATORS = frozenset(
 )
 
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
-
-
-class ConsentSource(StrEnum):
-    DEFAULT = "default"
-    STORED = "stored"
-    ENVIRONMENT = "environment"
-    DO_NOT_TRACK = "do_not_track"
-
-
-@dataclass(frozen=True)
-class ConsentState:
-    enabled: bool
-    source: ConsentSource
-    consent_version: str | None = None
-    distinct_id: UUID | None = None
-    persistent: bool = False
-    renewal_required: bool = False
-
-    def __post_init__(self) -> None:
-        if self.enabled and (self.distinct_id is None or self.consent_version is None):
-            raise ValueError("enabled consent requires a distinct ID and consent version")
-        if not self.enabled and self.distinct_id is not None:
-            raise ValueError("disabled consent cannot expose a distinct ID")
-        if self.distinct_id is not None and (
-            not isinstance(self.distinct_id, UUID) or self.distinct_id.version != 4
-        ):
-            raise ValueError("distinct_id must be a random UUID v4")
-
-
-class CommandName(StrEnum):
-    INIT = "init"
-    DEBUG = "debug"
-    RUN = "run"
-    REPORT = "report"
-    PROFILE = "profile"
-    DIFF = "diff"
-    BASELINE = "baseline"
-    TELEMETRY = "telemetry"
-    OTHER = "other"
-
-
-class CommandAction(StrEnum):
-    OPEN = "open"
-    LIST = "list"
-    COMPARE = "compare"
-    PRUNE = "prune"
-    FAILURES_ONLY = "failures-only"
-    SET = "set"
-    ENABLE = "enable"
-    DISABLE = "disable"
-    STATUS = "status"
-    PREVIEW = "preview"
-    RESET_ID = "reset-id"
-    UNKNOWN = "unknown"
-
-
-class ProcessOutcome(StrEnum):
-    SUCCESS = "success"
-    USER_ERROR = "user_error"
-    ENGINE_ERROR = "engine_error"
-    UNEXPECTED_ERROR = "unexpected_error"
-
-
-class CliFailureStage(StrEnum):
-    PROJECT_DISCOVERY = "project_discovery"
-    CONFIG_LOAD = "config_load"
-    SUITE_LOAD = "suite_load"
-    PROFILE_LOAD = "profile_load"
-    CLIENT_SETUP = "client_setup"
-    PROBE = "probe"
-    ENGINE = "engine"
-    PROFILE_COLLECTION = "profile_collection"
-    BASELINE_LOAD = "baseline_load"
-    BASELINE_WRITE = "baseline_write"
-    DIFF_COMPARE = "diff_compare"
-    ARTIFACT_WRITE = "artifact_write"
-    REPORT_RENDER = "report_render"
-    REPORT_OPEN = "report_open"
-
-
-class OutputMode(StrEnum):
-    HUMAN = "human"
-    JSON = "json"
-
-
-class ArtifactOutcome(StrEnum):
-    NOT_REQUESTED = "not_requested"
-    WRITTEN = "written"
-    ERROR = "error"
-
-
-class OsFamily(StrEnum):
-    WINDOWS = "windows"
-    MACOS = "macos"
-    LINUX = "linux"
-    OTHER = "other"
-
-
-class ProfileOutcome(StrEnum):
-    COMPLETE = "complete"
-    PARTIAL = "partial"
-    ERROR = "error"
-
-
-class ProfilerStage(StrEnum):
-    PROBE = "probe"
-    LABELS = "labels"
-    RELATIONSHIP_TYPES = "relationship_types"
-    CONSTRAINTS = "constraints"
-    INDEXES = "indexes"
-    PROPERTY_COVERAGE = "property_coverage"
-    DEGREE_DISTRIBUTION = "degree_distribution"
-
-
-class ProfilePartialReason(StrEnum):
-    DEADLINE_EXHAUSTED = "deadline_exhausted"
-    PROPERTY_COVERAGE_INCOMPLETE = "property_coverage_incomplete"
-    DEGREE_DISTRIBUTION_INCOMPLETE = "degree_distribution_incomplete"
-    SCHEMA_INCOMPLETE = "schema_incomplete"
-    PROBE_INCOMPLETE = "probe_incomplete"
-    UNKNOWN = "unknown"
 
 
 class _StrictPayload(BaseModel):
@@ -307,28 +219,6 @@ class ProfileCompleted(_StrictPayload):
             raise ValueError("probe_outcome requires probe_duration_ms")
         return self
 
-
-_ACTION_ALLOWLIST: dict[CommandName, frozenset[CommandAction]] = {
-    CommandName.REPORT: frozenset(
-        {
-            CommandAction.OPEN,
-            CommandAction.LIST,
-            CommandAction.COMPARE,
-            CommandAction.PRUNE,
-            CommandAction.FAILURES_ONLY,
-        }
-    ),
-    CommandName.BASELINE: frozenset({CommandAction.SET, CommandAction.LIST}),
-    CommandName.TELEMETRY: frozenset(
-        {
-            CommandAction.ENABLE,
-            CommandAction.DISABLE,
-            CommandAction.STATUS,
-            CommandAction.PREVIEW,
-            CommandAction.RESET_ID,
-        }
-    ),
-}
 
 _TEMPLATE_MAP: dict[str, Template] = {
     "completeness": Template.EXISTENCE,
@@ -681,184 +571,6 @@ _CARDINALITY_FIELD_NAMES = frozenset(
 )
 
 
-def user_config_path(environ: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if environ is None else environ
-    override = env.get(_CONFIG_ENV)
-    if override:
-        return Path(override).expanduser()
-    if os.name == "nt" and env.get("APPDATA"):
-        return Path(env["APPDATA"]) / "GraphCheck" / "telemetry.json"
-    base = Path(env.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "graphcheck" / "telemetry.json"
-
-
-def resolve_consent(
-    *,
-    path: Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    id_factory=uuid.uuid4,
-) -> ConsentState:
-    """Resolve telemetry without writing a file or creating an ID while disabled."""
-
-    env = os.environ if environ is None else environ
-    stored = _read_consent(path or user_config_path(env))
-    stored_active = bool(
-        stored
-        and stored.get("enabled") is True
-        and stored.get("consent_version") == CONSENT_VERSION
-        and _parse_uuid(stored.get("distinct_id")) is not None
-    )
-    renewal_required = bool(
-        stored
-        and stored.get("enabled") is True
-        and stored.get("consent_version") != CONSENT_VERSION
-    )
-
-    if env.get("DO_NOT_TRACK") == "1":
-        return ConsentState(
-            False,
-            ConsentSource.DO_NOT_TRACK,
-            renewal_required=renewal_required,
-        )
-    if env.get("GRAPHCHECK_TELEMETRY") == "0":
-        return ConsentState(False, ConsentSource.ENVIRONMENT, renewal_required=renewal_required)
-    if env.get("GRAPHCHECK_TELEMETRY") == "1":
-        if stored_active:
-            return ConsentState(
-                True,
-                ConsentSource.STORED,
-                CONSENT_VERSION,
-                _parse_uuid(stored["distinct_id"]),
-                persistent=True,
-            )
-        return ConsentState(
-            True,
-            ConsentSource.ENVIRONMENT,
-            CONSENT_VERSION,
-            _process_only_distinct_id(id_factory),
-            persistent=False,
-            renewal_required=renewal_required,
-        )
-    if stored_active:
-        return ConsentState(
-            True,
-            ConsentSource.STORED,
-            CONSENT_VERSION,
-            _parse_uuid(stored["distinct_id"]),
-            persistent=True,
-        )
-    return ConsentState(False, ConsentSource.DEFAULT, renewal_required=renewal_required)
-
-
-def enable_telemetry(*, path: Path | None = None, id_factory=uuid.uuid4) -> ConsentState:
-    destination = path or user_config_path()
-    stored = _read_consent(destination)
-    existing_id = (
-        _parse_uuid(stored.get("distinct_id"))
-        if stored
-        and stored.get("enabled") is True
-        and stored.get("consent_version") == CONSENT_VERSION
-        else None
-    )
-    if existing_id is not None:
-        return ConsentState(
-            True,
-            ConsentSource.STORED,
-            CONSENT_VERSION,
-            existing_id,
-            persistent=True,
-        )
-    distinct_id = id_factory()
-    _write_consent(
-        destination,
-        {
-            "enabled": True,
-            "consent_version": CONSENT_VERSION,
-            "distinct_id": str(distinct_id),
-        },
-    )
-    return ConsentState(
-        True,
-        ConsentSource.STORED,
-        CONSENT_VERSION,
-        distinct_id,
-        persistent=True,
-    )
-
-
-def disable_telemetry(*, path: Path | None = None) -> ConsentState:
-    destination = path or user_config_path()
-    stored = _read_consent(destination) or {}
-    _write_consent(
-        destination,
-        {
-            "enabled": False,
-            "consent_version": stored.get("consent_version", CONSENT_VERSION),
-            # Retained on disk for an explicit future reset, but never exposed or reused while
-            # inactive (including GRAPHCHECK_TELEMETRY=1 process-only runs).
-            "distinct_id": stored.get("distinct_id"),
-        },
-    )
-    return ConsentState(False, ConsentSource.STORED)
-
-
-def reset_installation_id(
-    *,
-    path: Path | None = None,
-    id_factory=uuid.uuid4,
-) -> ConsentState:
-    destination = path or user_config_path()
-    stored = _read_consent(destination) or {}
-    active = bool(
-        stored.get("enabled") is True and stored.get("consent_version") == CONSENT_VERSION
-    )
-    if active:
-        distinct_id = id_factory()
-        _write_consent(
-            destination,
-            {
-                "enabled": True,
-                "consent_version": CONSENT_VERSION,
-                "distinct_id": str(distinct_id),
-            },
-        )
-        return ConsentState(
-            True,
-            ConsentSource.STORED,
-            CONSENT_VERSION,
-            distinct_id,
-            persistent=True,
-        )
-    _write_consent(
-        destination,
-        {
-            "enabled": False,
-            "consent_version": stored.get("consent_version", CONSENT_VERSION),
-            "distinct_id": None,
-        },
-    )
-    return ConsentState(False, ConsentSource.STORED)
-
-
-def safe_command(value: object) -> CommandName:
-    try:
-        return CommandName(str(value))
-    except ValueError:
-        return CommandName.OTHER
-
-
-def safe_action(command: CommandName | str, value: object | None) -> CommandAction | None:
-    command = safe_command(command)
-    allowed = _ACTION_ALLOWLIST.get(command)
-    if allowed is None or value is None:
-        return None
-    try:
-        action = CommandAction(str(value))
-    except ValueError:
-        return CommandAction.UNKNOWN
-    return action if action in allowed else CommandAction.UNKNOWN
-
-
 def safe_pattern(value: object) -> Pattern:
     try:
         return Pattern(str(value))
@@ -1022,47 +734,3 @@ def assert_allowlisted_posthog_payload(
     if frozenset(payload) not in allowed:
         raise ValueError("PostHog properties do not match the event's allowlisted schema")
     assert_private_payload(payload)
-
-
-def _read_consent(path: Path) -> dict[str, object] | None:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    return raw
-
-
-def _write_consent(path: Path, payload: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(dict(payload), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
-    finally:
-        with suppress(FileNotFoundError):
-            temporary.unlink()
-
-
-def _parse_uuid(value: object) -> UUID | None:
-    try:
-        parsed = UUID(str(value))
-    except (ValueError, TypeError, AttributeError):
-        return None
-    return parsed if parsed.version == 4 else None
-
-
-def _process_only_distinct_id(id_factory) -> UUID:
-    global _PROCESS_ONLY_DISTINCT_ID
-    if id_factory is not uuid.uuid4:
-        return id_factory()
-    if _PROCESS_ONLY_DISTINCT_ID is None:
-        _PROCESS_ONLY_DISTINCT_ID = uuid.uuid4()
-    return _PROCESS_ONLY_DISTINCT_ID
-
-
-_PROCESS_ONLY_DISTINCT_ID: UUID | None = None

@@ -25,6 +25,8 @@ from pydantic import (
     model_validator,
 )
 
+from graphcheck.telemetry.types import EventOutcome, SafeErrorCode
+
 ENGINE_EVENT_SCHEMA_VERSION = "1.0"
 
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
@@ -37,12 +39,6 @@ class EngineEventKind(StrEnum):
     CHECK_PROCESSED = "CheckProcessed"
     RUN_FINISHED = "RunFinished"
     ENGINE_FAULTED = "EngineFaulted"
-
-
-class EventOutcome(StrEnum):
-    SUCCESS = "success"
-    ERROR = "error"
-    TIMEOUT = "timeout"
 
 
 class TargetSource(StrEnum):
@@ -112,36 +108,6 @@ class PartialReasonCode(StrEnum):
     PARTIAL_BASELINE = "partial_baseline"
     BASELINE_MEASUREMENT_MISSING = "baseline_measurement_missing"
     DEADLINE_EXHAUSTED = "deadline_exhausted"
-    UNKNOWN = "unknown"
-
-
-class SafeErrorCode(StrEnum):
-    NEO4J_UNREACHABLE = "neo4j.unreachable"
-    NEO4J_AUTH_FAILED = "neo4j.auth_failed"
-    NEO4J_PERMISSION_DENIED = "neo4j.permission_denied"
-    NEO4J_DATABASE_NOT_FOUND = "neo4j.database_not_found"
-    NEO4J_QUERY_FAILED = "neo4j.query_failed"
-    PROJECT_MISSING = "project.missing"
-    CONFIG_INVALID = "config.invalid"
-    SUITE_INVALID = "suite.invalid"
-    PROFILE_MISSING = "profile.missing"
-    PROFILE_INVALID = "profile.invalid"
-    PROFILE_COLLECTION_FAILED = "profile.collection_failed"
-    BASELINE_MISSING = "baseline.missing"
-    BASELINE_INVALID = "baseline.invalid"
-    BASELINE_PARTIAL = "baseline.partial"
-    BASELINE_LOAD_FAILED = "baseline.load_failed"
-    BASELINE_WRITE_FAILED = "baseline.write_failed"
-    DIFF_INCOMPARABLE = "diff.incomparable"
-    DIFF_FAILED = "diff.failed"
-    ENGINE_COMPILE_FAILED = "engine.compile_failed"
-    ENGINE_PARAMETER_RESOLUTION_FAILED = "engine.parameter_resolution_failed"
-    ENGINE_EVALUATE_FAILED = "engine.evaluate_failed"
-    ENGINE_UNEXPECTED = "engine.unexpected"
-    READ_GUARD_REJECTED = "read_guard.rejected"
-    ARTIFACT_WRITE_FAILED = "artifact.write_failed"
-    REPORT_RENDER_FAILED = "report.render_failed"
-    REPORT_OPEN_FAILED = "report.open_failed"
     UNKNOWN = "unknown"
 
 

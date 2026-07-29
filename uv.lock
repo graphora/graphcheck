@@ -223,7 +223,6 @@ name = "graphcheck"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "jsonschema" },
     { name = "neo4j" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -233,6 +232,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -242,7 +242,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jsonschema", specifier = ">=4" },
     { name = "neo4j", specifier = ">=5.20" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -252,6 +251,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6" },
+    { name = "jsonschema", specifier = ">=4" },
     { name = "pre-commit", specifier = ">=3.7" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },

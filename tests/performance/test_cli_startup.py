@@ -32,7 +32,7 @@ def test_cold_cli_commands_emit_machine_readable_baselines(tmp_path):
         command = [
             sys.executable,
             "-c",
-            "from graphcheck.cli import cli; cli()",
+            "from graphcheck.bootstrap import cli; cli()",
             *arguments,
         ]
         for _ in range(WARMUPS):

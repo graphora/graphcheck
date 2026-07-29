@@ -41,6 +41,12 @@ def test_writer_upgrades_schema_1_0_input_to_current_output():
     assert output["schema_version"] == "1.1"
 
 
+def test_writer_output_bytes_match_regression_fixture():
+    expected = (FIXTURES / "results.complete.rendered.json").read_text(encoding="utf-8")
+
+    assert results_json(_fixture("complete")) == expected
+
+
 def test_writer_rejects_invalid_results():
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["checks"][0]["evidence"] = None
