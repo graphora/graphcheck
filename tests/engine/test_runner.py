@@ -139,6 +139,56 @@ class RichClient:
         raise AssertionError("rich C2 path must be preferred over legacy run_read")
 
 
+class LazyCompetencyClient:
+    def __init__(self, rows, columns=("node_element_id",)):
+        self.rows = rows
+        self.columns = columns
+        self.yielded = 0
+        self.policies = []
+
+    def run_read_result(self, query, params, *, timeout_s=None):
+        raise AssertionError("competencies must use the bounded result path")
+
+    def run_read_result_bounded(
+        self,
+        query,
+        params,
+        *,
+        policy,
+        timeout_s=None,
+        stop_when=None,
+    ):
+        retained = []
+        for row in self.rows:
+            self.yielded += 1
+            if policy.max_rows is not None and len(retained) >= policy.max_rows:
+                raise GraphCheckError(
+                    "engine.result_limit_exceeded",
+                    "result limit exceeded",
+                    "narrow the query",
+                )
+            retained.append(row)
+            if stop_when is not None and stop_when(row):
+                self.policies.append(policy)
+                return QueryResult(
+                    retained,
+                    self.columns,
+                    (),
+                    complete=False,
+                    observed_rows=self.yielded,
+                    limit=policy.max_rows,
+                )
+        self.policies.append(policy)
+        return QueryResult(
+            retained,
+            self.columns,
+            (),
+            complete=True,
+            observed_rows=self.yielded,
+            limit=policy.max_rows,
+        )
+
+
 class FixedClock:
     def __init__(self, *values):
         self.values = list(values)
@@ -813,3 +863,142 @@ def test_engine_config_rejects_non_positive_integer_evidence_caps(invalid):
 def test_engine_config_rejects_invalid_max_concurrency(invalid):
     with pytest.raises(ValueError, match="max_concurrency"):
         EngineConfig(max_concurrency=invalid)
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "100"])
+def test_engine_config_rejects_invalid_result_row_limits(invalid):
+    with pytest.raises(ValueError, match="result_row_limit"):
+        EngineConfig(result_row_limit=invalid)
+
+
+def test_competency_minimum_stops_at_the_first_decisive_row():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(1_000_000))
+    suite = """\
+suite: bounded
+competency:
+  - id: minimum
+    question: Are at least three nodes returned?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {rows: {min: 3}}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert client.yielded == 3
+    assert result.measured["observed_rows_at_least"] == 3
+    assert "rows" not in result.measured
+
+
+def test_competency_maximum_and_duplicate_fail_at_the_first_decisive_row():
+    maximum = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    duplicate = LazyCompetencyClient(
+        iter(
+            [
+                {"node_element_id": "n-1"},
+                {"node_element_id": "n-1"},
+                {"node_element_id": "never-read"},
+            ]
+        )
+    )
+    maximum_suite = """\
+suite: bounded-max
+competency:
+  - id: maximum
+    question: Are at most two nodes returned?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect:
+      rows: {max: 2}
+      unique: false
+      contains: [never-read]
+      equals: [never-read]
+"""
+    duplicate_suite = """\
+suite: bounded-unique
+competency:
+  - id: unique
+    question: Are rows unique?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {unique: true}
+"""
+
+    maximum_result = _engine(maximum).run_yaml(maximum_suite, target=TARGET).checks[0]
+    duplicate_result = _engine(duplicate).run_yaml(duplicate_suite, target=TARGET).checks[0]
+
+    assert maximum_result.verdict is Verdict.FAIL
+    assert duplicate_result.verdict is Verdict.FAIL
+    assert maximum.yielded == 3
+    assert duplicate.yielded == 2
+    assert "rows" not in maximum_result.measured
+    assert {"unique", "contains", "equals"}.isdisjoint(maximum_result.measured)
+    assert duplicate_result.measured["unique"] is False
+
+
+def test_combined_expectations_use_the_strictest_consumption_policy():
+    client = LazyCompetencyClient(
+        iter(
+            [
+                {"node_element_id": "n-1"},
+                {"node_element_id": "n-2"},
+                {"node_element_id": "n-3"},
+            ]
+        )
+    )
+    suite = """\
+suite: strictest
+competency:
+  - id: combined
+    question: Are there enough unique rows?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {rows: {min: 2}, unique: true}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert client.yielded == 3
+    assert result.measured["rows"] == 3
+
+
+def test_contains_stops_when_every_pinned_value_has_been_seen():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    suite = """\
+suite: bounded-contains
+competency:
+  - id: contains
+    question: Does the result contain both pinned ids?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {contains: [n-1, n-3]}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert result.measured["contains"] is True
+    assert client.yielded == 4
+    assert "rows" not in result.measured
+
+
+def test_complete_assertion_errors_loudly_at_the_safety_ceiling():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    suite = """\
+suite: bounded-equals
+competency:
+  - id: equals
+    question: Does the full result equal the pinned bag?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {equals: [n-1]}
+"""
+
+    result = (
+        _engine(
+            client,
+            config=EngineConfig(result_row_limit=2),
+        )
+        .run_yaml(suite, target=TARGET)
+        .checks[0]
+    )
+
+    assert result.verdict is Verdict.ERRORED
+    assert result.error.code == "engine.result_limit_exceeded"
+    assert client.yielded == 3

@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from graphcheck.cli import app
 from graphcheck.connection_profiles import ConnectionProfile, ProfilesFile
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import Neo4jClient
+from graphcheck.neo4j_adapter import Neo4jClient, ResultPolicy
 from graphcheck.project import PROFILES_FILE, write_default_project, write_example_suite
 
 pytestmark = pytest.mark.skipif(
@@ -38,6 +38,25 @@ def test_connect_and_probe(neo4j_profile):
         assert counts.relationships >= 0
     finally:
         client.close()
+
+
+def test_bounded_read_stops_a_large_stream_and_client_remains_usable(neo4j_profile):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        bounded = client.run_read_result_bounded(
+            "UNWIND range(1, 1000000) AS value RETURN value",
+            policy=ResultPolicy(max_rows=3),
+        )
+        follow_up = client.run_read_result("RETURN 1 AS healthy")
+    finally:
+        client.close()
+
+    assert [row["value"] for row in bounded.rows] == [1, 2, 3]
+    assert bounded.complete is False
+    assert bounded.observed_rows == 4
+    assert bounded.notifications == ()
+    assert bounded.server_consumed_after_ms is None
+    assert follow_up.rows == [{"healthy": 1}]
 
 
 def test_restricted_user_real_probe_reports_blocked_read_check(

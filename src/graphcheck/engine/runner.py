@@ -43,7 +43,7 @@ from graphcheck.engine.compiler import (
     expected_for,
     name_for,
 )
-from graphcheck.engine.evaluator import Evaluation, VerdictEvaluator
+from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
 from graphcheck.engine.executor import ReadOnlyExecutor
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
@@ -113,6 +113,8 @@ class EngineConfig:
     # Leave a small serialization/reporting margin inside the user-facing five-minute budget.
     time_budget_s: float = 295.0
     evidence_cap: int = 100
+    result_row_limit: int = 100_000
+    eager_competency_evaluation: bool = False
     max_concurrency: int = 4
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
@@ -142,6 +144,14 @@ class EngineConfig:
             or self.max_concurrency < 1
         ):
             raise ValueError("max_concurrency must be a positive integer")
+        if (
+            isinstance(self.result_row_limit, bool)
+            or not isinstance(self.result_row_limit, int)
+            or self.result_row_limit < 1
+        ):
+            raise ValueError("result_row_limit must be a positive integer")
+        if not isinstance(self.eager_competency_evaluation, bool):
+            raise ValueError("eager_competency_evaluation must be boolean")
 
 
 @dataclass
@@ -689,21 +699,45 @@ class Engine:
                     )
                     self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
             self._telemetry_stage = EngineStage.QUERY
+            consumption = (
+                CompetencyConsumption(compiled, self.config.result_row_limit)
+                if isinstance(check.spec, CompetencyCheck)
+                and not self.config.eager_competency_evaluation
+                else None
+            )
             execution = self._execute_query_with_event(
                 compiled.query,
                 resolved_params,
                 role=QueryRole.CHECK_MEASUREMENT,
                 timeout_s=_remaining(deadline, self._monotonic()),
+                policy=consumption.policy if consumption is not None else None,
+                stop_when=consumption.stop_when if consumption is not None else None,
             )
+            if consumption is not None and not execution.complete and not consumption.decisive:
+                raise GraphCheckError(
+                    "engine.result_limit_exceeded",
+                    "The competency query reached the configured result-row safety ceiling "
+                    "before its assertions became decisive.",
+                    "Narrow the query or increase result_row_limit after reviewing "
+                    "its memory cost.",
+                )
             timings.read_guard_ms = execution.read_guard_ms
             self._telemetry_stage = EngineStage.EVALUATE
             stage_started = self._timing_start()
+            evaluator_kwargs = {
+                "columns": execution.columns,
+                "baseline": baseline,
+            }
+            if isinstance(self.evaluator, VerdictEvaluator):
+                evaluator_kwargs.update(
+                    complete=execution.complete,
+                    observed_rows=execution.observed_rows,
+                )
             evaluation = self.evaluator.evaluate(
                 # Evidence extraction must see executed literals, never unresolved graph tokens.
                 replace(compiled, params=resolved_params),
                 execution.rows,
-                columns=execution.columns,
-                baseline=baseline,
+                **evaluator_kwargs,
             )
             if not isinstance(evaluation, Evaluation):
                 raise GraphCheckError(
@@ -1027,10 +1061,18 @@ class Engine:
         *,
         role: QueryRole,
         timeout_s: float,
+        policy=None,
+        stop_when=None,
     ):
         started = self._timing_start()
         try:
-            execution = self.executor.execute(query, params, timeout_s=timeout_s)
+            execution = self.executor.execute(
+                query,
+                params,
+                timeout_s=timeout_s,
+                policy=policy,
+                stop_when=stop_when,
+            )
         except Exception as exc:
             duration_ms = self._timing_finish(started) or 0
             raw_code = exc.error.code if isinstance(exc, GraphCheckError) else None

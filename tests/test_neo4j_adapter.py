@@ -8,6 +8,7 @@ from graphcheck.neo4j_adapter import (
     DebugTrace,
     Neo4jClient,
     QueryResult,
+    ResultPolicy,
     Visibility,
     _fingerprint,
     _is_apoc_absent_error,
@@ -940,6 +941,170 @@ def test_run_read_result_preserves_graph_values_columns_and_notifications(monkey
     ]
 
 
+def test_bounded_result_stops_without_draining_and_closes_the_session(monkeypatch):
+    import neo4j
+
+    state = {
+        "yielded": 0,
+        "cancelled": False,
+        "consumed": False,
+        "session_closed": False,
+        "exceptional_exit": False,
+    }
+
+    class _LazyResult:
+        def keys(self):
+            return ("value",)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            state["yielded"] += 1
+            if state["yielded"] > 100:
+                raise StopIteration
+            return {"value": state["yielded"]}
+
+        def cancel(self):
+            state["cancelled"] = True
+
+        def consume(self):
+            state["consumed"] = True
+            raise AssertionError("a truncated result must not be drained")
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            state["session_closed"] = True
+            state["exceptional_exit"] = exc[0] is not None
+            return False
+
+        def run(self, query, params):
+            return _ReadPlanResult() if _is_explain(query) else _LazyResult()
+
+    class _Driver:
+        def session(self, **kwargs):
+            return _Session()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _Driver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    result = client.run_read_result_bounded(
+        "RETURN value /* bounded-lazy */",
+        policy=ResultPolicy(max_rows=3),
+    )
+
+    assert result.rows == [{"value": 1}, {"value": 2}, {"value": 3}]
+    assert (result.complete, result.observed_rows, result.limit) == (False, 4, 3)
+    assert state == {
+        "yielded": 4,
+        "cancelled": True,
+        "consumed": False,
+        "session_closed": True,
+        "exceptional_exit": True,
+    }
+
+
+def test_bounded_result_exactly_at_limit_is_complete(monkeypatch):
+    import neo4j
+
+    class _Result:
+        def keys(self):
+            return ("value",)
+
+        def __iter__(self):
+            return iter([{"value": 1}, {"value": 2}, {"value": 3}])
+
+        def consume(self):
+            return object()
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            return _ReadPlanResult() if _is_explain(query) else _Result()
+
+    class _Driver:
+        def session(self, **kwargs):
+            return _Session()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _Driver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    result = client.run_read_result_bounded(
+        "RETURN value /* bounded-exact */",
+        policy=ResultPolicy(max_rows=3, require_complete=True),
+    )
+
+    assert result.complete is True
+    assert result.observed_rows == 3
+    assert len(result.rows) == 3
+
+
+def test_bounded_complete_policy_errors_when_safety_ceiling_is_exceeded(monkeypatch):
+    import neo4j
+
+    state = {"cancelled": False, "session_closed": False}
+
+    class _Result:
+        def keys(self):
+            return ("value",)
+
+        def __iter__(self):
+            return iter([{"value": 1}, {"value": 2}])
+
+        def cancel(self):
+            state["cancelled"] = True
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            state["session_closed"] = True
+            return False
+
+        def run(self, query, params):
+            return _ReadPlanResult() if _is_explain(query) else _Result()
+
+    class _Driver:
+        def session(self, **kwargs):
+            return _Session()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _Driver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.run_read_result_bounded(
+            "RETURN value /* bounded-required */",
+            policy=ResultPolicy(max_rows=1, require_complete=True),
+        )
+
+    assert caught.value.error.code == "engine.result_limit_exceeded"
+    assert state == {"cancelled": True, "session_closed": True}
+
+
 def test_run_read_result_uses_driver_query_timeout(monkeypatch):
     import neo4j
 
@@ -1076,7 +1241,7 @@ def test_run_read_result_turns_missing_label_notification_into_error(monkeypatch
     with pytest.raises(GraphCheckError) as caught:
         client.run_read_result("MATCH (n:CustomerTypo) RETURN n")
 
-    assert caught.value.error.code == "neo4j.query_failed"
+    assert caught.value.error.code == "engine.schema_reference_missing"
     assert "label" in caught.value.error.message.lower()
     assert "CustomerTypo" in caught.value.error.message
     assert caught.value.error.fix.startswith("Correct the label")
@@ -1143,7 +1308,7 @@ def test_gql_status_object_reports_missing_schema_without_deprecated_notificatio
     with pytest.raises(GraphCheckError) as caught:
         client.run_read_result("MATCH (n:CustomerTypo) RETURN n")
 
-    assert caught.value.error.code == "neo4j.query_failed"
+    assert caught.value.error.code == "engine.schema_reference_missing"
     assert "label" in caught.value.error.message.lower()
 
 
@@ -1160,7 +1325,7 @@ def test_unknown_relationship_type_notification_is_a_query_error():
             )
         )
 
-    assert caught.value.error.code == "neo4j.query_failed"
+    assert caught.value.error.code == "engine.schema_reference_missing"
     assert "relationship type" in caught.value.error.message
     assert "OWNZ" in caught.value.error.message
 
@@ -1227,6 +1392,6 @@ def test_unknown_property_key_notification_is_a_query_error():
             )
         )
 
-    assert caught.value.error.code == "neo4j.query_failed"
+    assert caught.value.error.code == "engine.schema_reference_missing"
     assert "property key" in caught.value.error.message
     assert "customer_emali" in caught.value.error.message

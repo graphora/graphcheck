@@ -77,6 +77,20 @@ def test_plan_walker_accepts_mixed_mapping_and_object_layouts():
     }
 
 
+def test_plan_walker_normalizes_neo4j_provider_suffixes():
+    operators = walk_plan(
+        {
+            "operatorType": "ProduceResults@neo4j",
+            "children": [{"operatorType": "NodeCountFromCountStore@neo4j"}],
+        }
+    )
+
+    assert [item["operator"] for item in operators] == [
+        "ProduceResults",
+        "NodeCountFromCountStore",
+    ]
+
+
 def test_lazy_high_cardinality_result_and_allocation_helper_do_not_prebuild_rows():
     result, allocation = measure_allocations(
         lambda: LazyHighCardinalityResult(1_000_000, payload_bytes=32)

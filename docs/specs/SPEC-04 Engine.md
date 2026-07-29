@@ -191,6 +191,8 @@ The default engine configuration is:
 | --- | --- | --- |
 | Internal run budget | `295` seconds | Leaves serialization/reporting margin inside five minutes |
 | Evidence cap | `100` unique pointers | Must be a positive integer |
+| Competency result-row limit | `100,000` rows | Positive safety ceiling for complete assertions |
+| Eager competency evaluation | `false` | Temporary rollback switch for bounded rollout |
 | Exhaustive sampling limit | `100,000` elements | At or below this population, policy execution is exact |
 | Default sample size | `10,000` elements | Used above the exhaustive limit unless a check overrides it |
 | Sampling seed | `0` | Non-negative integer or non-blank string |
@@ -355,10 +357,11 @@ this fallback because its compiled query can identify the concrete elements miss
 
 ## Read-only execution
 
-`ReadOnlyExecutor` prefers C2's rich `run_read_result(query, params, timeout_s=...)` interface because
-it preserves raw Neo4j nodes, relationships, paths, result columns, and notifications. It falls back
-to SPEC-03 `run_read` for compatible connectors. Missing both APIs produces
-`engine.connector_invalid` for the attempted check.
+`ReadOnlyExecutor` prefers C2's bounded rich result interface for competency queries and the eager
+rich `run_read_result(query, params, timeout_s=...)` interface for other callers. Both preserve raw
+Neo4j nodes, relationships, paths, result columns, and notifications. It falls back to SPEC-03
+`run_read` for compatible connectors. Missing both APIs produces `engine.connector_invalid` for the
+attempted check.
 
 C1 does not attempt to parse or block write keywords. C2 creates every session with
 `neo4j.READ_ACCESS` for routing, then submits `EXPLAIN <query>` and executes the original statement
@@ -371,6 +374,20 @@ Every target probe, token lookup, population preflight, and check query receives
 remaining run budget when the connector method accepts `timeout_s`. Timeout, broken Cypher, auth,
 permission, missing database, and query exceptions retain C2's structured `{code,message,fix}`
 shape.
+
+Competency assertions combine into one incremental consumption policy. `empty:true` fails on the
+first row; `empty:false` passes on the first row when no stricter assertion remains. A row maximum
+or exact count fails on its first excess row, while a row minimum may pass as soon as it is met.
+Uniqueness fails on the first duplicate but requires exhaustion to pass; `unique:false` does the
+inverse. `contains` may pass after every pinned value is seen; `equals` always requires exhaustion.
+Multiple assertions stop only when their conjunction is decisive.
+
+An early decisive result is explicitly incomplete. Its measurements omit exact `rows` and instead
+record `observed_rows_at_least`. Assertions requiring exhaustion must complete within
+`result_row_limit`; exceeding it raises `engine.result_limit_exceeded` and can never pass. Frozen-row
+hashing runs only for requested uniqueness, and regression projection runs only for `contains` or
+`equals`. Evidence pointers are deduplicated while retained storage stays capped throughout
+collection.
 
 ## Verdict evaluation
 
@@ -584,6 +601,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.baseline_missing` / `engine.baseline_invalid` | Required baseline measurement is absent or invalid |
 | `engine.baseline_partial_missing` | Partial baseline did not collect the requested measurement |
 | `engine.connector_invalid` | C2-compatible read method is absent |
+| `engine.result_limit_exceeded` | A completeness-required result exceeded its row safety ceiling |
 | `engine.schema_reference_missing` | Label/relationship type/property does not exist on the target |
 | `engine.invalid_query_result` | Query returned a malformed or inconsistent evaluator shape |
 | `engine.evidence_missing` | Row-level failed assertion has no real graph pointer |

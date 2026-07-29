@@ -107,5 +107,32 @@ Run the integration and performance commands specified by a brief in addition to
     access only for graph-discovered property keys;
   - migrated the fixed graph-token resolver, preserved missing-schema behavior, and updated the
     frozen engine compilation contract;
+  - aligned unknown-schema notifications with `engine.schema_reference_missing` and normalized
+    Neo4j 4.4/5 provider-suffixed plan operators such as `NodeCountFromCountStore@neo4j`;
   - added native count-store/scan plan assertions to the opt-in Neo4j integration suite and
     verified the engine/pack suite with 374 passing tests.
+- Implemented PR 05, bounded Neo4j result consumption:
+  - added an explicit `ResultPolicy` plus complete/truncated metadata, observed-row lower bounds,
+    configured limits, and optional server metadata on rich results;
+  - retained the eager connector API while routing bounded callers through planner-verified reads;
+  - capped retained rows, raised `engine.result_limit_exceeded` for completeness-required overflow,
+    and preserved the original shared deadline and error taxonomy;
+  - verified Neo4j driver 6.2 cleanup behavior and used exceptional session cleanup so early stop
+    skips the driver's automatic result drain, while complete results still expose summaries;
+  - added lazy over-consumption, exact-limit, overflow, cleanup, executor-routing, and opt-in live
+    follow-up-query coverage;
+  - verified the focused connector/executor suite with 62 passing tests; 17 live connector cases
+    remain opt-in through `GRAPHCHECK_NEO4J_INTEGRATION=1`.
+- Implemented PR 06, bounded competency evaluation and evidence:
+  - derived one strict combined consumption policy for row bounds, emptiness, columns, uniqueness,
+    `contains`, and duplicate-preserving bag `equals`;
+  - stopped on the first decisive row, required exhaustion for full-result assertions, and omitted
+    exact `measured.rows` from early-decision results in favor of `observed_rows_at_least`;
+  - added the configurable `result_row_limit` safety ceiling and temporary
+    `eager_competency_evaluation` rollback switch;
+  - limited row hashing and regression projection to assertions that request them and collected
+    deduplicated evidence without retaining more than the configured evidence cap;
+  - added large lazy-result retention, combined-policy, early duplicate/max/min/contains,
+    safety-ceiling, and unrequested-work coverage;
+  - verified the focused evaluator/property/runner suite with 118 passing tests and the full
+    repository gate with 909 passing, 30 opt-in skips, and 91.34% coverage.

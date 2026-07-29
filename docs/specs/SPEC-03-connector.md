@@ -68,6 +68,14 @@ and exposes:
 ```python
 run_read(query: str, params: dict | None = None) -> list[dict]
 run_read_result(query: str, params: dict | None = None, *, timeout_s: float | None = None)
+run_read_result_bounded(
+    query: str,
+    params: dict | None = None,
+    *,
+    policy: ResultPolicy,
+    timeout_s: float | None = None,
+    stop_when: Callable[[dict], bool] | None = None,
+)
 ```
 
 All sessions use Neo4j read access mode for routing. Driver access mode is not an access-control
@@ -76,6 +84,19 @@ original statement only when the returned query type is read-only. Write, read/w
 missing, or unknown classifications fail closed. GraphCheck does not parse Cypher or use a keyword
 blocklist. Deployments should additionally use a dedicated Neo4j credential without write
 privileges as defense in depth.
+
+`ResultPolicy(max_rows, require_complete)` bounds retained rows. Bounded results expose `rows`,
+`columns`, `complete`, `observed_rows`, `limit`, notifications, server timings, and read-guard
+timing. `observed_rows` is exact only when `complete` is true; otherwise it is a lower bound.
+Reaching `max_rows` while completeness is required raises `engine.result_limit_exceeded`. A
+caller-supplied `stop_when` may end an already-decisive read earlier.
+
+Early termination never calls `Result.consume()`. Neo4j Python driver 6.2 consumes an outstanding
+auto-commit result during a normal `Session.close()`, so the adapter exits the session through its
+exceptional cleanup path after capturing the bounded result. This marks the session failed, skips
+the driver's auto-result consume step, fetches only already-pending protocol messages, and
+disconnects deterministically. Complete reads still consume their summary so notifications and
+server-consumed timing remain available. The original eager methods retain their existing behavior.
 
 ## Error taxonomy
 
@@ -95,6 +116,7 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `neo4j.query_failed` | A read query failed after connection succeeded. |
 | `neo4j.write_rejected` | Neo4j's planner classified the submitted query as write-capable. |
 | `neo4j.read_guard_unavailable` | The server/driver did not provide a usable query-type classification. |
+| `engine.schema_reference_missing` | Neo4j reports an unknown label, relationship type, or property key. |
 
 ## Capability probe
 

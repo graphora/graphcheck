@@ -5,7 +5,7 @@ import json
 import math
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -85,6 +85,30 @@ class QueryResult:
     server_available_after_ms: int | None = None
     server_consumed_after_ms: int | None = None
     read_guard_ms: int | None = None
+    complete: bool = True
+    observed_rows: int = 0
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
+class ResultPolicy:
+    """Bound retained rows while making incomplete consumption explicit."""
+
+    max_rows: int | None = None
+    require_complete: bool = False
+
+    def __post_init__(self) -> None:
+        if self.max_rows is not None and (
+            isinstance(self.max_rows, bool)
+            or not isinstance(self.max_rows, int)
+            or self.max_rows < 1
+        ):
+            raise ValueError("max_rows must be a positive integer or None")
+
+
+class _EarlyResultStop(Exception):
+    def __init__(self, result: QueryResult) -> None:
+        self.result = result
 
 
 class Neo4jClient:
@@ -136,6 +160,26 @@ class Neo4jClient:
 
         return self._run_read_result(query, params, timeout_s=timeout_s, verify_read=True)
 
+    def run_read_result_bounded(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        policy: ResultPolicy,
+        timeout_s: float | None = None,
+        stop_when: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> QueryResult:
+        """Run a planner-verified read without retaining more rows than ``policy`` allows."""
+
+        return self._run_read_result(
+            query,
+            params,
+            timeout_s=timeout_s,
+            verify_read=True,
+            policy=policy,
+            stop_when=stop_when,
+        )
+
     def _run_read_result(
         self,
         query: str,
@@ -143,6 +187,8 @@ class Neo4jClient:
         *,
         timeout_s: float | None,
         verify_read: bool,
+        policy: ResultPolicy | None = None,
+        stop_when: Callable[[dict[str, Any]], bool] | None = None,
     ) -> QueryResult:
         try:
             deadline = _timeout_deadline(timeout_s)
@@ -168,13 +214,46 @@ class Neo4jClient:
                 )
                 result = session.run(driver_query, values)
                 columns = _result_columns(result)
-                rows = [_raw_record(record) for record in result]
+                rows: list[dict[str, Any]] = []
+                observed_rows = 0
+                complete = True
+                for record in result:
+                    observed_rows += 1
+                    row = _raw_record(record)
+                    limit_reached = (
+                        policy is not None
+                        and policy.max_rows is not None
+                        and len(rows) >= policy.max_rows
+                    )
+                    if limit_reached:
+                        complete = False
+                        _cancel_result(result)
+                        if policy.require_complete:
+                            raise _result_limit_exceeded(policy.max_rows)
+                        break
+                    rows.append(row)
+                    if stop_when is not None and stop_when(row):
+                        complete = False
+                        _cancel_result(result)
+                        break
                 if not columns and rows:
                     # Lightweight test doubles and third-party wrappers sometimes expose only an
                     # iterator. Real Neo4j Results always provide keys().
                     columns = tuple(rows[0])
+                if not complete:
+                    raise _EarlyResultStop(
+                        QueryResult(
+                            rows=rows,
+                            columns=columns,
+                            notifications=(),
+                            read_guard_ms=read_guard_ms,
+                            complete=False,
+                            observed_rows=observed_rows,
+                            limit=policy.max_rows if policy is not None else None,
+                        )
+                    )
                 consume = getattr(result, "consume", None)
-                summary = consume() if callable(consume) else None
+                summary = consume() if complete and callable(consume) else None
                 notifications = _summary_notifications(summary)
                 _raise_for_missing_schema_reference(notifications)
                 return QueryResult(
@@ -184,7 +263,12 @@ class Neo4jClient:
                     server_available_after_ms=_summary_timing(summary, "result_available_after"),
                     server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
                     read_guard_ms=read_guard_ms,
+                    complete=complete,
+                    observed_rows=observed_rows,
+                    limit=policy.max_rows if policy is not None else None,
                 )
+        except _EarlyResultStop as stopped:
+            return stopped.result
         except GraphCheckError:
             raise
         except Exception as exc:
@@ -515,6 +599,22 @@ def _raw_record(record: object) -> dict[str, Any]:
     raise TypeError(f"query result record does not expose mapping items: {type(record).__name__}")
 
 
+def _cancel_result(result: object) -> None:
+    """Discard a partial stream without asking the driver to drain it."""
+
+    cancel = getattr(result, "cancel", None) or getattr(result, "_cancel", None)
+    if callable(cancel):
+        cancel()
+
+
+def _result_limit_exceeded(limit: int) -> GraphCheckError:
+    return GraphCheckError(
+        "engine.result_limit_exceeded",
+        f"The query result exceeded the configured safety ceiling of {limit} rows.",
+        "Narrow the query or increase engine.result_row_limit after reviewing its memory cost.",
+    )
+
+
 def _assert_server_classified_read(
     session: object,
     query: str,
@@ -688,7 +788,7 @@ def _raise_for_missing_schema_reference(notifications: tuple[dict[str, Any], ...
             notification.get("description") or notification.get("title") or notification.get("code")
         )
         raise GraphCheckError(
-            "neo4j.query_failed",
+            "engine.schema_reference_missing",
             f"Neo4j query references a {kind} that is not present in the database: {detail}",
             f"Correct the {kind} in the check query, or create/populate it, then rerun.",
         )

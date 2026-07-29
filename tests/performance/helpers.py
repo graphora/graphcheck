@@ -223,7 +223,7 @@ def walk_plan(
             for name, value in _mapping_items(arguments)
             if str(name).replace("_", "").lower() in selected
         }
-        operators.append({"operator": str(operator or "unknown"), "arguments": chosen})
+        operators.append({"operator": _operator_name(operator), "arguments": chosen})
         children = _value(node, "children", "plans") or ()
         iterable = (
             children
@@ -235,6 +235,10 @@ def walk_plan(
 
     visit(plan)
     return operators
+
+
+def _operator_name(value: object) -> str:
+    return str(value or "unknown").partition("@")[0]
 
 
 def measure_query(call: Callable[[], Any]) -> tuple[Any, QueryTiming]:
