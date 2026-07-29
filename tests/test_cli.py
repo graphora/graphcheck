@@ -13,7 +13,7 @@ from graphcheck.cli import app
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import Counts, DebugTrace, Visibility
+from graphcheck.neo4j_adapter import Counts, DebugTrace, SupportVersions, Visibility
 from graphcheck.packs.catalog import PACKS_DIRECTORY
 from graphcheck.project import write_default_project
 
@@ -139,6 +139,12 @@ def _trace():
         ),
         visibility=Visibility(can_connect=True, can_read=True, can_show_procedures=True),
         counts=Counts(nodes=3, relationships=4),
+        versions=SupportVersions(
+            graphcheck=__version__,
+            neo4j_driver="6.2.0",
+            neo4j_server="5.18.0",
+            cypher="5",
+        ),
     )
 
 
@@ -217,7 +223,10 @@ def test_debug_human_success(tmp_path, monkeypatch):
     result = runner.invoke(app, ["debug"])
 
     assert result.exit_code == 0
-    assert "Neo4j version: 5.18.0" in result.stdout
+    assert f"GraphCheck version: {__version__}" in result.stdout
+    assert "Neo4j Python driver: 6.2.0" in result.stdout
+    assert "Neo4j Server: 5.18.0" in result.stdout
+    assert "Cypher: 5" in result.stdout
     assert "Edition: enterprise" in result.stdout
     assert "Database name: neo4j" in result.stdout
     assert "APOC: yes" in result.stdout

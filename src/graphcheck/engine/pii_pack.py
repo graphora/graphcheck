@@ -43,7 +43,7 @@ all(name IN $required_labels WHERE name IN _gc_labels)
 
 
 def _node_pointer(variable: str) -> str:
-    return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
+    return f"{{kind: 'node', id: elementId({variable}), labels: labels({variable})}}"
 
 
 def _candidate_query(*, strings_only: bool, label: str | None, properties: list[str]) -> str:
@@ -93,8 +93,12 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
         "$sample_hash_",
         "$sample_gate_hash_",
     )
-    return dedent(
-        f"""
+    # Numeric internal IDs remain only inside this explicitly selected Cypher 5 sampling path.
+    # elementId() is opaque, so retaining the established rank input avoids a silent sample change.
+    return (
+        "CYPHER 5\n"
+        + dedent(
+            f"""
         {_SCHEMA_CATALOG}
         CALL {{
           {dedent(population_query).strip()}
@@ -107,7 +111,7 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
           {candidate_unwind}
           WHERE raw IS NOT NULL
             {string_predicate}
-          WITH population, n, property, raw ORDER BY id(n), property
+          WITH population, n, property, raw ORDER BY elementId(n), property
           WITH population, n,
                collect({{property: property, raw: raw}}) AS _gc_node_properties
           UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
@@ -128,7 +132,7 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
                   / toFloat(population)
                 ))
           WITH n, property, raw, {hash_expression} AS _gc_sample_key
-          ORDER BY _gc_sample_key, id(n), property
+          ORDER BY _gc_sample_key, elementId(n), property
           LIMIT $sample_size
           RETURN collect({{
             evidence: {_node_pointer("n")},
@@ -140,7 +144,8 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
                size(candidates) AS sample_size,
                candidates
         """
-    ).strip()
+        ).strip()
+    )
 
 
 def _common_config(

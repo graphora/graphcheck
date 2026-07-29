@@ -36,8 +36,13 @@ locations, but never include matched property values or claim complete PII disco
 ## Requirements
 
 - Python 3.12 or 3.13
-- A reachable Neo4j database
+- Neo4j Python driver 5.20 through 6.x
+- Neo4j Server 5.26 LTS or a tested calendar-version release
+- Cypher 5, or Cypher 25 on the tested calendar-version server
 - [`uv`](https://docs.astral.sh/uv/) for the repository workflow shown below
+
+Neo4j Server 4.4 is legacy and unsupported. The exact tested combinations and the temporary
+Cypher 5 sampling path are documented in the [compatibility matrix](docs/compatibility.md).
 
 APOC is probed and reported by `graphcheck init` and `graphcheck debug`. A missing optional
 capability blocks only checks that declare it; those checks are recorded as unsupported instead of

@@ -447,7 +447,12 @@ def debug(
 
     caps = trace.target.capabilities
     typer.echo(f"Profile: {trace.profile}")
-    typer.echo(f"Neo4j version: {trace.target.server_version}")
+    if trace.versions is not None:
+        typer.echo(f"GraphCheck version: {trace.versions.graphcheck}")
+        typer.echo(f"Neo4j Python driver: {trace.versions.neo4j_driver}")
+    typer.echo(f"Neo4j Server: {trace.target.server_version}")
+    if trace.versions is not None:
+        typer.echo(f"Cypher: {trace.versions.cypher}")
     typer.echo(f"Edition: {trace.target.edition}")
     typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")

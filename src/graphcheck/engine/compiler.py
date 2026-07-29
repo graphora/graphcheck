@@ -106,13 +106,11 @@ all(name IN $required_labels WHERE name IN _gc_labels)
 
 
 def _node_pointer(variable: str) -> str:
-    # id() works on every supported Neo4j 4.4/5.x server. It is deprecated on 5.x,
-    # but elementId() is unavailable on 4.4, so v0 serializes the stable string form.
-    return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
+    return f"{{kind: 'node', id: elementId({variable}), labels: labels({variable})}}"
 
 
 def _rel_pointer(variable: str) -> str:
-    return f"{{kind: 'rel', id: toString(id({variable})), type: type({variable})}}"
+    return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
 
 
 @register_conformance_compiler("completeness")
@@ -170,7 +168,7 @@ def _compile_completeness(
         f"""
         MATCH {node}
         WHERE {property_ref} IS NULL
-        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        WITH n ORDER BY elementId(n) LIMIT $evidence_cap
         RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
@@ -463,7 +461,7 @@ class CypherCompiler:
             }}
             CALL {{
               {missing}
-              WITH element ORDER BY id(element) LIMIT $evidence_cap
+              WITH element ORDER BY elementId(element) LIMIT $evidence_cap
               RETURN collect({pointer}) AS evidence
             }}
             RETURN {_SCHEMA_PROJECTION}, population, present,

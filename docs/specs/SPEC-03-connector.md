@@ -131,6 +131,7 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `neo4j.unreachable` | The Bolt endpoint cannot be reached. |
 | `neo4j.auth_failed` | Credentials were rejected. |
 | `neo4j.database_not_found` | The configured database does not exist or is unavailable. |
+| `neo4j.unsupported_version` | The server predates the supported Neo4j 5/CalVer lines. |
 | `neo4j.permission_denied` | Credentials do not permit the requested read/probe. |
 | `neo4j.query_failed` | A read query failed after connection succeeded. |
 | `neo4j.write_rejected` | Neo4j's planner classified the submitted query as write-capable. |
@@ -158,6 +159,15 @@ APOC is binary: `true` only when an APOC procedure can be called successfully. T
 this APOC procedure check during both `graphcheck init` and `graphcheck debug` so setup feedback
 and the stable debug trace report the same live capability.
 
+One `Neo4jClient` represents one command scope. Its first successful complete probe is cached for
+the rest of that client's lifetime, and concurrent callers share that in-flight work. Failed probes
+are not cached. A new command constructs a new client and therefore observes current graph counts;
+probe state is never shared across clients or persisted.
+
+Neo4j Server 4.4 is a legacy, unsupported target. The probe rejects it with
+`neo4j.unsupported_version` and directs the user to Neo4j 5.26 LTS or a documented calendar-version
+target. The tested Python driver range is `neo4j>=5.20,<7`; driver 7 is excluded until tested.
+
 `count_store` is `true` only when GraphCheck can verify that a simple count query is planned with
 a count-store operator. The v0 probe uses `EXPLAIN MATCH (n) RETURN count(n) AS count` and looks
 for `NodeCountFromCountStore` in the plan.
@@ -165,9 +175,17 @@ for `NodeCountFromCountStore` in the plan.
 When read visibility is available, the debug path reports total node and relationship counts:
 
 ```cypher
-MATCH (n) RETURN count(n) AS count
-MATCH ()-[r]->() RETURN count(r) AS count
+CALL { MATCH (n) RETURN count(n) AS nodes }
+CALL { MATCH ()-[r]->() RETURN count(r) AS relationships }
+RETURN nodes, relationships
 ```
+
+The two compatible count-store reads execute as one request and one snapshot. Server metadata,
+schema tokens, privileges, APOC, and count-store planning remain independently distinguishable
+requests because their permission and fallback behavior differs. Capability checks are deferred
+until connectivity is established; count-store planning is omitted when full read visibility is
+unavailable. Public complete probes still resolve both capability booleans rather than treating an
+unprobed capability as `false`.
 
 On Enterprise Edition, the probe checks the current user's effective graph privileges independently
 of these count queries. Full read visibility requires unrestricted access to all properties on both
@@ -182,7 +200,9 @@ when the configured database name or alias resolves to the current user's home d
 grants and denials participate in the same full-visibility evaluation as named and wildcard grants.
 
 The human output also reports what the credentials can and cannot see from the successful probe:
-connectivity, read access, and procedure visibility.
+connectivity, read access, and procedure visibility. JSON debug output additionally reports the
+live probe's `round_trips`, aggregate `elapsed_ms`, and whether the result was a per-client
+`cache_hit`. Request durations remain query-free internal diagnostics.
 
 When a loaded check suite references a check whose pack declares a capability requirement that the
 target does not satisfy, debug reports the suite id, check id, check type, missing capability, and a
@@ -238,6 +258,17 @@ Success:
   "counts": {
     "nodes": 0,
     "relationships": 0
+  },
+  "probe": {
+    "round_trips": 5,
+    "elapsed_ms": 21,
+    "cache_hit": false
+  },
+  "versions": {
+    "graphcheck": "0.1.0",
+    "neo4j_driver": "6.2.0",
+    "neo4j_server": "5.18.0",
+    "cypher": "5"
   },
   "blocked_checks": [
     {

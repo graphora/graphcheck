@@ -24,7 +24,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_representative_native_token_plans_are_extractable(neo4j_profile, tmp_path):
+def test_representative_native_token_plans_are_extractable(
+    neo4j_profile, neo4j_test_target, tmp_path
+):
     suite = load_suite(
         yaml.safe_dump(
             {
@@ -95,7 +97,9 @@ def test_representative_native_token_plans_are_extractable(neo4j_profile, tmp_pa
                     f"plan-{check.id}",
                     [elapsed_ms],
                     server=target.server_version,
-                    cypher=cypher_version_for_server(target.server_version),
+                    cypher=cypher_version_for_server(
+                        target.server_version, configured=neo4j_test_target.cypher
+                    ),
                     details={"operators": operators},
                 )
             )

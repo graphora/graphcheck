@@ -128,6 +128,12 @@ def test_public_suite_loader_reaches_each_observable_core_compiler(name, config,
     assert compiled.check.spec.check == name
     assert f"kind: '{evidence_kind}'" in (compiled.evidence_query or compiled.query)
     assert _parameter_names(compiled.query) == compiled.params.keys()
+    if name == "hub_outlier":
+        assert compiled.query.startswith("CYPHER 5\n")
+    else:
+        assert re.search(r"\bid\s*\(", compiled.query) is None
+        assert re.search(r"\bid\s*\(", compiled.evidence_query or "") is None
+    assert "elementId(" in (compiled.evidence_query or compiled.query)
     if compiled.evidence_query is not None:
         assert _parameter_names(compiled.evidence_query) == compiled.evidence_params.keys()
 

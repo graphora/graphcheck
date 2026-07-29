@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
 runner = CliRunner()
 
 
-def test_connect_and_probe(neo4j_profile):
+def test_connect_and_probe(neo4j_profile, neo4j_test_target):
     client = Neo4jClient(neo4j_profile)
     try:
         client.verify()
@@ -36,6 +36,7 @@ def test_connect_and_probe(neo4j_profile):
         assert visibility.can_read is True
         assert counts.nodes >= 0
         assert counts.relationships >= 0
+        assert client.probe_cypher_version == neo4j_test_target.cypher
     finally:
         client.close()
 

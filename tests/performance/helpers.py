@@ -158,13 +158,17 @@ def environment_metadata() -> dict[str, object]:
     }
 
 
-def cypher_version_for_server(server_version: str | None) -> str | None:
+def cypher_version_for_server(
+    server_version: str | None, *, configured: str | None = None
+) -> str | None:
     """Report the default Cypher generation separately for current test server lines."""
 
+    if configured is not None:
+        return configured
     if not server_version:
         return None
     major = server_version.split(".", 1)[0]
-    return "4.4" if major == "4" else "5" if major == "5" else None
+    return "5" if major == "5" else None
 
 
 def validate_record(record: Mapping[str, object]) -> None:

@@ -45,12 +45,11 @@ all(name IN $required_labels WHERE name IN _gc_labels)
 
 
 def _node_pointer(variable: str) -> str:
-    # id() is available on both Neo4j 4.4 and 5.x. The result contract serializes it as a string.
-    return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
+    return f"{{kind: 'node', id: elementId({variable}), labels: labels({variable})}}"
 
 
 def _rel_pointer(variable: str) -> str:
-    return f"{{kind: 'rel', id: toString(id({variable})), type: type({variable})}}"
+    return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
 
 
 def _invalid(detail: str, fix: str) -> GraphCheckError:
@@ -159,7 +158,7 @@ def _node_predicate_queries(*, match: str, population: str, violation: str) -> t
         f"""
         MATCH {match}
         WHERE ({population}) AND ({violation})
-        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        WITH n ORDER BY elementId(n) LIMIT $evidence_cap
         RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
@@ -184,7 +183,7 @@ def _relationship_predicate_queries(
         f"""
         MATCH {match}
         WHERE ({population}) AND ({violation})
-        WITH r ORDER BY id(r) LIMIT $evidence_cap
+        WITH r ORDER BY elementId(r) LIMIT $evidence_cap
         RETURN collect({_rel_pointer("r")}) AS evidence
         """
     ).strip()
@@ -210,7 +209,7 @@ def _degree_queries(*, node: str, pattern: str, violation: str) -> tuple[str, st
         OPTIONAL MATCH {pattern}
         WITH n, count(r) AS degree
         WHERE {violation}
-        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        WITH n ORDER BY elementId(n) LIMIT $evidence_cap
         RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
@@ -459,9 +458,9 @@ def _compile_uniqueness(
           AND EXISTS {{
             MATCH {node_pattern("duplicate", label)}
             WHERE {property_access("duplicate", property_name)} = {property_ref}
-              AND id(duplicate) <> id(n)
+              AND elementId(duplicate) <> elementId(n)
           }}
-        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        WITH n ORDER BY elementId(n) LIMIT $evidence_cap
         RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
@@ -508,8 +507,13 @@ def _compile_hub_outlier(
         name.replace("sample_hash_", "sample_gate_hash_"): value
         for name, value in cypher_hash_parameters(sample_seed + 1).items()
     }
-    query = dedent(
-        f"""
+    # Numeric internal IDs remain only inside this explicitly selected Cypher 5 sampling path.
+    # elementId() has no guaranteed parseable format, so changing the rank input would silently
+    # change the sampling algorithm and requires a separately versioned transition.
+    query = (
+        "CYPHER 5\n"
+        + dedent(
+            f"""
         {_SCHEMA_CATALOG}
         CALL {{
           MATCH {node}
@@ -557,14 +561,15 @@ def _compile_hub_outlier(
                  mean_degree,
                  degree_stddev,
                  [item IN violations[0..$evidence_cap] |
-                   {{kind: 'node', id: toString(id(item.node)), labels: labels(item.node)}}]
+                   {{kind: 'node', id: elementId(item.node), labels: labels(item.node)}}]
                    AS evidence
         }}
         RETURN {_SCHEMA_PROJECTION},
                population, sample_size, violation_count,
                mean_degree, degree_stddev, evidence
         """
-    ).strip()
+        ).strip()
+    )
     params = {
         **_schema_params(
             labels=[label],

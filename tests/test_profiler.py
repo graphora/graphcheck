@@ -166,14 +166,14 @@ class FakeNeo4jClient:
         if query == (
             "MATCH (n:`Account`) WHERE n[$property] IS NOT NULL "
             "WITH n "
-            "ORDER BY id(n) "
+            "ORDER BY elementId(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": "account-1"}]
         if query == (
             "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
             "WITH n "
-            "ORDER BY id(n) "
+            "ORDER BY elementId(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": 1 if params == {"property": "id"} else "Ada"}]
@@ -205,7 +205,7 @@ class UnknownTypeClient:
         if query == (
             "MATCH (n:`Customer`) WHERE n[$property] IS NOT NULL "
             "WITH n "
-            "ORDER BY id(n) "
+            "ORDER BY elementId(n) "
             "RETURN n[$property] AS value LIMIT 1"
         ):
             raise GraphCheckError("neo4j.query_failed", "query failed", "try again")

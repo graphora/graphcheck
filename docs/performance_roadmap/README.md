@@ -216,3 +216,33 @@ Run the integration and performance commands specified by a brief in addition to
   - documented the connector cache contract and verified the focused connector, engine, and
     telemetry suite with 148 passing tests;
   - verified the full repository gate with 950 passing, 34 opt-in skips, and 91.12% coverage.
+- Implemented PR 13, reduced Neo4j target-probe round trips:
+  - cached the first successful complete probe per client/command with concurrent single-flight
+    behavior, without caching failures or sharing state across clients;
+  - consolidated node and relationship totals into one count-store request while retaining
+    separate server, privilege, schema, APOC, and plan probes where permissions differ;
+  - recorded query-free per-request durations, aggregate elapsed time, round-trip count, and cache
+    outcome, and exposed the safe aggregate fields in debug JSON;
+  - retained explicit capability booleans, skipped count-store planning when read visibility is
+    absent, and preserved restricted, HOME-granted, HOME-denied, count, and fingerprint semantics;
+  - added same-client, concurrent-caller, new-client freshness, consolidated-count, and probe
+    instrumentation coverage and verified the focused connector/CLI suite with 124 passing tests.
+- Implemented PR 14, Neo4j driver/server/Cypher compatibility enforcement:
+  - bounded the production driver dependency to `neo4j>=5.20,<7` and added minimum-driver 5.20.0
+    plus latest-6.x CI lanes under Python 3.12 and 3.13, including a development-mode resource
+    warning gate;
+  - pinned Neo4j Server 5.26.28 LTS and 2026.06.0 Community/Enterprise images, with distinct
+    Cypher 5 and Cypher 25 integration lanes on the calendar-version server;
+  - made Neo4j 4.4 explicitly unsupported with a probe-time upgrade error and documented the
+    tested compatibility matrix without using “Neo4j 6” as server shorthand;
+  - migrated evidence identity, ordering, uniqueness comparison, drift evidence, and profile type
+    sampling to opaque `elementId()` values;
+  - retained numeric `id()` only inside explicitly prefixed Cypher 5 hub/PII sampling queries,
+    preserving the established seeded distribution until a versioned string-hash algorithm exists;
+  - reported GraphCheck, Python driver, Neo4j Server, and database Cypher versions separately in
+    human and JSON debug output and added CalVer parsing coverage;
+  - added a clean installed-wheel CI gate for `--version`, `--help`, and packaged core/PII
+    resources, and passed the equivalent local wheel smoke test;
+  - verified the compatibility-focused suite with 238 passing tests and the full repository gate
+    with 971 passing, 52 opt-in skips, and 91.12% coverage; the Docker-backed live matrix remains
+    assigned to CI because Docker is unavailable in the local environment.

@@ -10,13 +10,18 @@ from graphcheck.neo4j_adapter import (
     Counts,
     DebugTrace,
     Neo4jClient,
+    ProbeMetrics,
     QueryResult,
     ResultPolicy,
+    SupportVersions,
     Visibility,
+    _ensure_supported_server,
+    _explain_query,
     _fingerprint,
     _is_apoc_absent_error,
     _plan_has_operator,
     _ReadClassificationCache,
+    _supports_cypher_25,
     debug_trace,
     error_json,
     init_trace,
@@ -40,7 +45,10 @@ class _ReadPlanResult:
 
 
 def _is_explain(query):
-    return str(getattr(query, "text", query)).startswith("EXPLAIN ")
+    text = str(getattr(query, "text", query))
+    return text.startswith("EXPLAIN ") or text.startswith(
+        ("CYPHER 5 EXPLAIN ", "CYPHER 25 EXPLAIN ")
+    )
 
 
 def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
@@ -116,6 +124,39 @@ def test_plan_operator_returns_false_when_absent():
     assert not _plan_has_operator(plan, "NodeCountFromCountStore")
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("MATCH (n) RETURN n", "EXPLAIN MATCH (n) RETURN n"),
+        ("CYPHER 5\nMATCH (n) RETURN n", "CYPHER 5 EXPLAIN MATCH (n) RETURN n"),
+        (" CYPHER 25 RETURN 1", "CYPHER 25 EXPLAIN RETURN 1"),
+    ],
+)
+def test_explain_preserves_explicit_cypher_version(query, expected):
+    assert _explain_query(query) == expected
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("5.26.28", False), ("2025.05.0", False), ("2025.06.0", True), ("2026.06.0", True)],
+)
+def test_cypher_25_support_uses_calver(version, expected):
+    assert _supports_cypher_25(version) is expected
+
+
+@pytest.mark.parametrize("version", ["5.26.28", "2026.06.0"])
+def test_supported_server_lines_are_accepted(version):
+    assert _ensure_supported_server(version) is None
+
+
+def test_neo4j_44_is_rejected_with_an_upgrade_target():
+    with pytest.raises(GraphCheckError) as caught:
+        _ensure_supported_server("4.4.42")
+
+    assert caught.value.error.code == "neo4j.unsupported_version"
+    assert "5.26" in caught.value.error.fix
+
+
 def test_debug_trace_json_shape_matches_spec():
     trace = DebugTrace(
         profile="local",
@@ -149,6 +190,45 @@ def test_debug_trace_json_shape_matches_spec():
         },
         "counts": {"nodes": 7, "relationships": 11},
         "blocked_checks": [],
+    }
+
+
+def test_debug_trace_reports_probe_round_trips_and_elapsed_time():
+    trace = DebugTrace(
+        profile="local",
+        target=RunTarget(
+            database="neo4j",
+            server_version="5.26.0",
+            edition="community",
+            fingerprint="abc123",
+            capabilities=Capabilities(apoc=False, count_store=True),
+        ),
+        visibility=Visibility(True, True, True),
+        counts=Counts(7, 11),
+        probe_metrics=ProbeMetrics(
+            round_trips=5,
+            elapsed_ms=12,
+            cache_hit=False,
+            request_durations_ms=(2, 3, 2, 4, 1),
+        ),
+        versions=SupportVersions(
+            graphcheck="0.1.0",
+            neo4j_driver="6.2.0",
+            neo4j_server="5.26.28",
+            cypher="5",
+        ),
+    )
+
+    assert trace.as_json()["probe"] == {
+        "round_trips": 5,
+        "elapsed_ms": 12,
+        "cache_hit": False,
+    }
+    assert trace.as_json()["versions"] == {
+        "graphcheck": "0.1.0",
+        "neo4j_driver": "6.2.0",
+        "neo4j_server": "5.26.28",
+        "cypher": "5",
     }
 
 
@@ -209,35 +289,55 @@ def test_server_info_errors_when_metadata_missing():
     assert caught.value.error.code == "neo4j.query_failed"
 
 
+def test_cypher_version_is_five_for_lts_without_an_extra_request():
+    client = object.__new__(Neo4jClient)
+    client.run_read = lambda *args, **kwargs: pytest.fail("5.26 has only Cypher 5")
+
+    assert client._cypher_version("5.26.28") == "5"
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [("CYPHER 5", "5"), ("CYPHER 25", "25"), ("unexpected", "unknown")],
+)
+def test_cypher_version_reads_calver_database_default(reported, expected):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client.run_read = lambda query, params, **kwargs: [{"defaultLanguage": reported}]
+
+    assert client._cypher_version("2026.06.0") == expected
+
+
 def test_counts_are_converted_to_ints():
     client = object.__new__(Neo4jClient)
-    rows = {
-        "MATCH (n) RETURN count(n) AS count": [{"count": "3"}],
-        "MATCH ()-[r]->() RETURN count(r) AS count": [{"count": "4"}],
-    }
-    client.run_read = lambda query: rows[query]
+    queries = []
+
+    def run_read(query):
+        queries.append(query)
+        return [{"nodes": "3", "relationships": "4"}]
+
+    client.run_read = run_read
 
     assert client._counts() == Counts(nodes=3, relationships=4)
+    assert len(queries) == 1
+    assert "MATCH (n)" in queries[0]
+    assert "MATCH ()-[r]->()" in queries[0]
 
 
-def test_count_probe_recomputes_remaining_timeout_between_queries(monkeypatch):
+def test_count_probe_passes_timeout_to_consolidated_query():
     client = object.__new__(Neo4jClient)
     captured = []
-    rows = {
-        "MATCH (n) RETURN count(n) AS count": [{"count": 3}],
-        "MATCH ()-[r]->() RETURN count(r) AS count": [{"count": 4}],
-    }
 
     def run_read(query, *, timeout_s):
         captured.append(timeout_s)
-        return rows[query]
+        return [{"nodes": 3, "relationships": 4}]
 
-    ticks = iter([0.0, 1.0, 2.5])
-    monkeypatch.setattr("graphcheck.neo4j_adapter.time.monotonic", lambda: next(ticks))
     client.run_read = run_read
 
     assert client._counts(timeout_s=10.0) == Counts(nodes=3, relationships=4)
-    assert captured == [pytest.approx(9.0), pytest.approx(7.5)]
+    assert captured == [10.0]
 
 
 def test_enterprise_privilege_probe_recomputes_timeout_for_home_database(monkeypatch):
@@ -692,6 +792,119 @@ def test_probe_reraises_unexpected_apoc_probe_error():
         client.probe()
 
     assert caught.value.error.code == "neo4j.query_failed"
+
+
+def test_completed_probe_is_cached_for_one_client():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    calls = []
+    client._server_info = lambda: calls.append("server") or ("5.26.0", "community")
+    client._apoc_usable = lambda: calls.append("apoc") is None
+    client._can_read = lambda edition: calls.append("read") is None
+    client._counts = lambda: calls.append("counts") or Counts(1, 2)
+    client._schema_tokens = lambda: calls.append("tokens") or (("Customer",), ("OWNS",))
+    client._count_store_usable = lambda: calls.append("count-store") is None
+
+    first = client.probe()
+    second = client.probe()
+
+    assert second is first
+    assert calls == ["server", "apoc", "read", "counts", "tokens", "count-store"]
+    assert client.last_probe_metrics == ProbeMetrics(0, 0, True)
+
+
+def test_concurrent_probe_callers_share_one_live_probe():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def server_info():
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(1)
+        return "5.26.0", "community"
+
+    client._server_info = server_info
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: True
+    client._counts = lambda: Counts(1, 2)
+    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
+    client._count_store_usable = lambda: True
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(client.probe())) for _ in range(2)]
+
+    for thread in threads:
+        thread.start()
+    assert entered.wait(1)
+    release.set()
+    for thread in threads:
+        thread.join(1)
+
+    assert calls == 1
+    assert len(results) == 2
+    assert results[0] is results[1]
+
+
+def test_separate_clients_observe_changed_graph_counts():
+    graph = {"nodes": 1}
+
+    def build_client():
+        client = object.__new__(Neo4jClient)
+        client._profile = ConnectionProfile(
+            uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+        )
+        client._server_info = lambda: ("5.26.0", "community")
+        client._apoc_usable = lambda: False
+        client._can_read = lambda edition: True
+        client._counts = lambda: Counts(graph["nodes"], 0)
+        client._schema_tokens = lambda: (("Customer",), ())
+        client._count_store_usable = lambda: True
+        return client
+
+    first = build_client().probe()
+    graph["nodes"] = 2
+    second = build_client().probe()
+
+    assert first[2].nodes == 1
+    assert second[2].nodes == 2
+    assert first[0].fingerprint != second[0].fingerprint
+
+
+def test_probe_metrics_measure_each_live_request():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+
+    def run_read(query, **kwargs):
+        if query.startswith("CALL dbms.components"):
+            return [{"version": "5.26.0", "edition": "community"}]
+        if query.startswith("CALL apoc.version"):
+            return [{"version": "5.26.0"}]
+        if query.startswith("CALL { MATCH (n)"):
+            return [{"nodes": 3, "relationships": 4}]
+        if query.startswith("CALL { CALL db.labels"):
+            return [{"labels": ["Customer"], "relationship_types": ["OWNS"]}]
+        pytest.fail(f"unexpected query: {query}")
+
+    client.run_read = run_read
+    client.explain_read = lambda query, **kwargs: Plan("NodeCountFromCountStore")
+
+    client.probe()
+
+    metrics = client.last_probe_metrics
+    assert metrics is not None
+    assert metrics.round_trips == 5
+    assert metrics.elapsed_ms >= 0
+    assert metrics.cache_hit is False
+    assert len(metrics.request_durations_ms) == metrics.round_trips
 
 
 def test_apoc_absent_detection_is_specific_to_apoc_procedure_errors():

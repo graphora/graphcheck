@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
-    "neo4j>=5.20",
+    "neo4j>=5.20,<7",
     "typer>=0.12",
     "pydantic>=2.6",
     "pyyaml>=6.0",

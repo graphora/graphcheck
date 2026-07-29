@@ -9,6 +9,7 @@ from graphcheck.neo4j_adapter import QueryResult
 from tests.performance.helpers import (
     BenchmarkRecord,
     LazyHighCardinalityResult,
+    cypher_version_for_server,
     measure_allocations,
     measure_query,
     validate_record,
@@ -22,6 +23,11 @@ class ObjectPlan:
     operator_type: str
     arguments: dict[str, object]
     children: list[object]
+
+
+def test_cypher_version_reports_calver_configuration_separately():
+    assert cypher_version_for_server("5.26.28") == "5"
+    assert cypher_version_for_server("2026.06.0", configured="25") == "25"
 
 
 def test_benchmark_record_round_trips_as_valid_json(tmp_path):
