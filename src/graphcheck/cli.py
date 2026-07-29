@@ -21,6 +21,7 @@ from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_p
 from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
+from graphcheck.mcp.server import run as run_mcp_server
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
@@ -59,6 +60,8 @@ app = typer.Typer(
 baseline_app = typer.Typer(help="Manage baseline snapshots.")
 app.add_typer(baseline_app, name="baseline")
 
+mcp_app = typer.Typer(help="Start the GraphCheck MCP server.")
+app.add_typer(mcp_app, name="mcp")
 
 def _version(value: bool) -> None:
     if value:
@@ -602,7 +605,13 @@ def _open_html_report(path: Path) -> None:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
     typer.echo(f"Opened {path}")
 
-
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """
+    Start the GraphCheck MCP server.
+    """
+    run_mcp_server()
+    
 @app.command("run")
 def run_command(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
