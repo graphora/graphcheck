@@ -36,16 +36,17 @@ pytestmark = [
 ]
 
 
-def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_path):
+@pytest.mark.parametrize("concurrency", [1, 2, 4])
+def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_path, concurrency):
     profile = ConnectionProfile(
         uri=URI,
         user=os.environ.get("GRAPHCHECK_PERFORMANCE_USER", "neo4j"),
         password=PASSWORD,
         database=os.environ.get("GRAPHCHECK_PERFORMANCE_DATABASE", "neo4j"),
     )
-    client = Neo4jClient(profile)
+    client = Neo4jClient(profile, max_concurrency=concurrency)
     collector = TelemetryCollector()
-    config = EngineConfig()
+    config = EngineConfig(max_concurrency=concurrency)
     try:
         target, visibility, counts = client.probe()
         assert visibility.can_read is True
@@ -178,7 +179,7 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
         if isinstance(event, QueryFinished)
     ]
     record = BenchmarkRecord.from_samples(
-        "engine-30-check-10m",
+        f"engine-30-check-10m-concurrency-{concurrency}",
         [elapsed_ms],
         server=target.server_version,
         cypher=cypher_version_for_server(target.server_version),
@@ -195,7 +196,14 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
             "queries": query_timings,
         },
     )
-    output = Path(os.environ.get("GRAPHCHECK_PERFORMANCE_OUTPUT", tmp_path / "engine-10m.json"))
+    configured_output = os.environ.get("GRAPHCHECK_PERFORMANCE_OUTPUT")
+    output = (
+        Path(configured_output).with_stem(
+            f"{Path(configured_output).stem}-concurrency-{concurrency}"
+        )
+        if configured_output
+        else tmp_path / f"engine-10m-concurrency-{concurrency}.json"
+    )
     write_records([record], output)
     payload = json.loads(output.read_text(encoding="utf-8"))[0]
     validate_record(payload)

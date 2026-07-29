@@ -66,9 +66,11 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
     )
     candidate_unwind = (
         f"UNWIND {configured_rows} AS occurrence\n"
-        "          WITH n, occurrence.property AS property, occurrence.raw AS raw"
+        "          WITH population, n, occurrence.property AS property, occurrence.raw AS raw"
         if configured_rows
-        else "UNWIND keys(n) AS property\n          WITH n, property, n[property] AS raw"
+        else (
+            "UNWIND keys(n) AS property\n          WITH population, n, property, n[property] AS raw"
+        )
     )
     string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     value_projection = ", value: raw" if strings_only else ""
@@ -87,7 +89,7 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
         """
     )
     hash_expression = cypher_hash_expression("_gc_occurrence_key")
-    gate_hash_expression = cypher_hash_expression("id(n) % 2147483647").replace(
+    gate_hash_expression = cypher_hash_expression("_gc_occurrence_key").replace(
         "$sample_hash_",
         "$sample_gate_hash_",
     )
@@ -102,7 +104,22 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
           WITH population
           WHERE population > 0
           MATCH {node}
-          WITH population, n, {gate_hash_expression} AS _gc_gate_key
+          {candidate_unwind}
+          WHERE raw IS NOT NULL
+            {string_predicate}
+          WITH population, n, property, raw ORDER BY id(n), property
+          WITH population, n,
+               collect({{property: property, raw: raw}}) AS _gc_node_properties
+          UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
+          WITH population, n, _gc_property_index,
+               _gc_node_properties[_gc_property_index] AS occurrence
+          WITH population, n, occurrence.property AS property, occurrence.raw AS raw,
+               _gc_property_index
+          WITH population, n, property, raw,
+               (((id(n) % {CYPHER_SAMPLE_MODULUS}) * {_SAMPLE_NODE_MULTIPLIER}
+                 + _gc_property_index) % {CYPHER_SAMPLE_MODULUS}) AS _gc_occurrence_key
+          WITH population, n, property, raw, _gc_occurrence_key,
+               {gate_hash_expression} AS _gc_gate_key
           WHERE population <= $sample_size * $sample_gate_multiplier
              OR _gc_gate_key < toInteger(ceil(
                   toFloat({CYPHER_SAMPLE_MODULUS})
@@ -110,19 +127,6 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
                   * toFloat($sample_gate_multiplier)
                   / toFloat(population)
                 ))
-          {candidate_unwind}
-          WHERE raw IS NOT NULL
-            {string_predicate}
-          WITH n, property, raw ORDER BY id(n), property
-          WITH n, collect({{property: property, raw: raw}}) AS _gc_node_properties
-          UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
-          WITH n, _gc_property_index,
-               _gc_node_properties[_gc_property_index] AS occurrence
-          WITH n, occurrence.property AS property, occurrence.raw AS raw,
-               _gc_property_index
-          WITH n, property, raw,
-               (((id(n) % {CYPHER_SAMPLE_MODULUS}) * {_SAMPLE_NODE_MULTIPLIER}
-                 + _gc_property_index) % {CYPHER_SAMPLE_MODULUS}) AS _gc_occurrence_key
           WITH n, property, raw, {hash_expression} AS _gc_sample_key
           ORDER BY _gc_sample_key, id(n), property
           LIMIT $sample_size

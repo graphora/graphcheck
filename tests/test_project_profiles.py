@@ -128,6 +128,19 @@ def test_project_config_rejects_unknown_keys():
         ProjectConfig(project="x", checks="checks", artifacts=".graphcheck", bogus=True)
 
 
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "2"])
+def test_project_config_rejects_invalid_concurrency(invalid):
+    from graphcheck.project import ProjectConfig
+
+    with pytest.raises(ValidationError, match="concurrency"):
+        ProjectConfig(
+            project="x",
+            checks="checks",
+            artifacts=".graphcheck",
+            concurrency=invalid,
+        )
+
+
 def test_find_project_root_accepts_file_path(tmp_path: Path):
     write_default_project(tmp_path)
     suite = tmp_path / "checks" / "suite.yml"
@@ -155,6 +168,7 @@ def test_load_project_config_reads_yaml(tmp_path: Path):
     assert config.project == "graphcheck"
     assert config.checks == "checks"
     assert config.artifacts == ".graphcheck"
+    assert config.concurrency == 1
 
 
 def test_load_project_config_rejects_invalid_yaml(tmp_path: Path):

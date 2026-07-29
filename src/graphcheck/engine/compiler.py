@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
+from typing import Literal
 
 from graphcheck.contracts.check import (
     CompetencyCheck,
@@ -14,6 +15,15 @@ from graphcheck.contracts.results import Pattern
 from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
+
+
+@dataclass(frozen=True)
+class EvidenceCondition:
+    """Typed aggregate condition for conditional evidence execution."""
+
+    field: str
+    operator: Literal["gt", "lt"]
+    value: int | float
 
 
 @dataclass(frozen=True)
@@ -33,6 +43,9 @@ class CompiledCheck:
     sample_population: int | None = None
     evidence_kinds: tuple[str, ...] = ()
     evidence_id_fields: tuple[str, ...] = ()
+    evidence_query: str | None = None
+    evidence_params: dict[str, object] | None = None
+    evidence_condition: EvidenceCondition | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +60,9 @@ class ConformancePlan:
     sampling_preflight: bool = True
     population_query: str | None = None
     population_params: dict[str, object] | None = None
+    evidence_query: str | None = None
+    evidence_params: dict[str, object] | None = None
+    evidence_condition: EvidenceCondition | None = None
 
 
 ConformanceCompiler = Callable[[dict[str, object], int, int], ConformancePlan]
@@ -141,19 +157,21 @@ def _compile_completeness(
                  sum(CASE WHEN {property_ref} IS NULL THEN 1 ELSE 0 END)
                    AS violation_count
         }}
-        CALL {{
-          MATCH {node}
-          WHERE {property_ref} IS NULL
-          WITH n ORDER BY id(n) LIMIT $evidence_cap
-          RETURN collect({_node_pointer("n")}) AS evidence
-        }}
         RETURN {_SCHEMA_PROJECTION},
                population,
                conforming_count,
                violation_count,
                CASE WHEN population = 0 THEN 1.0
                     ELSE toFloat(conforming_count) / population END AS coverage,
-               evidence
+               [] AS evidence
+        """
+    ).strip()
+    evidence_query = dedent(
+        f"""
+        MATCH {node}
+        WHERE {property_ref} IS NULL
+        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
     return ConformancePlan(
@@ -165,6 +183,9 @@ def _compile_completeness(
         },
         expected={"threshold": threshold},
         name=f"{label}.{property_name} is present",
+        evidence_query=evidence_query,
+        evidence_params={"evidence_cap": evidence_cap},
+        evidence_condition=EvidenceCondition("coverage", "lt", threshold),
     )
 
 
@@ -254,10 +275,16 @@ class CypherCompiler:
                 f"but template {definition.template!r} compiled sampled={plan.sampled!r}.",
                 "Make the pack YAML sampling declaration match its registered compiler.",
             )
+        params = _query_params(plan.query, plan.params)
+        evidence_params = (
+            _query_params(plan.evidence_query, plan.evidence_params or plan.params)
+            if plan.evidence_query is not None
+            else None
+        )
         return CompiledCheck(
             check=check,
             query=plan.query,
-            params=dict(plan.params),
+            params=params,
             expected=dict(plan.expected),
             name=plan.name,
             evidence_cap=self.evidence_cap,
@@ -269,6 +296,9 @@ class CypherCompiler:
             ),
             evidence_kinds=definition.evidence_elements,
             evidence_id_fields=definition.evidence_id_fields,
+            evidence_query=plan.evidence_query,
+            evidence_params=evidence_params,
+            evidence_condition=plan.evidence_condition,
         )
 
     def missing_capabilities(self, check: LoadedCheck, target: object) -> tuple[str, ...]:
@@ -497,6 +527,19 @@ def _parameter_names(query: str) -> set[str]:
                 continue
         index += 1
     return names
+
+
+def _query_params(query: str, params: dict[str, object]) -> dict[str, object]:
+    names = _parameter_names(query)
+    missing = sorted(names - params.keys())
+    if missing:
+        rendered = ", ".join(f"${name}" for name in missing)
+        raise GraphCheckError(
+            "engine.parameter_missing",
+            f"Compiled query has no value for {rendered}.",
+            "Fix the compiler so every Cypher parameter has a value.",
+        )
+    return {name: params[name] for name in params if name in names}
 
 
 def _invalid_loaded_check(check: LoadedCheck, expected: str) -> GraphCheckError:

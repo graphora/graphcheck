@@ -126,8 +126,10 @@ def test_public_suite_loader_reaches_each_observable_core_compiler(name, config,
     compiled = CypherCompiler().compile(suite.checks[0], sample_seed=91)
 
     assert compiled.check.spec.check == name
-    assert f"kind: '{evidence_kind}'" in compiled.query
+    assert f"kind: '{evidence_kind}'" in (compiled.evidence_query or compiled.query)
     assert _parameter_names(compiled.query) == compiled.params.keys()
+    if compiled.evidence_query is not None:
+        assert _parameter_names(compiled.evidence_query) == compiled.evidence_params.keys()
 
 
 def test_dangling_relationship_check_fails_closed_instead_of_optimistically_passing():
@@ -170,10 +172,16 @@ def test_core_compilers_are_read_only_parameterized_one_row_plans(name, config, 
         "evidence",
     ):
         assert field in compiled.query
-    assert "$evidence_cap" in compiled.query
-    assert compiled.params["evidence_cap"] == 7
-    assert f"kind: '{evidence_kind}'" in compiled.query
+    evidence_query = compiled.evidence_query or compiled.query
+    evidence_params = compiled.evidence_params or compiled.params
+    assert "$evidence_cap" in evidence_query
+    assert evidence_params["evidence_cap"] == 7
+    assert f"kind: '{evidence_kind}'" in evidence_query
     assert _parameter_names(compiled.query) == compiled.params.keys()
+    assert _parameter_names(evidence_query) == evidence_params.keys()
+    if compiled.evidence_query is not None:
+        assert "[] AS evidence" in compiled.query
+        assert "$evidence_cap" not in compiled.query
 
     identifier_fields = {
         "label",
@@ -195,6 +203,19 @@ def test_core_compilers_are_read_only_parameterized_one_row_plans(name, config, 
                 assert item not in compiled.query
     assert compiled.expected
     assert compiled.name
+
+
+def test_uniqueness_evidence_is_bounded_without_collecting_duplicate_nodes():
+    compiled = CypherCompiler(evidence_cap=7).compile(
+        _loaded("uniqueness", {"label": "Customer", "property": "email"})
+    )
+
+    assert compiled.evidence_query is not None
+    assert "LIMIT $evidence_cap" in compiled.evidence_query
+    assert "collect(n)" not in compiled.query
+    assert "collect(n)" not in compiled.evidence_query
+    assert "duplicate_nodes" not in compiled.query
+    assert "duplicate_nodes" not in compiled.evidence_query
 
 
 def test_property_type_selection_is_a_parameter_not_a_query_fragment():
@@ -259,6 +280,8 @@ def test_hub_sampling_is_seeded_deterministic_and_reports_actual_sample_size():
     changed = compiler.compile(_loaded("hub_outlier", config), sample_seed=987654321)
 
     assert first.sampled is True
+    assert first.sampling_preflight is False
+    assert first.population_query is None
     assert first.query == repeated.query == changed.query
     assert first.params == repeated.params
     hash_names = ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d")
@@ -268,6 +291,8 @@ def test_hub_sampling_is_seeded_deterministic_and_reports_actual_sample_size():
     assert first.params["sample_size"] == 1000
     assert "sample_size" in first.query
     assert "$sample_hash_a" in first.query
+    assert "$sample_gate_hash_a" in first.query
+    assert "_gc_gate_key" in first.query
     assert "ORDER BY _gc_sample_key, id(n)" in first.query
 
 

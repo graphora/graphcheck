@@ -6,6 +6,7 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -112,12 +113,45 @@ class _EarlyResultStop(Exception):
 
 
 class Neo4jClient:
-    def __init__(self, profile: ConnectionProfile) -> None:
+    def __init__(self, profile: ConnectionProfile, *, max_concurrency: int = 1) -> None:
+        if (
+            isinstance(max_concurrency, bool)
+            or not isinstance(max_concurrency, int)
+            or max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
         self._profile = profile
-        self._driver = GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password))
+        self._driver = GraphDatabase.driver(
+            profile.uri,
+            auth=(profile.user, profile.password),
+            max_connection_pool_size=max_concurrency,
+            connection_timeout=10.0,
+            connection_acquisition_timeout=10.0,
+            fetch_size=1000,
+            max_transaction_retry_time=0.0,
+        )
 
     def close(self) -> None:
         self._driver.close()
+
+    @contextmanager
+    def read_transaction(self, *, timeout_s: float | None = None):
+        """Yield a planner-verified reader whose queries share one read snapshot."""
+
+        deadline = _timeout_deadline(timeout_s)
+        try:
+            with (
+                self._driver.session(
+                    database=self._profile.database,
+                    default_access_mode=neo4j.READ_ACCESS,
+                ) as session,
+                session.begin_transaction(timeout=_remaining_timeout(deadline)) as transaction,
+            ):
+                yield _TransactionReader(transaction, self._profile.database, deadline)
+        except GraphCheckError:
+            raise
+        except Exception as exc:
+            raise map_neo4j_error(exc) from exc
 
     def verify(self) -> None:
         try:
@@ -512,6 +546,63 @@ class Neo4jClient:
         except GraphCheckError:
             return False
         return _plan_has_operator(plan, "NodeCountFromCountStore")
+
+
+class _TransactionReader:
+    """Read-result facade over one explicit Neo4j transaction."""
+
+    def __init__(self, transaction: object, database: str, deadline: float | None) -> None:
+        self._transaction = transaction
+        self._database = database
+        self._deadline = deadline
+
+    def run_read_result(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> QueryResult:
+        values = params or {}
+        local_deadline = _timeout_deadline(timeout_s)
+        deadline = (
+            local_deadline
+            if self._deadline is None
+            else self._deadline
+            if local_deadline is None
+            else min(self._deadline, local_deadline)
+        )
+        try:
+            guard_started = time.monotonic()
+            _ensure_server_classified_read(
+                self._transaction,
+                query,
+                values,
+                database=self._database,
+                deadline=deadline,
+            )
+            read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
+            driver_query = neo4j.Query(query, timeout=_remaining_timeout(deadline))
+            result = self._transaction.run(driver_query, values)
+            rows = [_raw_record(record) for record in result]
+            columns = _result_columns(result) or (tuple(rows[0]) if rows else ())
+            consume = getattr(result, "consume", None)
+            summary = consume() if callable(consume) else None
+            notifications = _summary_notifications(summary)
+            _raise_for_missing_schema_reference(notifications)
+            return QueryResult(
+                rows=rows,
+                columns=columns,
+                notifications=notifications,
+                server_available_after_ms=_summary_timing(summary, "result_available_after"),
+                server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
+                read_guard_ms=read_guard_ms,
+                observed_rows=len(rows),
+            )
+        except GraphCheckError:
+            raise
+        except Exception as exc:
+            raise map_neo4j_error(exc) from exc
 
 
 def _timeout_deadline(timeout_s: float | None) -> float | None:

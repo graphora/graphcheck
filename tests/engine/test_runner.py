@@ -1,5 +1,6 @@
 import hashlib
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -268,6 +269,79 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert client.probe_calls == 1
     assert len(client.read_calls) == 1
     assert client.read_calls[0][2] > 0
+
+
+def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():
+    measurement = RichResult(
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "population": 2,
+                "conforming_count": 1,
+                "violation_count": 1,
+                "coverage": 0.5,
+                "evidence": [],
+            }
+        ],
+        ("population", "conforming_count", "violation_count", "coverage", "evidence"),
+    )
+    evidence = RichResult(
+        [{"evidence": [{"kind": "node", "id": "7", "labels": ["Customer"]}]}],
+        ("evidence",),
+    )
+
+    class TransactionClient(RichClient):
+        def __init__(self):
+            super().__init__([measurement, evidence])
+            self.transactions = 0
+
+        @contextmanager
+        def read_transaction(self, *, timeout_s=None):
+            self.transactions += 1
+            yield self
+
+    client = TransactionClient()
+    results = _engine(client).run_yaml(PASSING_SUITE, target=TARGET)
+
+    assert results.checks[0].verdict is Verdict.FAIL
+    assert results.checks[0].measured["violations"] == 1
+    assert results.checks[0].evidence.elements[0].id == "7"
+    assert client.transactions == 1
+    assert len(client.read_calls) == 2
+    assert client.read_calls[1][1] == {"evidence_cap": 100}
+    assert client.read_calls[1][2] <= client.read_calls[0][2]
+
+
+def test_evidence_query_failure_is_an_errored_check():
+    client = RichClient(
+        [
+            RichResult(
+                [
+                    {
+                        "schema_ok": True,
+                        "missing_labels": [],
+                        "missing_relationship_types": [],
+                        "population": 1,
+                        "conforming_count": 0,
+                        "violation_count": 1,
+                        "coverage": 0.0,
+                        "evidence": [],
+                    }
+                ],
+                ("population", "conforming_count", "violation_count", "coverage", "evidence"),
+            ),
+            GraphCheckError("neo4j.query_failed", "evidence failed", "fix query"),
+        ]
+    )
+
+    check = _engine(client).run_yaml(PASSING_SUITE, target=TARGET).checks[0]
+
+    assert check.verdict is Verdict.ERRORED
+    assert check.error.code == "neo4j.query_failed"
+    assert check.measured is None
+    assert check.evidence is None
 
 
 def test_tag_selection_filters_the_universe_and_records_metadata():

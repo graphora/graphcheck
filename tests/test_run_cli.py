@@ -189,6 +189,45 @@ competency:
     assert (historical / "results.json").is_file()
     assert (historical / "report.html").is_file()
     assert [check["id"] for check in payload["checks"]] == ["production"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [(["run"], 2), (["run", "--concurrency", "3"], 3)],
+)
+def test_run_concurrency_precedence_cli_over_project(tmp_path, monkeypatch, arguments, expected):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: concurrency
+competency:
+  - id: value
+    question: Is there one value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    project_path = tmp_path / "graphcheck.yml"
+    project_path.write_text(
+        project_path.read_text(encoding="utf-8").replace("concurrency: 1", "concurrency: 2"),
+        encoding="utf-8",
+    )
+    client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
+    captured = []
+
+    def build(profile, *, max_concurrency):
+        captured.append(max_concurrency)
+        return client
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", build)
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 0
+    assert captured == [expected]
     report = tmp_path / ".graphcheck" / "runs" / "latest" / "report.html"
     html = report.read_text(encoding="utf-8")
     assert "<!doctype html>" in html

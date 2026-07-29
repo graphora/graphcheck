@@ -42,14 +42,7 @@ evidence limit.
 
 ## Snapshot decision
 
-Two separate auto-commit queries can observe different graph states. Before implementation, choose
-one of:
-
-1. execute measurement and conditional evidence within one read transaction; or
-2. permit bounded evidence to be best-effort and explicitly verify that its count/pointers remain
-   consistent with the measurement.
-
-The first is preferred when the connector can retain deadline, read classification, and isolation
+Two separate auto-commit queries can observe different graph states. Prefer to execute measurement and conditional evidence within one read transaction when the connector can retain deadline, read classification, and isolation
 semantics safely. Do not silently introduce cross-snapshot evidence.
 
 ## Compiled shape

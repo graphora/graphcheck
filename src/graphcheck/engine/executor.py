@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,6 +105,17 @@ class ReadOnlyExecutor:
                 limit=policy.max_rows,
             )
         return ExecutionResult(rows, tuple(rows[0]) if rows else ())
+
+    @contextmanager
+    def transaction(self, *, timeout_s: float | None = None):
+        """Yield an executor bound to one connector read transaction when supported."""
+
+        factory = getattr(self.client, "read_transaction", None)
+        if not callable(factory):
+            yield self
+            return
+        with factory(timeout_s=timeout_s) as reader:
+            yield ReadOnlyExecutor(reader)
 
 
 Executor = ReadOnlyExecutor

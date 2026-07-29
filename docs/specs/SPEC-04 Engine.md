@@ -193,9 +193,14 @@ The default engine configuration is:
 | Evidence cap | `100` unique pointers | Must be a positive integer |
 | Competency result-row limit | `100,000` rows | Positive safety ceiling for complete assertions |
 | Eager competency evaluation | `false` | Temporary rollback switch for bounded rollout |
+| Check concurrency | `1` worker | Positive integer; CLI overrides project config |
 | Exhaustive sampling limit | `100,000` elements | At or below this population, policy execution is exact |
 | Default sample size | `10,000` elements | Used above the exhaustive limit unless a check overrides it |
 | Sampling seed | `0` | Non-negative integer or non-blank string |
+
+Effective concurrency is `--concurrency`, then `graphcheck.yml concurrency`, then the engine
+default. Non-fail-fast checks use at most that many workers; fail-fast remains sequential. The
+default stays at one because higher scan concurrency is workload/server dependent.
 
 ## Run lifecycle
 
@@ -209,10 +214,10 @@ For each run the engine:
 5. iterates the selected checks in suite/file order;
 6. skips effective `generated:true` checks as `skipped:generated` without querying C2;
 7. compiles the check and resolves any graph-relative competency parameters;
-8. performs the population preflight and deterministic sample decision when the compiler marks the
-   check sampled;
+8. resolves the deterministic sample cap and any compiler-requested population preflight;
 9. resolves the requested C4 baseline before executing drift Cypher;
-10. executes the parameterized query through the read-only executor with the remaining deadline;
+10. executes the measurement query with the remaining deadline and, when its typed aggregate
+    condition requires it, executes bounded evidence in the same read transaction;
 11. evaluates rows/column metadata, maps the boolean evaluation through declared severity, and
     constructs the frozen SPEC-01 check result; and
 12. derives per-suite/run totals, score, status, partial reason, finish time, and exit code.
@@ -312,8 +317,11 @@ checks have executable Cypher callbacks; `dangling_rels` is a declared capabilit
 | `pii_name_match` | Sampled property-key occurrences match selected installed personal-data aliases |
 | `pii_value_match` | Sampled string values fully match selected regexes and required Luhn/Verhoeff checksums |
 
-All observable conformance templates return exactly one summary row with a non-negative
-`violation_count`, a population, scalar measurements where applicable, and capped pointer evidence.
+All observable conformance templates return exactly one measurement row with a non-negative
+`violation_count`, a population, and scalar measurements where applicable. Core predicate,
+degree, completeness, and uniqueness plans carry a separate bounded evidence query. It executes
+only when a typed exact aggregate indicates a finding, within the same read transaction and graph
+snapshot as measurement. Passing checks never execute that path.
 `completeness` additionally returns `conforming_count` and a ratio `coverage`. Internally inconsistent
 summary arithmetic is `engine.invalid_query_result`, never a finding or pass.
 
@@ -325,8 +333,7 @@ Directly invoking the compiler callback fails closed with `engine.check_unobserv
 returning a misleading zero violations.
 
 PII checks return a population, sample size, and candidate rows with node pointers. The main query
-recomputes its eligible population in the same Neo4j snapshot as selection; disagreement with the
-preflight is an error rather than stale confidence metadata. Value matching admits only string
+computes its eligible population in the same Neo4j snapshot as selection. Value matching admits only string
 properties through null-safe conversion predicates, so arrays and other supported Neo4j property
 types cannot crash the query. The evaluator groups findings by installed pattern, node labels, and
 property key. It never serializes raw matched values. Empty/malformed samples, missing pointers,
@@ -495,8 +502,9 @@ conformance or competency findings; those remain `engine.evidence_missing`.
 
 Sampling applies only to compiler plans explicitly marked sampled: `hub_outlier`,
 `pii_name_match`, and `pii_value_match`. The plan must agree with the installed manifest declaration.
-Before the main query, the engine executes a population query that must return exactly one
-non-negative integer `population`.
+Plans may execute a population preflight or compute the exact population inside the sampled query.
+Hub and PII plans use the latter so population, selection, and estimate metadata share one snapshot
+and avoid a duplicate runner round trip.
 
 The per-check seed is SHA-256 over domain-separated, length-prefixed components:
 
@@ -513,13 +521,14 @@ the exhaustive limit or configured sample size; otherwise it selects the configu
 A check-level sample size may only reduce that decision. The effective sample is capped by both the
 global policy decision and population; a check can never raise the global safety ceiling.
 
-The sampled core and PII queries order candidates by a stable seed-derived cubic hash over a prime
-integer field. The four SHA-derived coefficients form a four-wise-independent ranking family;
+The sampled core and PII queries apply a second seed-derived hash gate before ordering a reduced
+candidate set by a stable cubic hash over a prime integer field. The four SHA-derived coefficients
+form a four-wise-independent ranking family;
 unlike an affine rotation, it does not systematically over-select the edges of dense ID ranges.
 PII first filters eligible properties, sorts the keys on each node, assigns a stable
-property-occurrence index, and combines that index with the node id before hashing. Properties on
-the same node therefore receive distinct, seed-dependent positions instead of sharing one
-node-level key. The sampling module also exposes a deterministic uniform Floyd selector using
+property-occurrence index, and combines that index with the node id before gating and ranking.
+Properties on the same node therefore receive distinct, defensible selection probabilities instead
+of sharing one node-level gate. The sampling module also exposes a deterministic uniform Floyd selector using
 `O(sample_size)` memory for callers with a canonical indexed population; the database-backed plans
 do not pretend to consume unused Floyd indices.
 
@@ -560,7 +569,7 @@ matching C4's timestamp-sortable filename convention. Invalid referenced JSON is
 | Duplicate suite id or target-probe failure | No checks execute | Run status `failed`, exit 3 |
 
 The engine's monotonic deadline includes target probing, token resolution, sampling preflight,
-baseline work, and query execution. When the deadline is exhausted, the active check is errored if
+baseline work, queued worker time, measurement, and conditional evidence. When the deadline is exhausted, the active check is errored if
 it was attempted and every later selected check is `skipped:not_run`. Checks remaining after the
 budget are never silently omitted.
 

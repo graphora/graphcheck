@@ -25,7 +25,8 @@ $env:GRAPHCHECK_PERFORMANCE_OUTPUT = "C:\temp\graphcheck-10m.json"
 uv run pytest tests/performance/test_engine_budget.py -q
 ```
 
-It verifies the 30-check run is correct and complete, then reports overall wall time,
+It runs the 30-check workload at concurrency 1, 2, and 4, verifies every run is correct and
+complete, then reports overall wall time,
 per-check-family time, per-query client wall time, server-reported available/consumed timings, and
 configured concurrency. A slower timing alone does not fail the test.
 

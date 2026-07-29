@@ -1256,10 +1256,16 @@ def run_command(
         "--fail-fast",
         help="Stop after the first error-severity failure and mark later checks not run.",
     ),
+    concurrency: int | None = typer.Option(
+        None,
+        "--concurrency",
+        min=1,
+        help="Maximum concurrent checks; overrides graphcheck.yml.",
+    ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
     from graphcheck.contracts.results import CheckError
-    from graphcheck.engine import DirectoryBaselineProvider, Engine, failed_results
+    from graphcheck.engine import DirectoryBaselineProvider, Engine, EngineConfig, failed_results
     from graphcheck.errors import GraphCheckError
     from graphcheck.project import ARTIFACTS_DIR, load_project_config
 
@@ -1283,13 +1289,15 @@ def run_command(
         )
         profiles = load_profiles(root)
         _, selected_profile = select_profile(profiles, profile)
-        client = Neo4jClient(selected_profile)
+        max_concurrency = concurrency or int(config.concurrency)
+        client = _new_neo4j_client(selected_profile, max_concurrency)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
             results = Engine(
                 client,
                 baselines=DirectoryBaselineProvider(artifacts / "baselines"),
+                config=EngineConfig(max_concurrency=max_concurrency),
                 progress_callback=progress_callback,
                 event_sink=telemetry.event_sink if telemetry is not None else None,
             ).run(
@@ -1421,6 +1429,23 @@ def run_command(
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
+
+
+def _new_neo4j_client(profile, max_concurrency: int):
+    """Construct the real workload-aware client while retaining simple CLI test doubles."""
+
+    import inspect
+
+    parameters = inspect.signature(Neo4jClient).parameters.values()
+    accepts_setting = any(
+        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    return (
+        Neo4jClient(profile, max_concurrency=max_concurrency)
+        if accepts_setting
+        else Neo4jClient(profile)
+    )
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:

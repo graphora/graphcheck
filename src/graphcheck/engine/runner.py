@@ -44,7 +44,7 @@ from graphcheck.engine.compiler import (
     name_for,
 )
 from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
-from graphcheck.engine.executor import ReadOnlyExecutor
+from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
     ParameterTokenResolver,
@@ -115,7 +115,7 @@ class EngineConfig:
     evidence_cap: int = 100
     result_row_limit: int = 100_000
     eager_competency_evaluation: bool = False
-    max_concurrency: int = 4
+    max_concurrency: int = 1
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,
@@ -705,14 +705,35 @@ class Engine:
                 and not self.config.eager_competency_evaluation
                 else None
             )
-            execution = self._execute_query_with_event(
-                compiled.query,
-                resolved_params,
-                role=QueryRole.CHECK_MEASUREMENT,
-                timeout_s=_remaining(deadline, self._monotonic()),
-                policy=consumption.policy if consumption is not None else None,
-                stop_when=consumption.stop_when if consumption is not None else None,
-            )
+            if compiled.evidence_query is None:
+                execution = self._execute_query_with_event(
+                    compiled.query,
+                    resolved_params,
+                    role=QueryRole.CHECK_MEASUREMENT,
+                    timeout_s=_remaining(deadline, self._monotonic()),
+                    policy=consumption.policy if consumption is not None else None,
+                    stop_when=consumption.stop_when if consumption is not None else None,
+                )
+            else:
+                with self.executor.transaction(
+                    timeout_s=_remaining(deadline, self._monotonic())
+                ) as transaction:
+                    execution = self._execute_query_with_event(
+                        compiled.query,
+                        resolved_params,
+                        role=QueryRole.CHECK_MEASUREMENT,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                    )
+                    if _evidence_required(compiled, execution.rows):
+                        evidence_execution = self._execute_query_with_event(
+                            compiled.evidence_query,
+                            compiled.evidence_params or resolved_params,
+                            role=QueryRole.EVIDENCE_COLLECTION,
+                            timeout_s=_remaining(deadline, self._monotonic()),
+                            executor=transaction,
+                        )
+                        execution = _merge_evidence(compiled, execution, evidence_execution)
             if consumption is not None and not execution.complete and not consumption.decisive:
                 raise GraphCheckError(
                     "engine.result_limit_exceeded",
@@ -850,17 +871,29 @@ class Engine:
             if isinstance(check.spec, ConformanceCheck)
             else None
         )
+        check_requested = requested
         if requested is None:
             requested = compiled.params.get("sample_size")
         if not compiled.sampling_preflight:
             sample_size = self.config.sampling.sample_size
             if requested is not None:
                 sample_size = min(sample_size, int(requested))
-            resolved = {**params, "sample_size": sample_size}
+            exhaustive_limit = self.config.sampling.exhaustive_limit
+            if check_requested is not None:
+                exhaustive_limit = min(exhaustive_limit, int(check_requested))
+            resolved = {
+                **params,
+                "sample_size": sample_size,
+                **(
+                    {"exhaustive_limit": exhaustive_limit}
+                    if "exhaustive_limit" in compiled.params
+                    else {}
+                ),
+            }
             return (
                 replace(
                     compiled,
-                    params={**compiled.params, "sample_size": sample_size},
+                    params=resolved,
                     expected={**compiled.expected, "sample_size": sample_size},
                 ),
                 resolved,
@@ -1063,10 +1096,12 @@ class Engine:
         timeout_s: float,
         policy=None,
         stop_when=None,
+        executor: ReadOnlyExecutor | None = None,
     ):
         started = self._timing_start()
+        active_executor = executor or self.executor
         try:
-            execution = self.executor.execute(
+            execution = active_executor.execute(
                 query,
                 params,
                 timeout_s=timeout_s,
@@ -1092,7 +1127,7 @@ class Engine:
             error_code=None,
             read_guard_outcome=(
                 ReadGuardOutcome.ALLOWED
-                if callable(getattr(self.client, "run_read_result", None))
+                if callable(getattr(active_executor.client, "run_read_result", None))
                 else ReadGuardOutcome.NOT_RUN
             ),
             server_available_after_ms=execution.server_available_after_ms,
@@ -1587,6 +1622,59 @@ def _remaining(deadline: float, now: float) -> float:
             "Narrow the selection, enable sampling, or increase the external job budget.",
         )
     return remaining
+
+
+def _evidence_required(compiled: CompiledCheck, rows: Sequence[Mapping[str, object]]) -> bool:
+    condition = compiled.evidence_condition
+    if condition is None:
+        raise GraphCheckError(
+            "engine.evidence_plan_invalid",
+            f"Check {compiled.check.id!r} has an evidence query without a typed condition.",
+            "Fix the compiler so conditional evidence is driven by an exact aggregate field.",
+        )
+    if len(rows) != 1:
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned {len(rows)} measurement rows, expected 1.",
+            "Fix the measurement query so it returns one typed aggregate row.",
+        )
+    value = rows[0].get(condition.field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned an invalid {condition.field!r} aggregate.",
+            "Fix the measurement query so the evidence condition receives a finite number.",
+        )
+    return value > condition.value if condition.operator == "gt" else value < condition.value
+
+
+def _merge_evidence(
+    compiled: CompiledCheck,
+    measurement: ExecutionResult,
+    evidence: ExecutionResult,
+) -> ExecutionResult:
+    if len(evidence.rows) != 1 or "evidence" not in evidence.rows[0]:
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned an invalid bounded evidence result.",
+            "Fix the evidence query so it returns one row containing `evidence`.",
+        )
+    rows = [{**measurement.rows[0], "evidence": evidence.rows[0]["evidence"]}]
+    columns = tuple(dict.fromkeys((*measurement.columns, "evidence")))
+    read_guard_values = [
+        value for value in (measurement.read_guard_ms, evidence.read_guard_ms) if value is not None
+    ]
+    return replace(
+        measurement,
+        rows=rows,
+        columns=columns,
+        notification_count=(
+            None
+            if measurement.notification_count is None and evidence.notification_count is None
+            else (measurement.notification_count or 0) + (evidence.notification_count or 0)
+        ),
+        read_guard_ms=sum(read_guard_values) if read_guard_values else None,
+    )
 
 
 def _unexpected_error(stage: str, exc: Exception) -> CheckError:

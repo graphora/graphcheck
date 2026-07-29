@@ -3,7 +3,11 @@ from __future__ import annotations
 import math
 from textwrap import dedent
 
-from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.compiler import (
+    ConformancePlan,
+    EvidenceCondition,
+    register_conformance_compiler,
+)
 from graphcheck.engine.identifiers import (
     cypher_identifier,
     node_pattern,
@@ -18,6 +22,7 @@ from graphcheck.engine.sampling import (
 from graphcheck.errors import GraphCheckError
 
 _DEFAULT_HUB_SAMPLE_SIZE = 1000
+_SAMPLE_GATE_MULTIPLIER = 32
 
 _SCHEMA_CATALOG = """
 CALL {
@@ -137,7 +142,7 @@ def _schema_params(
     }
 
 
-def _node_predicate_query(*, match: str, population: str, violation: str) -> str:
+def _node_predicate_queries(*, match: str, population: str, violation: str) -> tuple[str, str]:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -147,19 +152,22 @@ def _node_predicate_query(*, match: str, population: str, violation: str) -> str
           RETURN count(n) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
-        CALL {{
-          MATCH {match}
-          WHERE ({population}) AND ({violation})
-          WITH n ORDER BY id(n) LIMIT $evidence_cap
-          RETURN collect({_node_pointer("n")}) AS evidence
-        }}
         RETURN {_SCHEMA_PROJECTION},
-               population, violation_count, evidence
+               population, violation_count, [] AS evidence
+        """
+    ).strip(), dedent(
+        f"""
+        MATCH {match}
+        WHERE ({population}) AND ({violation})
+        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
 
 
-def _relationship_predicate_query(*, match: str, population: str, violation: str) -> str:
+def _relationship_predicate_queries(
+    *, match: str, population: str, violation: str
+) -> tuple[str, str]:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -169,19 +177,20 @@ def _relationship_predicate_query(*, match: str, population: str, violation: str
           RETURN count(r) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
-        CALL {{
-          MATCH {match}
-          WHERE ({population}) AND ({violation})
-          WITH r ORDER BY id(r) LIMIT $evidence_cap
-          RETURN collect({_rel_pointer("r")}) AS evidence
-        }}
         RETURN {_SCHEMA_PROJECTION},
-               population, violation_count, evidence
+               population, violation_count, [] AS evidence
+        """
+    ).strip(), dedent(
+        f"""
+        MATCH {match}
+        WHERE ({population}) AND ({violation})
+        WITH r ORDER BY id(r) LIMIT $evidence_cap
+        RETURN collect({_rel_pointer("r")}) AS evidence
         """
     ).strip()
 
 
-def _degree_query(*, node: str, pattern: str, violation: str) -> str:
+def _degree_queries(*, node: str, pattern: str, violation: str) -> tuple[str, str]:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -192,18 +201,37 @@ def _degree_query(*, node: str, pattern: str, violation: str) -> str:
           RETURN count(n) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
-        CALL {{
-          MATCH {node}
-          OPTIONAL MATCH {pattern}
-          WITH n, count(r) AS degree
-          WHERE {violation}
-          WITH n ORDER BY id(n) LIMIT $evidence_cap
-          RETURN collect({_node_pointer("n")}) AS evidence
-        }}
         RETURN {_SCHEMA_PROJECTION},
-               population, violation_count, evidence
+               population, violation_count, [] AS evidence
+        """
+    ).strip(), dedent(
+        f"""
+        MATCH {node}
+        OPTIONAL MATCH {pattern}
+        WITH n, count(r) AS degree
+        WHERE {violation}
+        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
+
+
+def _split_evidence_plan(
+    queries: tuple[str, str],
+    *,
+    params: dict[str, object],
+    expected: dict[str, object],
+    name: str,
+) -> ConformancePlan:
+    return ConformancePlan(
+        query=queries[0],
+        params=params,
+        expected=expected,
+        name=name,
+        evidence_query=queries[1],
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("violation_count", "gt", 0),
+    )
 
 
 @register_conformance_compiler("cardinality")
@@ -216,7 +244,7 @@ def _compile_cardinality(
     to_label = _string(config, "to_label")
     direction = _direction(config, default="out")
     exactly = _integer(config, "exactly", default=1)
-    query = _degree_query(
+    queries = _degree_queries(
         node=node_pattern("n", from_label),
         pattern=_relationship_path(direction, relationship_type=rel_type, other_label=to_label),
         violation="degree <> $exactly",
@@ -229,8 +257,8 @@ def _compile_cardinality(
         ),
         "exactly": exactly,
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"exactly": exactly},
         name=f"{from_label} has exactly {exactly} {rel_type} relationship(s) to {to_label}",
@@ -245,7 +273,7 @@ def _compile_no_orphans(
     label = _string(config, "label")
     rel_type = _optional_string(config, "rel_type")
     direction = _direction(config)
-    query = _degree_query(
+    queries = _degree_queries(
         node=node_pattern("n", label),
         pattern=_relationship_path(direction, relationship_type=rel_type),
         violation="degree = 0",
@@ -257,8 +285,8 @@ def _compile_no_orphans(
             evidence_cap=evidence_cap,
         ),
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"orphans": 0},
         name=f"{label} nodes are connected",
@@ -318,7 +346,7 @@ def _compile_property_type(
     property_name = _string(config, "property")
     expected_type = _string(config, "type")
     property_ref = property_access("n", property_name)
-    query = _node_predicate_query(
+    queries = _node_predicate_queries(
         match=node_pattern("n", label),
         population=f"{property_ref} IS NOT NULL",
         violation=f"NOT ({_TYPE_MATCH_TEMPLATE.replace('__GC_PROPERTY__', property_ref)})",
@@ -327,8 +355,8 @@ def _compile_property_type(
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
         "expected_type": expected_type,
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"type": expected_type},
         name=f"{label}.{property_name} values have type {expected_type}",
@@ -344,7 +372,7 @@ def _compile_property_format(
     property_name = _string(config, "property")
     regex = _string(config, "regex")
     property_ref = property_access("n", property_name)
-    query = _node_predicate_query(
+    queries = _node_predicate_queries(
         match=node_pattern("n", label),
         population=f"{property_ref} IS NOT NULL",
         violation=(
@@ -356,8 +384,8 @@ def _compile_property_format(
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
         "regex": regex,
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"regex": regex},
         name=f"{label}.{property_name} matches its required format",
@@ -379,7 +407,7 @@ def _compile_value_in_set(
         )
     normalized_values = list(values)
     property_ref = property_access("n", property_name)
-    query = _node_predicate_query(
+    queries = _node_predicate_queries(
         match=node_pattern("n", label),
         population=f"{property_ref} IS NOT NULL",
         violation=f"NOT {property_ref} IN $values",
@@ -388,8 +416,8 @@ def _compile_value_in_set(
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
         "values": normalized_values,
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"values": normalized_values},
         name=f"{label}.{property_name} is in the allowed value set",
@@ -420,17 +448,21 @@ def _compile_uniqueness(
           WHERE frequency > 1
           RETURN coalesce(sum(frequency), 0) AS violation_count
         }}
-        CALL {{
-          MATCH {node}
-          WHERE {property_ref} IS NOT NULL
-          WITH {property_ref} AS value, collect(n) AS duplicate_nodes
-          WHERE size(duplicate_nodes) > 1
-          UNWIND duplicate_nodes AS n
-          WITH n ORDER BY id(n) LIMIT $evidence_cap
-          RETURN collect({_node_pointer("n")}) AS evidence
-        }}
         RETURN {_SCHEMA_PROJECTION},
-               population, violation_count, evidence
+               population, violation_count, [] AS evidence
+        """
+    ).strip()
+    evidence_query = dedent(
+        f"""
+        MATCH {node}
+        WHERE {property_ref} IS NOT NULL
+          AND EXISTS {{
+            MATCH {node_pattern("duplicate", label)}
+            WHERE {property_access("duplicate", property_name)} = {property_ref}
+              AND id(duplicate) <> id(n)
+          }}
+        WITH n ORDER BY id(n) LIMIT $evidence_cap
+        RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
     params = {
@@ -441,6 +473,9 @@ def _compile_uniqueness(
         params=params,
         expected={"unique": True},
         name=f"{label}.{property_name} is unique",
+        evidence_query=evidence_query,
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("violation_count", "gt", 0),
     )
 
 
@@ -466,6 +501,13 @@ def _compile_hub_outlier(
     pattern = _relationship_path(direction, relationship_type=rel_type)
     hash_params = cypher_hash_parameters(sample_seed)
     hash_expression = cypher_hash_expression("_gc_sample_input")
+    gate_hash_expression = cypher_hash_expression("_gc_sample_input").replace(
+        "$sample_hash_", "$sample_gate_hash_"
+    )
+    gate_hash_params = {
+        name.replace("sample_hash_", "sample_gate_hash_"): value
+        for name, value in cypher_hash_parameters(sample_seed + 1).items()
+    }
     query = dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -474,11 +516,30 @@ def _compile_hub_outlier(
           RETURN count(n) AS population
         }}
         CALL {{
-          MATCH {node}
-          WITH n, id(n) % {CYPHER_SAMPLE_MODULUS} AS _gc_sample_input
-          WITH n, {hash_expression} AS _gc_sample_key
-          ORDER BY _gc_sample_key, id(n)
-          LIMIT $sample_size
+          WITH population
+          CALL {{
+            WITH population
+            WHERE population <= $exhaustive_limit
+            MATCH {node}
+            RETURN n
+            UNION
+            WITH population
+            WHERE population > $exhaustive_limit
+            MATCH {node}
+            WITH population, n, id(n) % {CYPHER_SAMPLE_MODULUS} AS _gc_sample_input
+            WITH population, n, _gc_sample_input,
+                 {gate_hash_expression} AS _gc_gate_key
+            WHERE _gc_gate_key < toInteger(ceil(
+                    toFloat({CYPHER_SAMPLE_MODULUS})
+                    * toFloat($sample_size)
+                    * toFloat($sample_gate_multiplier)
+                    / toFloat(population)
+                  ))
+            WITH n, {hash_expression} AS _gc_sample_key
+            ORDER BY _gc_sample_key, id(n)
+            LIMIT $sample_size
+            RETURN n
+          }}
           OPTIONAL MATCH {pattern}
           WITH n, count(r) AS degree
           WITH collect({{node: n, degree: degree}}) AS sampled_nodes,
@@ -510,7 +571,10 @@ def _compile_hub_outlier(
         ),
         "z_threshold": z_threshold,
         "sample_size": requested_sample_size,
+        "exhaustive_limit": 100_000,
+        "sample_gate_multiplier": _SAMPLE_GATE_MULTIPLIER,
         **hash_params,
+        **gate_hash_params,
     }
     return ConformancePlan(
         query=query,
@@ -518,8 +582,7 @@ def _compile_hub_outlier(
         expected={"z_threshold": z_threshold, "sample_size": requested_sample_size},
         name=f"{label} relationship degree stays within {z_threshold:g} standard deviations",
         sampled=True,
-        population_query=f"MATCH {node} RETURN count(n) AS population",
-        population_params={},
+        sampling_preflight=False,
     )
 
 
@@ -532,7 +595,7 @@ def _compile_label_cooccurrence(
     label_b = _string(config, "label_b")
     label_a_predicate = f"n:{cypher_identifier(label_a)}"
     label_b_predicate = f"n:{cypher_identifier(label_b)}"
-    query = _node_predicate_query(
+    queries = _node_predicate_queries(
         match=node_pattern("n"),
         population=f"{label_a_predicate} OR {label_b_predicate}",
         violation=f"{label_a_predicate} AND {label_b_predicate}",
@@ -542,8 +605,8 @@ def _compile_label_cooccurrence(
             labels=[label_a, label_b], relationship_types=[], evidence_cap=evidence_cap
         ),
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"cooccurrences": 0},
         name=f"{label_a} and {label_b} do not co-occur",
@@ -565,7 +628,7 @@ def _compile_rel_direction(
         f"OR (source:{to_token} AND target:{from_token})"
     )
     violation = f"source:{to_token} AND target:{from_token}"
-    query = _relationship_predicate_query(
+    queries = _relationship_predicate_queries(
         match=f"(source)-{relationship_pattern('r', rel_type)}->(target)",
         population=population,
         violation=violation,
@@ -577,8 +640,8 @@ def _compile_rel_direction(
             evidence_cap=evidence_cap,
         ),
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"wrong_direction": 0},
         name=f"{rel_type} points from {from_label} to {to_label}",
@@ -595,7 +658,7 @@ def _compile_temporal_sanity(
     end_property = _string(config, "end_property")
     start_ref = property_access("n", start_property)
     end_ref = property_access("n", end_property)
-    query = _node_predicate_query(
+    queries = _node_predicate_queries(
         match=node_pattern("n", label),
         population=f"{start_ref} IS NOT NULL AND {end_ref} IS NOT NULL",
         violation=f"{end_ref} < {start_ref}",
@@ -603,8 +666,8 @@ def _compile_temporal_sanity(
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
     }
-    return ConformancePlan(
-        query=query,
+    return _split_evidence_plan(
+        queries,
         params=params,
         expected={"end_not_before_start": True},
         name=f"{label}.{end_property} is not before {start_property}",

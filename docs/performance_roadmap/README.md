@@ -136,3 +136,30 @@ Run the integration and performance commands specified by a brief in addition to
     safety-ceiling, and unrequested-work coverage;
   - verified the focused evaluator/property/runner suite with 118 passing tests and the full
     repository gate with 909 passing, 30 opt-in skips, and 91.34% coverage.
+- Implemented PR 07, measurement/evidence query separation:
+  - added compiled measurement queries, typed evidence conditions, optional bounded evidence
+    queries, and separate parameter contracts;
+  - executed conditional evidence through one explicit planner-verified read transaction so both
+    phases share a graph snapshot and the original monotonic deadline;
+  - migrated completeness plus the shared node, relationship, and degree helpers so passing checks
+    avoid evidence scans while failing checks execute one bounded evidence path;
+  - rewrote uniqueness evidence around an indexed duplicate-existence predicate, eliminating the
+    unbounded duplicate-node collection while retaining exact violation counts and deterministic
+    capped pointers;
+  - made evidence-query failures and malformed evidence results errored checks and added distinct
+    measurement/evidence telemetry roles;
+  - verified the focused core compiler/runner suite with 89 passing tests.
+- Implemented PR 08, sampling and concurrency tuning:
+  - removed the hub population-preflight round trip by computing exact population and selection in
+    one query snapshot;
+  - added a deterministic oversampling gate ahead of hub ordering and moved the PII gate to the
+    property-occurrence key so eligible occurrences have independent, auditable selection;
+  - preserved exact versus estimated result metadata, seed determinism/sensitivity, and added
+    many-seed distribution coverage;
+  - exposed positive concurrency through `graphcheck.yml` and `graphcheck run --concurrency`, with
+    documented CLI-over-project-over-engine precedence and a conservative default of one worker;
+  - matched the Neo4j connection pool to effective concurrency and set explicit connection,
+    acquisition, fetch-size, and retry settings;
+  - expanded the opt-in 10M benchmark to concurrency 1, 2, and 4 and verified the focused sampling,
+    runner, PII, project, connector, and CLI suite with 229 passing tests;
+  - verified the full repository gate with 926 passing, 32 opt-in skips, and 91.20% coverage.

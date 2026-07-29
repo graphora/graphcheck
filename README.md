@@ -235,16 +235,18 @@ inventory.
 
 ## Configuration reference
 
-`graphcheck.yml` has three strict fields:
+`graphcheck.yml` has four strict fields:
 
 ```yaml
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
+concurrency: 1
 ```
 
 Relative `checks` and `artifacts` paths are resolved from the project root. Suite discovery is
-recursive and includes `.yml` and `.yaml` files.
+recursive and includes `.yml` and `.yaml` files. `concurrency` is a positive worker limit; the
+default is `1`, and `graphcheck run --concurrency N` overrides the project value.
 
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 

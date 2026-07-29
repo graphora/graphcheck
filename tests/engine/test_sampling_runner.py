@@ -31,8 +31,6 @@ class Client:
 
     def run_read_result(self, query, params, *, timeout_s=None):
         self.calls.append((query, dict(params), timeout_s))
-        if len(self.calls) == 1:
-            return RichResult([{"population": self.population}], ("population",))
         return RichResult(
             [
                 {
@@ -102,9 +100,10 @@ def test_large_population_uses_policy_sample_and_emits_estimate_metadata():
     assert check.expected["sample_size"] == 3
     for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
         assert isinstance(check.params[name], int)
-    assert len(client.calls) == 2
-    assert client.calls[0][1] == {}
+    assert len(client.calls) == 1
+    assert client.calls[0][1]["sample_size"] == 3
     assert "(n:`Customer`)" in client.calls[0][0]
+    assert "_gc_gate_key" in client.calls[0][0]
 
 
 def test_population_inside_exhaustive_limit_is_exact_and_not_labeled_estimate():
@@ -115,8 +114,9 @@ def test_population_inside_exhaustive_limit_is_exact_and_not_labeled_estimate():
     check = results.checks[0]
     assert check.verdict is Verdict.PASS
     assert check.estimate is False
-    assert check.params["sample_size"] == 5
-    assert check.expected["sample_size"] == 5
+    assert check.params["sample_size"] == 3
+    assert check.params["exhaustive_limit"] == 10
+    assert check.expected["sample_size"] == 3
 
 
 def test_check_level_sample_size_overrides_global_exhaustive_decision():
@@ -130,6 +130,7 @@ def test_check_level_sample_size_overrides_global_exhaustive_decision():
     assert check.estimate is not False
     assert check.estimate.sample_size == 2
     assert check.params["sample_size"] == 2
+    assert check.params["exhaustive_limit"] == 2
 
 
 def test_check_level_sample_size_cannot_exceed_global_policy_cap():
@@ -145,7 +146,7 @@ def test_check_level_sample_size_cannot_exceed_global_policy_cap():
     assert check.estimate.sample_size == 3
     assert check.params["sample_size"] == 3
     assert check.expected["sample_size"] == 3
-    assert client.calls[1][1]["sample_size"] == 3
+    assert client.calls[0][1]["sample_size"] == 3
 
 
 def test_pack_default_sample_size_reduces_a_larger_global_policy_decision():
@@ -160,7 +161,7 @@ def test_pack_default_sample_size_reduces_a_larger_global_policy_decision():
     assert check.estimate is not False
     assert check.estimate.sample_size == 1000
     assert check.params["sample_size"] == 1000
-    assert client.calls[1][1]["sample_size"] == 1000
+    assert client.calls[0][1]["sample_size"] == 1000
 
 
 def test_same_graph_suite_and_seed_produce_the_same_query_hash():

@@ -78,18 +78,20 @@ def test_completeness_compiler_uses_native_escaped_schema_tokens_and_parameteriz
     assert "n.`tax_id}]`" in compiled.query
     assert "$label" not in compiled.query
     assert "$property" not in compiled.query
-    assert "$evidence_cap" in compiled.query
+    assert "$evidence_cap" not in compiled.query
+    assert "$evidence_cap" in compiled.evidence_query
     assert compiled.params == {
-        "evidence_cap": 7,
         "required_labels": [label],
         "required_relationship_types": [],
     }
+    assert compiled.evidence_params == {"evidence_cap": 7}
     assert compiled.expected == {"threshold": 0.875}
     assert compiled.expected == {"threshold": 0.875}
     assert "schema_ok" in compiled.query
     assert "violation_count" in compiled.query
     assert "coverage" in compiled.query
     assert "evidence" in compiled.query
+    assert "kind: 'node'" in compiled.evidence_query
     assert "MATCH (n:`Customer``) DELETE n //`)" in compiled.query
 
 

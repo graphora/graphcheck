@@ -30,9 +30,11 @@ The v0 project config is intentionally small:
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
+concurrency: 1
 ```
 
-Unknown keys are rejected when the config is loaded.
+Unknown keys and non-positive/non-integer concurrency values are rejected when the config is
+loaded. `graphcheck run --concurrency N` has precedence over the project value.
 
 ## `profiles.yml`
 
@@ -76,6 +78,7 @@ run_read_result_bounded(
     timeout_s: float | None = None,
     stop_when: Callable[[dict], bool] | None = None,
 )
+read_transaction(*, timeout_s: float | None = None)
 ```
 
 All sessions use Neo4j read access mode for routing. Driver access mode is not an access-control
@@ -90,6 +93,14 @@ privileges as defense in depth.
 timing. `observed_rows` is exact only when `complete` is true; otherwise it is a lower bound.
 Reaching `max_rows` while completeness is required raises `engine.result_limit_exceeded`. A
 caller-supplied `stop_when` may end an already-decisive read earlier.
+
+`read_transaction` yields the same planner-verified result interface over one explicit read
+transaction. Conditional measurement/evidence plans use it so both queries observe one graph
+snapshot and share the original monotonic deadline.
+
+The CLI sizes `max_connection_pool_size` to effective concurrency. The driver uses explicit
+10-second connection and acquisition timeouts, fetch size `1000`, and retry budget `0`; query
+timeouts continue to use the engine's shorter remaining deadline.
 
 Early termination never calls `Result.consume()`. Neo4j Python driver 6.2 consumes an outstanding
 auto-commit result during a normal `Session.close()`, so the adapter exits the session through its

@@ -39,6 +39,47 @@ def _is_explain(query):
     return str(getattr(query, "text", query)).startswith("EXPLAIN ")
 
 
+def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
+    captured = {}
+    driver = object()
+
+    def build(uri, **kwargs):
+        captured.update(uri=uri, **kwargs)
+        return driver
+
+    monkeypatch.setattr("graphcheck.neo4j_adapter.GraphDatabase.driver", build)
+    client = Neo4jClient(
+        ConnectionProfile(
+            uri="bolt://example",
+            user="neo4j",
+            password="secret",
+            database="neo4j",
+        ),
+        max_concurrency=4,
+    )
+
+    assert client._driver is driver
+    assert captured["max_connection_pool_size"] == 4
+    assert captured["connection_timeout"] == 10.0
+    assert captured["connection_acquisition_timeout"] == 10.0
+    assert captured["fetch_size"] == 1000
+    assert captured["max_transaction_retry_time"] == 0.0
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
+def test_driver_rejects_invalid_workload_concurrency(invalid):
+    with pytest.raises(ValueError, match="max_concurrency"):
+        Neo4jClient(
+            ConnectionProfile(
+                uri="bolt://example",
+                user="neo4j",
+                password="secret",
+                database="neo4j",
+            ),
+            max_concurrency=invalid,
+        )
+
+
 def test_plan_operator_searches_nested_driver_plan_objects():
     plan = Plan("ProduceResults", [Plan("NodeCountFromCountStore")])
 
@@ -796,6 +837,84 @@ def test_run_read_uses_read_access_mode(monkeypatch):
     assert client.run_read("RETURN 1") == []
     assert captured["default_access_mode"] == neo4j.READ_ACCESS
     assert captured["database"] == "neo4j"
+
+
+def test_read_transaction_runs_measurement_and_evidence_on_one_transaction(monkeypatch):
+    import neo4j
+
+    executed = []
+
+    class _Summary:
+        query_type = "r"
+        notifications = []
+
+    class _Result:
+        def __init__(self, rows=()):
+            self.rows = list(rows)
+
+        def __iter__(self):
+            return iter(self.rows)
+
+        def keys(self):
+            return ["value"]
+
+        def consume(self):
+            return _Summary()
+
+    class _Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            text = str(getattr(query, "text", query))
+            executed.append(text)
+            return (
+                _ReadPlanResult()
+                if text.startswith("EXPLAIN ")
+                else _Result([neo4j.Record([("value", len(executed))])])
+            )
+
+    transaction = _Transaction()
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def begin_transaction(self, *, timeout):
+            assert 0 < timeout <= 5
+            return transaction
+
+    class _Driver:
+        def session(self, **kwargs):
+            assert kwargs["default_access_mode"] == neo4j.READ_ACCESS
+            return _Session()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **k: _Driver())
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+
+    with client.read_transaction(timeout_s=5) as reader:
+        measurement = reader.run_read_result("RETURN 1 AS value /* measurement */")
+        evidence = reader.run_read_result("RETURN 2 AS value /* evidence */")
+
+    assert measurement.rows[0]["value"] == 2
+    assert evidence.rows[0]["value"] == 4
+    assert executed == [
+        "EXPLAIN RETURN 1 AS value /* measurement */",
+        "RETURN 1 AS value /* measurement */",
+        "EXPLAIN RETURN 2 AS value /* evidence */",
+        "RETURN 2 AS value /* evidence */",
+    ]
 
 
 def test_run_read_rejects_server_classified_write_before_execution(monkeypatch):
