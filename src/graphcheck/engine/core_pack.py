@@ -4,6 +4,12 @@ import math
 from textwrap import dedent
 
 from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.identifiers import (
+    cypher_identifier,
+    node_pattern,
+    property_access,
+    relationship_pattern,
+)
 from graphcheck.engine.sampling import (
     CYPHER_SAMPLE_MODULUS,
     cypher_hash_expression,
@@ -109,11 +115,15 @@ def _direction(config: dict[str, object], *, default: str = "any") -> str:
     return str(value)
 
 
-def _relationship_pattern(direction: str) -> str:
+def _relationship_path(
+    direction: str, *, relationship_type: str | None = None, other_label: str | None = None
+) -> str:
+    relationship = relationship_pattern("r", relationship_type)
+    other = node_pattern("other", other_label)
     return {
-        "out": "(n)-[r]->(other)",
-        "in": "(n)<-[r]-(other)",
-        "any": "(n)-[r]-(other)",
+        "out": f"(n)-{relationship}->{other}",
+        "in": f"(n)<-{relationship}-{other}",
+        "any": f"(n)-{relationship}-{other}",
     }[direction]
 
 
@@ -127,18 +137,18 @@ def _schema_params(
     }
 
 
-def _node_predicate_query(*, population: str, violation: str) -> str:
+def _node_predicate_query(*, match: str, population: str, violation: str) -> str:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
+          MATCH {match}
           WHERE {population}
           RETURN count(n) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
         CALL {{
-          MATCH (n)
+          MATCH {match}
           WHERE ({population}) AND ({violation})
           WITH n ORDER BY id(n) LIMIT $evidence_cap
           RETURN collect({_node_pointer("n")}) AS evidence
@@ -149,18 +159,18 @@ def _node_predicate_query(*, population: str, violation: str) -> str:
     ).strip()
 
 
-def _relationship_predicate_query(*, population: str, violation: str) -> str:
+def _relationship_predicate_query(*, match: str, population: str, violation: str) -> str:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (source)-[r]->(target)
+          MATCH {match}
           WHERE {population}
           RETURN count(r) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
         CALL {{
-          MATCH (source)-[r]->(target)
+          MATCH {match}
           WHERE ({population}) AND ({violation})
           WITH r ORDER BY id(r) LIMIT $evidence_cap
           RETURN collect({_rel_pointer("r")}) AS evidence
@@ -171,24 +181,20 @@ def _relationship_predicate_query(*, population: str, violation: str) -> str:
     ).strip()
 
 
-def _degree_query(*, pattern: str, source: str, relationship: str, violation: str) -> str:
+def _degree_query(*, node: str, pattern: str, violation: str) -> str:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE {source}
+          MATCH {node}
           OPTIONAL MATCH {pattern}
-          WHERE {relationship}
           WITH n, count(r) AS degree
           RETURN count(n) AS population,
                  sum(CASE WHEN {violation} THEN 1 ELSE 0 END) AS violation_count
         }}
         CALL {{
-          MATCH (n)
-          WHERE {source}
+          MATCH {node}
           OPTIONAL MATCH {pattern}
-          WHERE {relationship}
           WITH n, count(r) AS degree
           WHERE {violation}
           WITH n ORDER BY id(n) LIMIT $evidence_cap
@@ -211,9 +217,8 @@ def _compile_cardinality(
     direction = _direction(config, default="out")
     exactly = _integer(config, "exactly", default=1)
     query = _degree_query(
-        pattern=_relationship_pattern(direction),
-        source="$from_label IN labels(n)",
-        relationship="type(r) = $rel_type AND $to_label IN labels(other)",
+        node=node_pattern("n", from_label),
+        pattern=_relationship_path(direction, relationship_type=rel_type, other_label=to_label),
         violation="degree <> $exactly",
     )
     params = {
@@ -222,9 +227,6 @@ def _compile_cardinality(
             relationship_types=[rel_type],
             evidence_cap=evidence_cap,
         ),
-        "from_label": from_label,
-        "rel_type": rel_type,
-        "to_label": to_label,
         "exactly": exactly,
     }
     return ConformancePlan(
@@ -244,9 +246,8 @@ def _compile_no_orphans(
     rel_type = _optional_string(config, "rel_type")
     direction = _direction(config)
     query = _degree_query(
-        pattern=_relationship_pattern(direction),
-        source="$label IN labels(n)",
-        relationship="$rel_type IS NULL OR type(r) = $rel_type",
+        node=node_pattern("n", label),
+        pattern=_relationship_path(direction, relationship_type=rel_type),
         violation="degree = 0",
     )
     params = {
@@ -255,8 +256,6 @@ def _compile_no_orphans(
             relationship_types=[rel_type] if rel_type is not None else [],
             evidence_cap=evidence_cap,
         ),
-        "label": label,
-        "rel_type": rel_type,
     }
     return ConformancePlan(
         query=query,
@@ -282,26 +281,27 @@ def _compile_dangling_rels(
     )
 
 
-_TYPE_MATCH = """
+_TYPE_MATCH_TEMPLATE = """
 coalesce(
   CASE $expected_type
-    WHEN 'string' THEN toStringOrNull(n[$property]) = n[$property]
+    WHEN 'string' THEN toStringOrNull(__GC_PROPERTY__) = __GC_PROPERTY__
     WHEN 'integer' THEN
-      toIntegerOrNull(n[$property]) = n[$property]
-      AND toStringOrNull(n[$property]) =~ '^-?[0-9]+$'
+      toIntegerOrNull(__GC_PROPERTY__) = __GC_PROPERTY__
+      AND toStringOrNull(__GC_PROPERTY__) =~ '^-?[0-9]+$'
     WHEN 'float' THEN
-      toFloatOrNull(n[$property]) = n[$property]
+      toFloatOrNull(__GC_PROPERTY__) = __GC_PROPERTY__
       AND NOT (
-        toIntegerOrNull(n[$property]) = n[$property]
-        AND toStringOrNull(n[$property]) = toStringOrNull(toIntegerOrNull(n[$property]))
+        toIntegerOrNull(__GC_PROPERTY__) = __GC_PROPERTY__
+        AND toStringOrNull(__GC_PROPERTY__) =
+          toStringOrNull(toIntegerOrNull(__GC_PROPERTY__))
       )
-    WHEN 'boolean' THEN toBooleanOrNull(n[$property]) = n[$property]
+    WHEN 'boolean' THEN toBooleanOrNull(__GC_PROPERTY__) = __GC_PROPERTY__
     WHEN 'date' THEN
-      NOT (toStringOrNull(n[$property]) = n[$property])
-      AND toStringOrNull(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}$'
+      NOT (toStringOrNull(__GC_PROPERTY__) = __GC_PROPERTY__)
+      AND toStringOrNull(__GC_PROPERTY__) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}$'
     WHEN 'datetime' THEN
-      NOT (toStringOrNull(n[$property]) = n[$property])
-      AND toStringOrNull(n[$property]) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}T.*$'
+      NOT (toStringOrNull(__GC_PROPERTY__) = __GC_PROPERTY__)
+      AND toStringOrNull(__GC_PROPERTY__) =~ '^-?[0-9]{4,}-[0-9]{2}-[0-9]{2}T.*$'
     ELSE false
   END,
   false
@@ -317,14 +317,14 @@ def _compile_property_type(
     label = _string(config, "label")
     property_name = _string(config, "property")
     expected_type = _string(config, "type")
+    property_ref = property_access("n", property_name)
     query = _node_predicate_query(
-        population="$label IN labels(n) AND n[$property] IS NOT NULL",
-        violation=f"NOT ({_TYPE_MATCH})",
+        match=node_pattern("n", label),
+        population=f"{property_ref} IS NOT NULL",
+        violation=f"NOT ({_TYPE_MATCH_TEMPLATE.replace('__GC_PROPERTY__', property_ref)})",
     )
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
-        "label": label,
-        "property": property_name,
         "expected_type": expected_type,
     }
     return ConformancePlan(
@@ -343,17 +343,17 @@ def _compile_property_format(
     label = _string(config, "label")
     property_name = _string(config, "property")
     regex = _string(config, "regex")
+    property_ref = property_access("n", property_name)
     query = _node_predicate_query(
-        population="$label IN labels(n) AND n[$property] IS NOT NULL",
+        match=node_pattern("n", label),
+        population=f"{property_ref} IS NOT NULL",
         violation=(
-            "NOT coalesce(toStringOrNull(n[$property]) = n[$property] "
-            "AND toStringOrNull(n[$property]) =~ $regex, false)"
+            f"NOT coalesce(toStringOrNull({property_ref}) = {property_ref} "
+            f"AND toStringOrNull({property_ref}) =~ $regex, false)"
         ),
     )
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
-        "label": label,
-        "property": property_name,
         "regex": regex,
     }
     return ConformancePlan(
@@ -378,14 +378,14 @@ def _compile_value_in_set(
             "Set `with.values` to the finite set accepted by this property.",
         )
     normalized_values = list(values)
+    property_ref = property_access("n", property_name)
     query = _node_predicate_query(
-        population="$label IN labels(n) AND n[$property] IS NOT NULL",
-        violation="NOT n[$property] IN $values",
+        match=node_pattern("n", label),
+        population=f"{property_ref} IS NOT NULL",
+        violation=f"NOT {property_ref} IN $values",
     )
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
-        "label": label,
-        "property": property_name,
         "values": normalized_values,
     }
     return ConformancePlan(
@@ -403,25 +403,27 @@ def _compile_uniqueness(
     del sample_seed
     label = _string(config, "label")
     property_name = _string(config, "property")
+    node = node_pattern("n", label)
+    property_ref = property_access("n", property_name)
     query = dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n) AND n[$property] IS NOT NULL
+          MATCH {node}
+          WHERE {property_ref} IS NOT NULL
           RETURN count(n) AS population
         }}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n) AND n[$property] IS NOT NULL
-          WITH n[$property] AS value, count(n) AS frequency
+          MATCH {node}
+          WHERE {property_ref} IS NOT NULL
+          WITH {property_ref} AS value, count(n) AS frequency
           WHERE frequency > 1
           RETURN coalesce(sum(frequency), 0) AS violation_count
         }}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n) AND n[$property] IS NOT NULL
-          WITH n[$property] AS value, collect(n) AS duplicate_nodes
+          MATCH {node}
+          WHERE {property_ref} IS NOT NULL
+          WITH {property_ref} AS value, collect(n) AS duplicate_nodes
           WHERE size(duplicate_nodes) > 1
           UNWIND duplicate_nodes AS n
           WITH n ORDER BY id(n) LIMIT $evidence_cap
@@ -433,8 +435,6 @@ def _compile_uniqueness(
     ).strip()
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
-        "label": label,
-        "property": property_name,
     }
     return ConformancePlan(
         query=query,
@@ -462,27 +462,24 @@ def _compile_hub_outlier(
             "Hub sample_seed must be a non-negative integer.",
             "Use the C1 sampling policy to derive a deterministic check seed.",
         )
-    pattern = _relationship_pattern(direction)
-    relationship = "$rel_type IS NULL OR type(r) = $rel_type"
+    node = node_pattern("n", label)
+    pattern = _relationship_path(direction, relationship_type=rel_type)
     hash_params = cypher_hash_parameters(sample_seed)
     hash_expression = cypher_hash_expression("_gc_sample_input")
     query = dedent(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n)
+          MATCH {node}
           RETURN count(n) AS population
         }}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n)
+          MATCH {node}
           WITH n, id(n) % {CYPHER_SAMPLE_MODULUS} AS _gc_sample_input
           WITH n, {hash_expression} AS _gc_sample_key
           ORDER BY _gc_sample_key, id(n)
           LIMIT $sample_size
           OPTIONAL MATCH {pattern}
-          WHERE {relationship}
           WITH n, count(r) AS degree
           WITH collect({{node: n, degree: degree}}) AS sampled_nodes,
                coalesce(avg(toFloat(degree)), 0.0) AS mean_degree,
@@ -511,8 +508,6 @@ def _compile_hub_outlier(
             relationship_types=[rel_type] if rel_type is not None else [],
             evidence_cap=evidence_cap,
         ),
-        "label": label,
-        "rel_type": rel_type,
         "z_threshold": z_threshold,
         "sample_size": requested_sample_size,
         **hash_params,
@@ -523,8 +518,8 @@ def _compile_hub_outlier(
         expected={"z_threshold": z_threshold, "sample_size": requested_sample_size},
         name=f"{label} relationship degree stays within {z_threshold:g} standard deviations",
         sampled=True,
-        population_query=("MATCH (n) WHERE $label IN labels(n) RETURN count(n) AS population"),
-        population_params={"label": label},
+        population_query=f"MATCH {node} RETURN count(n) AS population",
+        population_params={},
     )
 
 
@@ -535,16 +530,17 @@ def _compile_label_cooccurrence(
     del sample_seed
     label_a = _string(config, "label_a")
     label_b = _string(config, "label_b")
+    label_a_predicate = f"n:{cypher_identifier(label_a)}"
+    label_b_predicate = f"n:{cypher_identifier(label_b)}"
     query = _node_predicate_query(
-        population="$label_a IN labels(n) OR $label_b IN labels(n)",
-        violation="$label_a IN labels(n) AND $label_b IN labels(n)",
+        match=node_pattern("n"),
+        population=f"{label_a_predicate} OR {label_b_predicate}",
+        violation=f"{label_a_predicate} AND {label_b_predicate}",
     )
     params = {
         **_schema_params(
             labels=[label_a, label_b], relationship_types=[], evidence_cap=evidence_cap
         ),
-        "label_a": label_a,
-        "label_b": label_b,
     }
     return ConformancePlan(
         query=query,
@@ -562,24 +558,24 @@ def _compile_rel_direction(
     from_label = _string(config, "from_label")
     rel_type = _string(config, "rel_type")
     to_label = _string(config, "to_label")
-    population = """
-type(r) = $rel_type
-AND (
-  ($from_label IN labels(source) AND $to_label IN labels(target))
-  OR ($to_label IN labels(source) AND $from_label IN labels(target))
-)
-""".strip()
-    violation = "$to_label IN labels(source) AND $from_label IN labels(target)"
-    query = _relationship_predicate_query(population=population, violation=violation)
+    from_token = cypher_identifier(from_label)
+    to_token = cypher_identifier(to_label)
+    population = (
+        f"(source:{from_token} AND target:{to_token}) "
+        f"OR (source:{to_token} AND target:{from_token})"
+    )
+    violation = f"source:{to_token} AND target:{from_token}"
+    query = _relationship_predicate_query(
+        match=f"(source)-{relationship_pattern('r', rel_type)}->(target)",
+        population=population,
+        violation=violation,
+    )
     params = {
         **_schema_params(
             labels=[from_label, to_label],
             relationship_types=[rel_type],
             evidence_cap=evidence_cap,
         ),
-        "from_label": from_label,
-        "rel_type": rel_type,
-        "to_label": to_label,
     }
     return ConformancePlan(
         query=query,
@@ -597,18 +593,15 @@ def _compile_temporal_sanity(
     label = _string(config, "label")
     start_property = _string(config, "start_property")
     end_property = _string(config, "end_property")
+    start_ref = property_access("n", start_property)
+    end_ref = property_access("n", end_property)
     query = _node_predicate_query(
-        population=(
-            "$label IN labels(n) AND n[$start_property] IS NOT NULL "
-            "AND n[$end_property] IS NOT NULL"
-        ),
-        violation="n[$end_property] < n[$start_property]",
+        match=node_pattern("n", label),
+        population=f"{start_ref} IS NOT NULL AND {end_ref} IS NOT NULL",
+        violation=f"{end_ref} < {start_ref}",
     )
     params = {
         **_schema_params(labels=[label], relationship_types=[], evidence_cap=evidence_cap),
-        "label": label,
-        "start_property": start_property,
-        "end_property": end_property,
     }
     return ConformancePlan(
         query=query,

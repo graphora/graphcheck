@@ -3,6 +3,7 @@ from __future__ import annotations
 from textwrap import dedent
 
 from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.identifiers import node_pattern, property_access
 from graphcheck.engine.sampling import (
     CYPHER_SAMPLE_MODULUS,
     cypher_hash_expression,
@@ -45,23 +46,43 @@ def _node_pointer(variable: str) -> str:
     return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
 
 
-def _candidate_query(*, strings_only: bool) -> str:
+def _candidate_query(*, strings_only: bool, label: str | None, properties: list[str]) -> str:
+    node = node_pattern("n", label)
+    configured_rows = (
+        "["
+        + ", ".join(
+            f"{{property: $properties[{index}], raw: {property_access('n', property_name)}}}"
+            for index, property_name in enumerate(properties)
+        )
+        + "]"
+        if properties
+        else None
+    )
+    population_unwind = (
+        f"UNWIND {configured_rows} AS occurrence\n"
+        "        WITH occurrence.property AS property, occurrence.raw AS raw"
+        if configured_rows
+        else "UNWIND keys(n) AS property\n        WITH property, n[property] AS raw"
+    )
+    candidate_unwind = (
+        f"UNWIND {configured_rows} AS occurrence\n"
+        "          WITH n, occurrence.property AS property, occurrence.raw AS raw"
+        if configured_rows
+        else "UNWIND keys(n) AS property\n          WITH n, property, n[property] AS raw"
+    )
     string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     value_projection = ", value: raw" if strings_only else ""
     population_query = (
-        """
-        MATCH (n)
-        WHERE $label IS NULL OR $label IN labels(n)
-        UNWIND CASE WHEN $properties = [] THEN keys(n) ELSE $properties END AS property
-        WITH property, n[property] AS raw
+        f"""
+        MATCH {node}
+        {population_unwind}
         WHERE raw IS NOT NULL
           AND toStringOrNull(raw) = raw
         RETURN count(*) AS population
         """
         if strings_only
-        else """
-        MATCH (n)
-        WHERE $label IS NULL OR $label IN labels(n)
+        else f"""
+        MATCH {node}
         RETURN coalesce(sum(size(keys(n))), 0) AS population
         """
     )
@@ -80,8 +101,7 @@ def _candidate_query(*, strings_only: bool) -> str:
           WITH population
           WITH population
           WHERE population > 0
-          MATCH (n)
-          WHERE $label IS NULL OR $label IN labels(n)
+          MATCH {node}
           WITH population, n, {gate_hash_expression} AS _gc_gate_key
           WHERE population <= $sample_size * $sample_gate_multiplier
              OR _gc_gate_key < toInteger(ceil(
@@ -90,8 +110,7 @@ def _candidate_query(*, strings_only: bool) -> str:
                   * toFloat($sample_gate_multiplier)
                   / toFloat(population)
                 ))
-          UNWIND CASE WHEN $properties = [] THEN keys(n) ELSE $properties END AS property
-          WITH n, property, n[property] AS raw
+          {candidate_unwind}
           WHERE raw IS NOT NULL
             {string_predicate}
           WITH n, property, raw ORDER BY id(n), property
@@ -128,11 +147,7 @@ def _common_config(
     properties: list[str],
     required_properties: list[str] | None = None,
 ) -> dict[str, object]:
-    label = config.get("label")
-    if label is not None and (not isinstance(label, str) or not label.strip()):
-        raise _invalid("PII label must be a non-blank string when supplied.")
-    if label is not None:
-        label = label.strip()
+    label = _configured_label(config)
     requested_sample_size = config.get("sample_size")
     if requested_sample_size is None:
         requested_sample_size = _DEFAULT_SAMPLE_SIZE
@@ -150,8 +165,7 @@ def _common_config(
         for name, value in cypher_hash_parameters(sample_seed + 1).items()
     }
     params = {
-        "label": label,
-        "properties": properties,
+        **({"properties": properties} if properties else {}),
         "sample_size": requested_sample_size,
         "sample_gate_multiplier": _SAMPLE_GATE_MULTIPLIER,
         **hash_params,
@@ -162,6 +176,13 @@ def _common_config(
     }
     del evidence_cap
     return params
+
+
+def _configured_label(config: dict[str, object]) -> str | None:
+    label = config.get("label")
+    if label is not None and (not isinstance(label, str) or not label.strip()):
+        raise _invalid("PII label must be a non-blank string when supplied.")
+    return label.strip() if isinstance(label, str) else None
 
 
 @register_conformance_compiler("pii_name_match")
@@ -181,7 +202,11 @@ def _compile_pii_name_match(
         properties=[],
     )
     return ConformancePlan(
-        query=_candidate_query(strings_only=False),
+        query=_candidate_query(
+            strings_only=False,
+            label=_configured_label(config),
+            properties=[],
+        ),
         params=params,
         expected={
             "confidence": metadata.name_match.confidence,
@@ -226,7 +251,11 @@ def _compile_pii_value_match(
         required_properties=properties,
     )
     return ConformancePlan(
-        query=_candidate_query(strings_only=True),
+        query=_candidate_query(
+            strings_only=True,
+            label=_configured_label(config),
+            properties=properties,
+        ),
         params=params,
         expected={
             "confidence": metadata.value_match.confidence,

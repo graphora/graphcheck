@@ -206,8 +206,9 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     check = results.checks[0]
     assert check.verdict is Verdict.PASS
     assert check.started_at == "2026-07-13T10:00:01Z"
-    assert check.compiled_query and "$label" in check.compiled_query
-    assert check.params["label"] == "Customer"
+    assert check.compiled_query and "(n:`Customer`)" in check.compiled_query
+    assert check.params["required_labels"] == ["Customer"]
+    assert "label" not in check.params
     assert check.measured == {
         "coverage": 1.0,
         "population": 2,

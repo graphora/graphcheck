@@ -10,7 +10,7 @@ from graphcheck.contracts.check import (
     LoadedCheck,
 )
 from graphcheck.contracts.results import Pattern, Severity
-from graphcheck.engine.compiler import CypherCompiler
+from graphcheck.engine.compiler import CypherCompiler, _parameter_names
 from graphcheck.errors import GraphCheckError
 
 
@@ -66,7 +66,7 @@ def _drift(metric: str, target: dict[str, object]) -> LoadedCheck:
     return _loaded(spec, Pattern.DRIFT)
 
 
-def test_completeness_compiler_parameterizes_dynamic_schema_tokens_and_evidence_cap():
+def test_completeness_compiler_uses_native_escaped_schema_tokens_and_parameterized_cap():
     label = "Customer`) DELETE n //"
     property_name = "tax_id}]"
 
@@ -74,14 +74,12 @@ def test_completeness_compiler_parameterizes_dynamic_schema_tokens_and_evidence_
         _completeness({"label": label, "property": property_name, "threshold": 0.875})
     )
 
-    assert label not in compiled.query
-    assert property_name not in compiled.query
-    assert "$label" in compiled.query
-    assert "n[$property]" in compiled.query
+    assert "(n:`Customer``) DELETE n //`)" in compiled.query
+    assert "n.`tax_id}]`" in compiled.query
+    assert "$label" not in compiled.query
+    assert "$property" not in compiled.query
     assert "$evidence_cap" in compiled.query
     assert compiled.params == {
-        "label": label,
-        "property": property_name,
         "evidence_cap": 7,
         "required_labels": [label],
         "required_relationship_types": [],
@@ -92,7 +90,7 @@ def test_completeness_compiler_parameterizes_dynamic_schema_tokens_and_evidence_
     assert "violation_count" in compiled.query
     assert "coverage" in compiled.query
     assert "evidence" in compiled.query
-    assert not re.search(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP)\b", compiled.query)
+    assert "MATCH (n:`Customer``) DELETE n //`)" in compiled.query
 
 
 @pytest.mark.parametrize("threshold", [-0.01, 1.01])
@@ -156,44 +154,26 @@ def test_competency_compiler_reports_every_missing_parameter_in_stable_order():
         (
             "node_count",
             {"label": "Customer"},
-            {
-                "label": "Customer",
-                "required_labels": ["Customer"],
-                "required_relationship_types": [],
-            },
-            ("$label",),
+            {"required_labels": ["Customer"], "required_relationship_types": []},
+            ("(n:`Customer`)",),
         ),
         (
             "relationship_count",
             {"type": "CONTROLS"},
-            {
-                "relationship_type": "CONTROLS",
-                "required_labels": [],
-                "required_relationship_types": ["CONTROLS"],
-            },
-            ("$relationship_type",),
+            {"required_labels": [], "required_relationship_types": ["CONTROLS"]},
+            ("[r:`CONTROLS`]",),
         ),
         (
             "property_coverage",
             {"label": "Customer", "property": "tax_id"},
-            {
-                "label": "Customer",
-                "property": "tax_id",
-                "required_labels": ["Customer"],
-                "required_relationship_types": [],
-            },
-            ("$label", "$property"),
+            {"required_labels": ["Customer"], "required_relationship_types": []},
+            ("(element:`Customer`)", "element.`tax_id`"),
         ),
         (
             "property_coverage",
             {"type": "CONTROLS", "property": "since"},
-            {
-                "relationship_type": "CONTROLS",
-                "property": "since",
-                "required_labels": [],
-                "required_relationship_types": ["CONTROLS"],
-            },
-            ("$relationship_type", "$property"),
+            {"required_labels": [], "required_relationship_types": ["CONTROLS"]},
+            ("[element:`CONTROLS`]", "element.`since`"),
         ),
     ],
 )
@@ -202,13 +182,13 @@ def test_drift_compilers_emit_parameterized_schema_checked_queries(
 ):
     compiled = CypherCompiler(evidence_cap=9).compile(_drift(metric, target))
 
-    for value in target.values():
-        assert value not in compiled.query
-    for placeholder in placeholders:
-        assert placeholder in compiled.query
+    for fragment in placeholders:
+        assert fragment in compiled.query
     for key, value in bindings.items():
         assert compiled.params[key] == value
-    assert compiled.params["evidence_cap"] == 9
+    assert _parameter_names(compiled.query) == compiled.params.keys()
+    if metric == "property_coverage":
+        assert compiled.params["evidence_cap"] == 9
     assert compiled.expected == {
         "baseline": "release-42",
         "tolerance": {"max_change_pct": 5},

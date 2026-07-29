@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_representative_pre_optimization_plans_are_extractable(neo4j_profile, tmp_path):
+def test_representative_native_token_plans_are_extractable(neo4j_profile, tmp_path):
     suite = load_suite(
         yaml.safe_dump(
             {
@@ -84,6 +84,12 @@ def test_representative_pre_optimization_plans_are_extractable(neo4j_profile, tm
             operators = walk_plan(plan)
             assert operators
             assert all(operator["operator"] != "unknown" for operator in operators)
+            operator_names = {operator["operator"] for operator in operators}
+            if check.id == "label-count":
+                assert "AllNodesScan" not in operator_names
+                assert "NodeCountFromCountStore" in operator_names
+            if check.id == "relationship-count":
+                assert "RelationshipCountFromCountStore" in operator_names
             records.append(
                 BenchmarkRecord.from_samples(
                     f"plan-{check.id}",

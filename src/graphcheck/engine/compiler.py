@@ -11,6 +11,7 @@ from graphcheck.contracts.check import (
     LoadedCheck,
 )
 from graphcheck.contracts.results import Pattern
+from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 
@@ -119,6 +120,8 @@ def _compile_completeness(
         )
     label = label_value.strip()
     property_name = property_value.strip()
+    node = node_pattern("n", label)
+    property_ref = property_access("n", property_name)
     threshold = float(config.get("threshold", 1.0))
     if not 0.0 <= threshold <= 1.0:
         raise GraphCheckError(
@@ -131,17 +134,16 @@ def _compile_completeness(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n)
+          MATCH {node}
           RETURN count(n) AS population,
-                 sum(CASE WHEN n[$property] IS NOT NULL THEN 1 ELSE 0 END)
+                 sum(CASE WHEN {property_ref} IS NOT NULL THEN 1 ELSE 0 END)
                    AS conforming_count,
-                 sum(CASE WHEN n[$property] IS NULL THEN 1 ELSE 0 END)
+                 sum(CASE WHEN {property_ref} IS NULL THEN 1 ELSE 0 END)
                    AS violation_count
         }}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n) AND n[$property] IS NULL
+          MATCH {node}
+          WHERE {property_ref} IS NULL
           WITH n ORDER BY id(n) LIMIT $evidence_cap
           RETURN collect({_node_pointer("n")}) AS evidence
         }}
@@ -157,8 +159,6 @@ def _compile_completeness(
     return ConformancePlan(
         query=query,
         params={
-            "label": label,
-            "property": property_name,
             "evidence_cap": evidence_cap,
             "required_labels": [label],
             "required_relationship_types": [],
@@ -354,21 +354,18 @@ class CypherCompiler:
         if label is not None and (not isinstance(label, str) or not label.strip()):
             raise _bad_target(spec.metric, "target.label must be a non-blank string")
         required_labels = [label] if label is not None else []
-        predicate = "WHERE $label IN labels(n)" if label is not None else ""
+        match = node_pattern("n", label)
         query = dedent(
             f"""
             {_SCHEMA_CATALOG}
             CALL {{
-              MATCH (n)
-              {predicate}
+              MATCH {match}
               RETURN count(n) AS current
             }}
             RETURN {_SCHEMA_PROJECTION}, current, current AS population, [] AS evidence
             """
         ).strip()
         return query, {
-            **({"label": label} if label is not None else {}),
-            "evidence_cap": self.evidence_cap,
             "required_labels": required_labels,
             "required_relationship_types": [],
         }
@@ -381,21 +378,18 @@ class CypherCompiler:
         if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
             raise _bad_target(spec.metric, "target.type must be a non-blank string")
         required_types = [rel_type] if rel_type is not None else []
-        predicate = "WHERE type(r) = $relationship_type" if rel_type is not None else ""
+        relationship = relationship_pattern("r", rel_type)
         query = dedent(
             f"""
             {_SCHEMA_CATALOG}
             CALL {{
-              MATCH ()-[r]->()
-              {predicate}
+              MATCH ()-{relationship}->()
               RETURN count(r) AS current
             }}
             RETURN {_SCHEMA_PROJECTION}, current, current AS population, [] AS evidence
             """
         ).strip()
         return query, {
-            **({"relationship_type": rel_type} if rel_type is not None else {}),
-            "evidence_cap": self.evidence_cap,
             "required_labels": [],
             "required_relationship_types": required_types,
         }
@@ -414,24 +408,18 @@ class CypherCompiler:
         if label is not None:
             if not isinstance(label, str) or not label.strip():
                 raise _bad_target(spec.metric, "target.label must be a non-blank string")
-            match = "MATCH (element)\n              WHERE $label IN labels(element)"
-            missing = (
-                "MATCH (element)\n"
-                "              WHERE $label IN labels(element) "
-                "AND element[$property] IS NULL"
-            )
+            match = f"MATCH {node_pattern('element', label)}"
+            property_ref = property_access("element", property_name)
+            missing = f"{match}\n              WHERE {property_ref} IS NULL"
             pointer = _node_pointer("element")
             required_labels = [label]
             required_types: list[object] = []
         else:
             if not isinstance(rel_type, str) or not rel_type.strip():
                 raise _bad_target(spec.metric, "target.type must be a non-blank string")
-            match = "MATCH ()-[element]->()\n              WHERE type(element) = $relationship_type"
-            missing = (
-                "MATCH ()-[element]->()\n"
-                "              WHERE type(element) = $relationship_type "
-                "AND element[$property] IS NULL"
-            )
+            match = f"MATCH ()-{relationship_pattern('element', rel_type)}->()"
+            property_ref = property_access("element", property_name)
+            missing = f"{match}\n              WHERE {property_ref} IS NULL"
             pointer = _rel_pointer("element")
             required_labels = []
             required_types = [rel_type]
@@ -441,7 +429,7 @@ class CypherCompiler:
             CALL {{
               {match}
               RETURN count(element) AS population,
-                     count(element[$property]) AS present
+                     count({property_ref}) AS present
             }}
             CALL {{
               {missing}
@@ -455,9 +443,6 @@ class CypherCompiler:
             """
         ).strip()
         return query, {
-            "label": label,
-            "relationship_type": rel_type,
-            "property": property_name,
             "evidence_cap": self.evidence_cap,
             "required_labels": required_labels,
             "required_relationship_types": required_types,

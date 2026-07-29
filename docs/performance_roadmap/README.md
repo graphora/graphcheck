@@ -88,3 +88,24 @@ Run the integration and performance commands specified by a brief in addition to
     measurement-only policy in `docs/performance.md`;
   - verified the local performance suite with 6 passing tests and the live-only 10M case skipped;
     live Neo4j plan cases remain opt-in through `GRAPHCHECK_NEO4J_INTEGRATION=1`.
+- Implemented PR 03, native Cypher identifier foundations:
+  - added one shared identifier validator/escaper plus typed node, relationship, and property
+    fragments;
+  - rejected blank and control-containing identifiers while preserving spaces, Unicode, reserved
+    words, punctuation, and embedded backticks as single escaped tokens;
+  - migrated completeness and drift count/property-coverage queries to planner-visible schema
+    tokens while retaining separate required-schema diagnostic metadata;
+  - removed obsolete schema-token parameters and added injection-shaped, Unicode, reserved-word,
+    backtick, query-shape, and parameter-contract coverage;
+  - verified the focused identifier/compiler/runner suite with 75 passing tests.
+- Implemented PR 04, built-in native-token query migration:
+  - migrated core conformance labels, relationship types, and property accesses to native escaped
+    tokens without interpolating regexes, allowed values, thresholds, sample controls, or IDs;
+  - compiled separate typed and generic variants for optional relationship types, eliminating
+    nullable runtime type predicates;
+  - specialized label-scoped PII scans and configured PII property lists while retaining dynamic
+    access only for graph-discovered property keys;
+  - migrated the fixed graph-token resolver, preserved missing-schema behavior, and updated the
+    frozen engine compilation contract;
+  - added native count-store/scan plan assertions to the opt-in Neo4j integration suite and
+    verified the engine/pack suite with 374 passing tests.

@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from graphcheck.engine.identifiers import node_pattern, property_access
 from graphcheck.errors import GraphCheckError
 
 
@@ -23,12 +24,16 @@ class GraphTokenResolver:
                 f"Unknown graph-relative parameter token {token!r}.",
                 "Use a supported token or replace it with a pinned literal value.",
             )
+        customer = node_pattern("n", "Customer")
+        customer_id = property_access("n", "id")
+        active = property_access("n", "active")
+        status = property_access("n", "status")
         query = (
-            "MATCH (n) "
-            "WHERE 'Customer' IN labels(n) AND n.id IS NOT NULL "
-            "AND coalesce(n.active = true, "
-            "             toLower(toString(n.status)) = 'active', true) "
-            "RETURN n.id AS value ORDER BY toString(n.id) LIMIT 1"
+            f"MATCH {customer} "
+            f"WHERE {customer_id} IS NOT NULL "
+            f"AND coalesce({active} = true, "
+            f"             toLower(toString({status})) = 'active', true) "
+            f"RETURN {customer_id} AS value ORDER BY toString({customer_id}) LIMIT 1"
         )
         rows = _run_rows(client, query, timeout_s=timeout_s)
         if not rows or rows[0].get("value") is None:

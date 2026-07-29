@@ -145,6 +145,28 @@ def test_pii_query_sampling_order_is_seeded_and_deterministic(check):
     assert "$sample_population AS population" not in first.query
 
 
+@pytest.mark.parametrize("check", ["pii_name_match", "pii_value_match"])
+def test_label_scoped_pii_uses_a_native_label_and_no_obsolete_label_parameter(check):
+    compiled = _compiled(check, {"label": "Customer`Archive"})
+
+    assert "MATCH (n:`Customer``Archive`)" in compiled.query
+    assert "$label" not in compiled.query
+    assert "label" not in compiled.params
+    assert compiled.params["required_labels"] == ["Customer`Archive"]
+
+
+def test_configured_pii_properties_use_native_access_while_names_remain_values():
+    compiled = _compiled(
+        "pii_value_match",
+        {"properties": ["email address", "tax`id"]},
+    )
+
+    assert "n.`email address`" in compiled.query
+    assert "n.`tax``id`" in compiled.query
+    assert "n[property]" not in compiled.query
+    assert compiled.params["properties"] == ["email address", "tax`id"]
+
+
 def test_unknown_pii_pattern_fails_loudly_at_compilation():
     with pytest.raises(ValidationError):
         _compiled("pii_value_match", {"patterns": ["not-installed"]})

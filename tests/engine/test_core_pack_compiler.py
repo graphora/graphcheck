@@ -6,6 +6,7 @@ import yaml
 from graphcheck.contracts.check import ConformanceCheck, LoadedCheck, load_suite
 from graphcheck.contracts.results import Pattern, Severity
 from graphcheck.engine.compiler import CypherCompiler, _parameter_names
+from graphcheck.engine.identifiers import cypher_identifier
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.metadata import CORE_CHECK_NAMES
 
@@ -174,15 +175,23 @@ def test_core_compilers_are_read_only_parameterized_one_row_plans(name, config, 
     assert f"kind: '{evidence_kind}'" in compiled.query
     assert _parameter_names(compiled.query) == compiled.params.keys()
 
-    # Identifiers, regexes, enum values and pinned values stay in params. The property-type
-    # query contains every supported type branch, so equality across two compilations below
-    # proves that selecting a type does not interpolate it.
+    identifier_fields = {
+        "label",
+        "from_label",
+        "to_label",
+        "rel_type",
+        "property",
+        "start_property",
+        "end_property",
+        "label_a",
+        "label_b",
+    }
     for key, value in config.items():
-        if key in {"direction", "type"}:
-            continue
         values = value if isinstance(value, list) else [value]
         for item in values:
-            if isinstance(item, str):
+            if isinstance(item, str) and key in identifier_fields:
+                assert cypher_identifier(item) in compiled.query
+            elif isinstance(item, str) and key not in {"direction", "type"}:
                 assert item not in compiled.query
     assert compiled.expected
     assert compiled.name
@@ -206,25 +215,25 @@ def test_property_type_selection_is_a_parameter_not_a_query_fragment():
             "cardinality",
             {"from_label": "From", "rel_type": "REL", "to_label": "To", "exactly": 1},
             "out",
-            "(n)-[r]->(other)",
+            "(n)-[r:`REL`]->(other:`To`)",
         ),
         (
             "cardinality",
             {"from_label": "From", "rel_type": "REL", "to_label": "To", "exactly": 1},
             "in",
-            "(n)<-[r]-(other)",
+            "(n)<-[r:`REL`]-(other:`To`)",
         ),
         (
             "no_orphans",
             {"label": "Node", "rel_type": "REL"},
             "any",
-            "(n)-[r]-(other)",
+            "(n)-[r:`REL`]-(other)",
         ),
         (
             "hub_outlier",
             {"label": "Node", "rel_type": "REL", "z_threshold": 3.0, "sample_size": 10},
             "in",
-            "(n)<-[r]-(other)",
+            "(n)<-[r:`REL`]-(other)",
         ),
     ],
 )
@@ -282,8 +291,24 @@ def test_compiler_applies_pack_defaults_when_optional_values_are_normalized_to_n
         )
     )
 
-    assert "(n)-[r]->(other)" in cardinality.query
+    assert "(n)-[r:`REL`]->(other:`To`)" in cardinality.query
     assert hub.params["sample_size"] == 1000
+    assert "(n)-[r]-(other)" in hub.query
+    assert "$rel_type IS NULL" not in hub.query
+
+
+def test_optional_relationship_type_compiles_distinct_typed_and_generic_variants():
+    base = {"label": "Node", "direction": "out"}
+
+    typed = CypherCompiler().compile(_loaded("no_orphans", {**base, "rel_type": "HAS`ROLE"}))
+    generic = CypherCompiler().compile(_loaded("no_orphans", {**base, "rel_type": None}))
+
+    assert "(n)-[r:`HAS``ROLE`]->(other)" in typed.query
+    assert "(n)-[r]->(other)" in generic.query
+    assert typed.query != generic.query
+    assert "rel_type" not in typed.params
+    assert "rel_type" not in generic.params
+    assert "$rel_type IS NULL" not in typed.query
 
 
 def test_property_type_query_avoids_neo4j_5_only_type_introspection():

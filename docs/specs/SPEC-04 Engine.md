@@ -241,17 +241,24 @@ sampled
 population_query / population_params / sample_population
 ```
 
-`query` is the executable Cypher retained in `results.json`; it keeps `$parameter` placeholders.
-`params` holds literal values. `expected` is the normalized assertion rendered into SPEC-01.
-Sampling-only fields are null/false for exhaustive non-sampled checks.
+`query` is the executable Cypher retained in `results.json`; data values remain `$parameter`
+placeholders while validated schema identifiers are escaped into Cypher grammar positions.
+`params` holds referenced literal values and separate schema-diagnostic lists. `expected` is the
+normalized assertion rendered into SPEC-01. Sampling-only fields are null/false for exhaustive
+non-sampled checks.
 
 ### Parameter safety
 
-Built-in templates do not interpolate labels, relationship types, property names, regexes, allowed
-values, thresholds, or pinned values. Dynamic schema tokens are compared through expressions such
-as `$label IN labels(n)`, `type(r) = $relationship_type`, and `n[$property]`. The only syntax chosen
-by a conformance callback is relationship direction, selected from C3's closed
-`out | in | any` enum and mapped to fixed query fragments.
+Built-in templates compile validated labels, relationship types, and property names into native
+Cypher tokens so Neo4j's planner can see them. A shared helper rejects blank/control-containing
+identifiers and backtick-escapes each accepted identifier as one grammar token, including embedded
+backticks. Optional labels/types compile to distinct native-token and generic query variants.
+Schema names remain separately parameterized in required-schema lists for missing-schema
+diagnostics.
+
+Regexes, allowed values, thresholds, sample controls, IDs, and pinned values are never interpolated.
+Relationship direction is selected from C3's closed `out | in | any` enum and mapped to fixed query
+fragments. Customer-authored competency Cypher is not rewritten.
 
 Competency Cypher is customer-authored and preserved after surrounding whitespace is removed. The
 compiler lexically identifies `$name` parameters outside quoted strings, backtick identifiers, line

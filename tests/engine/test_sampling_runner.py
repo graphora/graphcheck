@@ -103,7 +103,8 @@ def test_large_population_uses_policy_sample_and_emits_estimate_metadata():
     for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
         assert isinstance(check.params[name], int)
     assert len(client.calls) == 2
-    assert client.calls[0][1] == {"label": "Customer"}
+    assert client.calls[0][1] == {}
+    assert "(n:`Customer`)" in client.calls[0][0]
 
 
 def test_population_inside_exhaustive_limit_is_exact_and_not_labeled_estimate():
