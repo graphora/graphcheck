@@ -1,0 +1,61 @@
+# GraphCheck implementation roadmap
+
+Status: proposed
+Prepared: 2026-07-29
+
+This directory breaks the audit roadmap into independently reviewable commit/PR briefs. Each brief
+contains its own purpose, boundaries, file-level implementation plan, tests, acceptance criteria,
+and rollback notes.
+
+## Version terminology
+
+Keep these version dimensions separate:
+
+| Component | Version line |
+| --- | --- |
+| Neo4j Server | `5.26` LTS and calendar versions such as `2025.x`/`2026.x` |
+| Neo4j Python driver | Driver `5.x`/`6.x` |
+| Cypher | Cypher 5 and Cypher 25 |
+
+## PR sequence
+
+| Order | PR brief | Category | Prerequisites |
+| --- | --- | --- | --- |
+| 1 | [Hermetic telemetry/profile tests](01-hermetic-telemetry-tests.md) | Correctness | None |
+| 2 | [Performance measurement foundation](02-performance-measurement-foundation.md) | Verification | None |
+| 3 | [Native Cypher identifier foundation](03-native-cypher-identifiers.md) | Neo4j performance | PR 2 preferred |
+| 4 | [Native-token query migration](04-native-token-query-migration.md) | Neo4j performance | PR 3 |
+| 5 | [Bounded Neo4j result API](05-bounded-result-api.md) | Memory/performance | PR 1 |
+| 6 | [Bounded competency evaluation and evidence](06-bounded-evaluation.md) | Memory/performance | PR 5 |
+| 7 | [Measurement/evidence query separation](07-measurement-evidence-separation.md) | Neo4j performance | PR 4 |
+| 8 | [Sampling and concurrency tuning](08-sampling-and-concurrency.md) | Neo4j performance | PRs 2, 4 |
+| 9 | [Remove runtime JSON Schema validation](09-remove-runtime-jsonschema.md) | CLI/dependencies | PR 1 |
+| 10 | [Lazy CLI and telemetry imports](10-lazy-cli-telemetry.md) | CLI startup | PRs 1, 2 |
+| 11 | [Remove the suite-manifest cache](11-remove-suite-manifest.md) | Simplification | None |
+| 12 | [Bounded per-client read-guard cache](12-read-guard-cache.md) | Connector | PR 1 |
+| 13 | [Reduce probe round trips](13-probe-round-trips.md) | Connector | PRs 2, 12 |
+| 14 | [Driver/server/Cypher compatibility matrix](14-neo4j-compatibility.md) | Compatibility | PR 3 preferred |
+| 15 | [Enforce performance regression gates](15-performance-regression-gates.md) | Verification | PRs 2–14 as applicable |
+
+The order is recommended, not a requirement for unrelated briefs. A PR with prerequisites should
+target a branch containing those prerequisites or wait until they merge.
+
+## Rules shared by every PR
+
+1. GraphCheck must not write to the inspected graph.
+2. Arbitrary user Cypher must retain server-side read classification.
+3. Values remain parameters; only validated schema identifiers may be escaped into query grammar.
+4. Missing schema, timeout, partial results, and query failures must never become passes.
+5. Frozen specs and committed schemas must change in the same PR as any contract change. SPEC-01 and SPEC-02 are frozen and cannot be changed.
+6. Every optimization needs a before/after plan, timing, allocation, or round-trip measurement.
+7. Every PR must be independently revertible.
+
+## Standard quality gate
+
+```console
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+```
+
+Run the integration and performance commands specified by a brief in addition to this gate.
