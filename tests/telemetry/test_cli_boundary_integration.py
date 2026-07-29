@@ -4,6 +4,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+import yaml
 
 from graphcheck import __version__
 from graphcheck import cli as cli_module
@@ -11,6 +12,9 @@ from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
 from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.errors import GraphCheckError
+from graphcheck.generation.proposals import RawProposal, RawProposalBatch
+from graphcheck.generation.service import GenerationService
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.writer import load_results
@@ -105,6 +109,29 @@ def _command_event(transport: RecordingTransport) -> dict[str, object]:
     return matches[0]
 
 
+def _generation_project(tmp_path: Path, monkeypatch, client) -> Path:
+    write_default_project(tmp_path)
+    config_path = tmp_path / "graphcheck.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["generate"] = {
+        "provider": "ollama",
+        "model": "private-model-name",
+        "base_url": "http://private-provider.invalid/v1",
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    baselines = tmp_path / ".graphcheck" / "baselines"
+    baselines.mkdir(parents=True)
+    (baselines / "20260724T120000.000000.json").write_bytes(
+        (FIXTURES / "baseline.json").read_bytes()
+    )
+    document = tmp_path / "private-domain-document.txt"
+    document.write_text("private document contents", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    service = GenerationService(client_factory=lambda config, key: client)
+    monkeypatch.setattr(cli_module, "generation_service_factory", lambda: service)
+    return document
+
+
 def test_parse_time_error_emits_user_error_at_true_cli_boundary(
     monkeypatch,
     recording_transport,
@@ -118,6 +145,103 @@ def test_parse_time_error_emits_user_error_at_true_cli_boundary(
     assert command["failure_stage"] == "config_load"
     assert command["telemetry_run_id"] is None
     assert "not-a-real-option" not in repr(command)
+
+
+def test_generate_success_is_instrumented_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    class Client:
+        def propose(self, request):
+            return RawProposalBatch(
+                candidates=[
+                    RawProposal(
+                        kind="conformance",
+                        spec={
+                            "id": "private-check-id",
+                            "check": "completeness",
+                            "with": {"label": "PrivateLabel", "property": "private_property"},
+                        },
+                    )
+                ]
+            )
+
+    document = _generation_project(tmp_path, monkeypatch, Client())
+
+    exit_code = _invoke_entrypoint(
+        monkeypatch,
+        "generate",
+        "--count",
+        "1",
+        "--docs",
+        str(document),
+        "--json",
+    )
+
+    assert exit_code == 0
+    command = _command_event(recording_transport)
+    assert command["command"] == "generate"
+    assert command["process_outcome"] == "success"
+    assert command["failure_stage"] is None
+    assert command["safe_error_code"] is None
+    assert command["output_mode"] == "json"
+    assert all(
+        secret not in repr(command)
+        for secret in (
+            "ollama",
+            "private-model-name",
+            "private-provider.invalid",
+            "private-domain-document",
+            "private document contents",
+            "PrivateLabel",
+            "private_property",
+            str(tmp_path),
+        )
+    )
+
+
+def test_generate_provider_failure_is_classified_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    class Client:
+        def propose(self, request):
+            raise GraphCheckError(
+                "generate.provider_auth_failed",
+                "The provider rejected authentication.",
+                "Verify the configured environment variable and provider account.",
+            )
+
+    document = _generation_project(tmp_path, monkeypatch, Client())
+
+    exit_code = _invoke_entrypoint(
+        monkeypatch,
+        "generate",
+        "--count",
+        "1",
+        "--docs",
+        str(document),
+    )
+
+    assert exit_code == 1
+    command = _command_event(recording_transport)
+    assert command["command"] == "generate"
+    assert command["process_outcome"] == "user_error"
+    assert command["failure_stage"] == "provider_request"
+    assert command["safe_error_code"] == "generate.provider_auth_failed"
+    assert all(
+        secret not in repr(command)
+        for secret in (
+            "ollama",
+            "private-model-name",
+            "private-provider.invalid",
+            "private-domain-document",
+            "private document contents",
+            str(tmp_path),
+        )
+    )
 
 
 def test_baseline_set_success_is_instrumented_at_true_cli_boundary(

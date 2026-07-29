@@ -537,6 +537,7 @@ def profile(
 
 
 @app.command()
+@_telemetry_command(CommandName.GENERATE)
 def generate(
     from_: Annotated[
         Path | None,
@@ -588,6 +589,12 @@ def generate(
             invocation_dir=Path.cwd(),
         )
     except GraphCheckError as exc:
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
         if json_output:
             typer.echo(
                 json.dumps(
@@ -1124,6 +1131,16 @@ def _cli_stage_for_error(code: str) -> CliFailureStage:
         return CliFailureStage.PROBE
     if code.startswith("report."):
         return CliFailureStage.REPORT_RENDER
+    if code.startswith("generate.baseline_"):
+        return CliFailureStage.BASELINE_LOAD
+    if code.startswith("generate.doc_"):
+        return CliFailureStage.DOCUMENT_LOAD
+    if code.startswith("generate.provider_"):
+        return CliFailureStage.PROVIDER_REQUEST
+    if code in {"generate.output_invalid", "generate.no_valid_candidates"}:
+        return CliFailureStage.GENERATION_VALIDATION
+    if code.startswith("generate.write_"):
+        return CliFailureStage.ARTIFACT_WRITE
     return CliFailureStage.CONFIG_LOAD
 
 
