@@ -33,6 +33,7 @@ def render_validated_html_report(
     model: Results,
     *,
     verdicts: Collection[Verdict] | None = None,
+    explorer_token: str | None = None,
 ) -> str:
     """Render a Results model already validated at an artifact boundary."""
 
@@ -52,6 +53,11 @@ def render_validated_html_report(
             "<head>",
             '<meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            (
+                f'<meta name="graphcheck-explorer-token" content="{_escape(explorer_token)}">'
+                if explorer_token is not None
+                else ""
+            ),
             f"<title>GraphCheck Dashboard - {_escape(model.run.id)}</title>",
             "<style>",
             _CSS,
@@ -62,6 +68,7 @@ def render_validated_html_report(
             '<main class="dashboard-body">',
             _banners(model),
             '<div class="dashboard-grid">',
+            _report_explorer(model),
             _status_overview(model, checks, filtered=verdicts is not None),
             _checks(checks),
             "</div>",
@@ -84,6 +91,68 @@ def write_html_report(
 ) -> Path:
     path.write_text(render_html_report(results, verdicts=verdicts), encoding="utf-8")
     return path
+
+
+def _report_explorer(results: Results) -> str:
+    return (
+        '<aside id="report-explorer" class="card panel-section report-explorer" '
+        f'data-current-report="{_escape(results.run.id)}" aria-label="Report explorer">'
+        '  <div class="explorer-header">'
+        "    <h2>Report History</h2>"
+        '    <input type="search" id="report-search-input" placeholder="🔍 Search reports..." '
+        'aria-label="Search reports">'
+        "  </div>"
+        '  <div class="scrollable-content explorer-scroll">'
+        '    <details id="latest-report-group" class="report-group" open>'
+        '      <summary class="report-group-heading">'
+        '        <h3 id="latest-reports-heading">Latest report</h3>'
+        '        <span class="latest-pill">LATEST</span>'
+        "      </summary>"
+        '      <div id="latest-report-list" class="report-list">'
+        '        <p class="explorer-loading text-muted">Loading report history…</p>'
+        "      </div>"
+        "    </details>"
+        '    <details id="last-five-report-group" class="report-group" open>'
+        '      <summary class="report-group-heading">'
+        '        <h3 id="last-five-reports-heading">Last 5 reports</h3>'
+        "      </summary>"
+        '      <div id="last-five-report-list" class="report-list">'
+        '        <p class="explorer-loading text-muted">Loading…</p>'
+        "      </div>"
+        "    </details>"
+        '    <details id="older-report-group" class="report-group">'
+        '      <summary class="report-group-heading">'
+        '        <h3 id="older-reports-heading">Older</h3>'
+        "      </summary>"
+        '      <div id="older-report-list" class="report-list">'
+        '        <p class="explorer-loading text-muted">Loading…</p>'
+        "      </div>"
+        "    </details>"
+        "  </div>"
+        '  <div class="panel-footer explorer-footer">'
+        '    <p id="report-explorer-status" class="explorer-status" aria-live="polite"></p>'
+        '    <div class="explorer-actions">'
+        '      <button id="compare-reports-btn" class="btn-secondary" type="button" disabled>Compare</button>'
+        '      <button id="delete-reports-btn" class="btn-danger" type="button" disabled>Delete</button>'
+        "    </div>"
+        "  </div>"
+        "</aside>"
+        '<dialog id="report-comparison-dialog" class="comparison-dialog">'
+        '  <div class="comparison-dialog-header">'
+        "    <h2>Report comparison</h2>"
+        '    <button id="close-comparison-btn" class="dialog-close" type="button" aria-label="Close comparison">×</button>'
+        "  </div>"
+        '  <pre id="report-comparison-content" tabindex="0"></pre>'
+        "</dialog>"
+        '<dialog id="delete-confirmation-dialog" class="confirmation-dialog">'
+        "  <h2>Are you sure?</h2>"
+        '  <p id="delete-confirmation-message"></p>'
+        '  <div class="confirmation-actions">'
+        '    <button id="cancel-delete-btn" class="btn-secondary" type="button">Cancel</button>'
+        '    <button id="confirm-delete-btn" class="btn-danger" type="button">Delete</button>'
+        "  </div>"
+        "</dialog>"
+    )
 
 
 def _header(results: Results) -> str:
@@ -406,7 +475,7 @@ def _check(check: CheckResult) -> str:
     key_esc = f"{suite_id_esc}::{check_id_esc}"
 
     details = [
-        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code> | Severity: <code>{_escape(check.severity.value)}</code></p>',
+        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code></p>',
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
     ]
     if check.measured is not None:
@@ -565,20 +634,21 @@ _CSS = """
   --skipped-bg: #1e293b;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar {
+::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-[data-theme="dark"] ::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: var(--bg-main);
 }
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 4px;
 }
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
 * { box-sizing: border-box; }
 html, body {
@@ -836,7 +906,7 @@ body {
 .dashboard-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 900px);
+  grid-template-columns: 260px minmax(0, 900px);
   justify-content: center;
   gap: 16px;
   min-height: 0;
@@ -844,7 +914,7 @@ body {
 }
 
 .dashboard-grid.has-checks {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 260px minmax(0, 1fr) minmax(0, 1fr);
   justify-content: stretch;
 }
 
@@ -873,6 +943,86 @@ body {
   overflow-y: auto;
   padding-right: 6px;
 }
+
+.report-explorer { padding: 18px; }
+.explorer-header {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 96px;
+  min-height: 96px;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+#report-search-input {
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-size: 13px;
+  outline: none;
+}
+.explorer-scroll { padding-top: 12px; }
+.report-group + .report-group { margin-top: 18px; }
+.report-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.report-group[open] > .report-group-heading { margin-bottom: 7px; }
+.report-group-heading::-webkit-details-marker { display: none; }
+.report-group-heading::after { content: "▾"; color: var(--text-muted); font-size: 11px; transition: transform 0.15s ease; }
+.report-group:not([open]) > .report-group-heading::after { transform: rotate(-90deg); }
+.report-group-heading h3 { flex: 1; }
+.report-group-heading h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.latest-pill { padding: 2px 6px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: 9px; font-weight: 800; letter-spacing: 0.05em; }
+[data-theme="dark"] .latest-pill { background: #1e3a8a; color: #bfdbfe; }
+.report-list { display: flex; flex-direction: column; gap: 7px; }
+.explorer-loading, .empty-report-list { margin: 4px 0; font-size: 12px; }
+.report-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card);
+}
+.report-row.current { border-color: #2563eb; background: #eff6ff; }
+[data-theme="dark"] .report-row.current { background: #172554; }
+.report-select { margin: 3px 0 0; accent-color: #2563eb; cursor: pointer; }
+.report-link { min-width: 0; color: var(--text-main); text-decoration: none; }
+.report-link:hover .report-id { color: #2563eb; }
+.report-id { display: block; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.report-meta { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; line-height: 1.35; }
+.report-status { text-transform: capitalize; }
+.explorer-footer { flex-direction: column; align-items: stretch; gap: 8px; }
+.explorer-status { min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.explorer-status.error { color: var(--fail-color); }
+.explorer-actions { display: flex; gap: 7px; }
+.explorer-actions button { flex: 1; }
+.btn-secondary:disabled, .btn-danger:disabled { cursor: not-allowed; opacity: 0.45; }
+.btn-danger { padding: 6px 12px; border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; background: var(--fail-bg); color: var(--fail-color); font-size: 12px; font-weight: 600; cursor: pointer; }
+.comparison-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); }
+.comparison-dialog::backdrop, .confirmation-dialog::backdrop { background: rgba(15, 23, 42, 0.62); }
+.comparison-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.comparison-dialog-header h2 { margin: 0; font-size: 17px; }
+.dialog-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 24px; line-height: 1; cursor: pointer; }
+.dialog-close:hover { background: var(--bg-subtle); color: var(--text-main); }
+#report-comparison-content { max-height: calc(100vh - 130px); margin: 0; padding: 18px; overflow: auto; background: var(--bg-card); color: var(--text-main); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.confirmation-dialog { width: min(420px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); }
+.confirmation-dialog h2 { margin: 0; font-size: 18px; }
+.confirmation-dialog p { margin: 8px 0 20px; color: var(--text-muted); font-size: 13px; }
+.confirmation-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .panel-footer {
   flex-shrink: 0;
@@ -936,7 +1086,7 @@ body {
   flex-direction: column;
   gap: 8px;
   flex-shrink: 0;
-  max-width: 900px;
+  max-width: 1176px;
   width: 100%;
   margin: 0 auto;
   transition: max-width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1085,7 +1235,263 @@ _JS = """
 let activeVerdictFilter = 'all';
 let globalTooltip = null;
 let sortDirections = {};
+let reportHistory = [];
+let pendingDeleteIds = [];
+let reportGroupStateBeforeSearch = null;
+const selectedReportIds = new Set();
 const CHECK_FILTERS_STORAGE_KEY = 'graphcheck.checksExplorerFilters';
+const CHECKS_EXPLORER_STORAGE_KEY = 'graphcheck.checksExplorerOpen';
+const REPORT_EXPLORER_STATE_STORAGE_KEY = 'graphcheck.reportExplorerNavigation';
+const THEME_STORAGE_KEY = 'graphcheck.theme';
+const REPORT_EXPLORER_TOKEN = document.querySelector('meta[name="graphcheck-explorer-token"]')?.content || '';
+
+function setReportExplorerStatus(message, error = false) {
+  const status = document.getElementById('report-explorer-status');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('error', error);
+}
+
+function reportHref(runId) {
+  return `/report?id=${encodeURIComponent(runId)}`;
+}
+
+function reportRow(report) {
+  const row = document.createElement('div');
+  const checkbox = document.createElement('input');
+  const link = document.createElement('a');
+  const id = document.createElement('span');
+  const meta = document.createElement('span');
+  const current = new URLSearchParams(window.location.search).get('id') === report.id;
+  row.className = `report-row${current ? ' current' : ''}`;
+  row.dataset.reportId = report.id;
+  checkbox.className = 'report-select';
+  checkbox.type = 'checkbox';
+  checkbox.checked = selectedReportIds.has(report.id);
+  checkbox.setAttribute('aria-label', `Select report ${report.id}`);
+  checkbox.addEventListener('change', () => {
+    checkbox.checked ? selectedReportIds.add(report.id) : selectedReportIds.delete(report.id);
+    updateReportActions();
+  });
+  link.className = 'report-link';
+  link.href = report.href || reportHref(report.id);
+  link.title = `Open report ${report.id}`;
+  link.addEventListener('click', () => persistReportExplorerNavigation(report.id));
+  id.className = 'report-id';
+  id.textContent = report.id;
+  meta.className = 'report-meta';
+  meta.textContent = `${report.finished_at} · ${report.status}`;
+  link.append(id, meta);
+  row.append(checkbox, link);
+  return row;
+}
+
+function appendReportRows(list, reports, emptyMessage) {
+  list.replaceChildren();
+  if (reports.length) reports.forEach(report => list.appendChild(reportRow(report)));
+  else {
+    const empty = document.createElement('p');
+    empty.className = 'empty-report-list text-muted';
+    empty.textContent = emptyMessage;
+    list.appendChild(empty);
+  }
+}
+
+function reportMatchesSearch(report, query) {
+  return !query || `${report.id} ${report.finished_at} ${report.status}`.toLowerCase().includes(query);
+}
+
+function reportGroupState() {
+  return Object.fromEntries(Array.from(document.querySelectorAll('.report-group[id]')).map(group => [group.id, group.open]));
+}
+
+function applyReportGroupState(state) {
+  Object.entries(state || {}).forEach(([id, open]) => {
+    const group = document.getElementById(id);
+    if (group) group.open = Boolean(open);
+  });
+}
+
+function persistReportExplorerNavigation(reportId) {
+  const scroll = document.querySelector('.explorer-scroll');
+  try {
+    sessionStorage.setItem(REPORT_EXPLORER_STATE_STORAGE_KEY, JSON.stringify({
+      reportId,
+      scrollTop: scroll?.scrollTop || 0,
+      groups: reportGroupState(),
+    }));
+  } catch {}
+}
+
+function restoreReportExplorerNavigation() {
+  let state = null;
+  try {
+    state = JSON.parse(sessionStorage.getItem(REPORT_EXPLORER_STATE_STORAGE_KEY) || 'null');
+    sessionStorage.removeItem(REPORT_EXPLORER_STATE_STORAGE_KEY);
+  } catch {}
+  if (!state) return;
+  applyReportGroupState(state.groups);
+  const reportIndex = reportHistory.findIndex(report => report.id === state.reportId);
+  if (reportIndex > 5) document.getElementById('older-report-group').open = true;
+  else if (reportIndex > 0) document.getElementById('last-five-report-group').open = true;
+  const scroll = document.querySelector('.explorer-scroll');
+  const row = Array.from(document.querySelectorAll('.report-row')).find(item => item.dataset.reportId === state.reportId);
+  requestAnimationFrame(() => {
+    if (!scroll) return;
+    scroll.scrollTop = Number(state.scrollTop) || 0;
+    if (!row) return;
+    const scrollBounds = scroll.getBoundingClientRect();
+    const rowBounds = row.getBoundingClientRect();
+    if (rowBounds.top < scrollBounds.top || rowBounds.bottom > scrollBounds.bottom) row.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function renderReportLists() {
+  const latestList = document.getElementById('latest-report-list');
+  const recentList = document.getElementById('last-five-report-list');
+  const olderList = document.getElementById('older-report-list');
+  if (!latestList || !recentList || !olderList) return;
+  const query = (document.getElementById('report-search-input')?.value || '').trim().toLowerCase();
+  const latest = reportHistory.slice(0, 1).filter(report => reportMatchesSearch(report, query));
+  const recent = reportHistory.slice(1, 6).filter(report => reportMatchesSearch(report, query));
+  const older = reportHistory.slice(6).filter(report => reportMatchesSearch(report, query));
+  appendReportRows(latestList, latest, query ? 'No matching latest report.' : 'No reports found.');
+  appendReportRows(recentList, recent, query ? 'No matching reports.' : 'No recent reports.');
+  appendReportRows(olderList, older, query ? 'No matching reports.' : 'No older reports.');
+  if (query) document.querySelectorAll('.report-group').forEach(group => group.open = Boolean(group.querySelector('.report-row')));
+}
+
+function renderReportHistory(reports, restoreNavigation = false) {
+  reportHistory = reports;
+  const availableIds = new Set(reports.map(report => report.id));
+  Array.from(selectedReportIds).forEach(runId => {
+    if (!availableIds.has(runId)) selectedReportIds.delete(runId);
+  });
+  renderReportLists();
+  updateReportActions();
+  if (restoreNavigation) restoreReportExplorerNavigation();
+}
+
+function filterReportHistory() {
+  const query = (document.getElementById('report-search-input')?.value || '').trim();
+  if (query && !reportGroupStateBeforeSearch) reportGroupStateBeforeSearch = reportGroupState();
+  if (!query && reportGroupStateBeforeSearch) {
+    const state = reportGroupStateBeforeSearch;
+    reportGroupStateBeforeSearch = null;
+    renderReportLists();
+    applyReportGroupState(state);
+    return;
+  }
+  renderReportLists();
+}
+
+function updateReportActions() {
+  const count = selectedReportIds.size;
+  const compare = document.getElementById('compare-reports-btn');
+  const remove = document.getElementById('delete-reports-btn');
+  if (compare) compare.disabled = count !== 2;
+  if (remove) remove.disabled = count === 0;
+  setReportExplorerStatus(count ? `${count} report${count === 1 ? '' : 's'} selected` : '');
+}
+
+async function reportExplorerRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-GraphCheck-Token': REPORT_EXPLORER_TOKEN,
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Report explorer request failed (${response.status})`);
+  return payload;
+}
+
+function openComparisonDialog(message) {
+  const dialog = document.getElementById('report-comparison-dialog');
+  const content = document.getElementById('report-comparison-content');
+  if (!dialog || !content) return;
+  content.textContent = message;
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  else dialog.setAttribute('open', '');
+  content.focus();
+}
+
+async function compareSelectedReports() {
+  const ids = reportHistory.filter(report => selectedReportIds.has(report.id)).map(report => report.id).reverse();
+  openComparisonDialog('Comparing reports…');
+  try {
+    const payload = await reportExplorerRequest('/api/compare', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    openComparisonDialog(payload.comparison);
+  } catch (error) {
+    openComparisonDialog(error.message);
+  }
+}
+
+function deleteSelectedReports() {
+  const ids = reportHistory.filter(report => selectedReportIds.has(report.id)).map(report => report.id);
+  const dialog = document.getElementById('delete-confirmation-dialog');
+  const message = document.getElementById('delete-confirmation-message');
+  if (!ids.length || !dialog || !message) return;
+  pendingDeleteIds = ids;
+  message.textContent = `Permanently delete ${ids.length} selected report${ids.length === 1 ? '' : 's'}?`;
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+function closeDeleteConfirmation() {
+  const dialog = document.getElementById('delete-confirmation-dialog');
+  pendingDeleteIds = [];
+  if (typeof dialog?.close === 'function') dialog.close();
+  else dialog?.removeAttribute('open');
+}
+
+async function confirmDeleteSelectedReports() {
+  const ids = pendingDeleteIds.slice();
+  closeDeleteConfirmation();
+  if (!ids.length) return;
+  setReportExplorerStatus('Deleting selected reports…');
+  try {
+    const payload = await reportExplorerRequest('/api/delete', {
+      method: 'POST',
+      body: JSON.stringify({
+        ids,
+        current: new URLSearchParams(window.location.search).get('id'),
+      }),
+    });
+    selectedReportIds.clear();
+    if (payload.redirect) {
+      window.location.assign(payload.redirect);
+      return;
+    }
+    renderReportHistory(payload.reports || []);
+    setReportExplorerStatus(`Deleted ${payload.deleted.length} report${payload.deleted.length === 1 ? '' : 's'}.`);
+  } catch (error) {
+    setReportExplorerStatus(error.message, true);
+  }
+}
+
+async function initReportExplorer() {
+  if (!REPORT_EXPLORER_TOKEN) {
+    document.getElementById('latest-report-list')?.replaceChildren();
+    document.getElementById('last-five-report-list')?.replaceChildren();
+    document.getElementById('older-report-list')?.replaceChildren();
+    setReportExplorerStatus('Run `graphcheck report --open` to browse, compare, or delete report history.');
+    return;
+  }
+  try {
+    const payload = await reportExplorerRequest('/api/reports');
+    renderReportHistory(payload.reports || [], true);
+    window.setInterval(() => reportExplorerRequest('/api/ping').catch(() => {}), 30000);
+  } catch (error) {
+    setReportExplorerStatus(error.message, true);
+  }
+}
 
 function initTooltips() {
   globalTooltip = document.createElement('div');
@@ -1184,14 +1590,28 @@ function toggleAllDetails() {
   details.forEach(d => d.open = anyClosed);
 }
 
-function toggleTheme() {
-  const body = document.documentElement;
-  const isDark = body.getAttribute('data-theme') === 'dark';
-  const newTheme = isDark ? 'light' : 'dark';
-  body.setAttribute('data-theme', newTheme);
-  
+function applyTheme(theme, persist = false) {
+  const newTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', newTheme);
   const btn = document.getElementById('theme-toggle');
-  btn.innerHTML = newTheme === 'dark' ? '☀️' : '🌙';
+  if (btn) btn.textContent = newTheme === 'dark' ? '☀️' : '🌙';
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+    } catch {}
+  }
+}
+
+function restoreTheme() {
+  try {
+    applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || 'light');
+  } catch {
+    applyTheme('light');
+  }
+}
+
+function toggleTheme() {
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
 }
 
 function toggleSummaryTable() {
@@ -1263,6 +1683,15 @@ function showChecksExplorer() {
     checksPanel.classList.add('visible-panel');
     if (btn) btn.style.display = 'none';
   }
+  try {
+    localStorage.setItem(CHECKS_EXPLORER_STORAGE_KEY, 'true');
+  } catch {}
+}
+
+function restoreChecksExplorerState() {
+  try {
+    if (localStorage.getItem(CHECKS_EXPLORER_STORAGE_KEY) === 'true') showChecksExplorer();
+  } catch {}
 }
 
 function navigateToCheck(suiteId, checkId) {
@@ -1289,6 +1718,7 @@ function navigateToCheck(suiteId, checkId) {
 }
 
 function initInteractions() {
+  restoreTheme();
   initTooltips();
 
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
@@ -1298,6 +1728,19 @@ function initInteractions() {
   document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);
   document.getElementById('search-input')?.addEventListener('input', filterChecks);
+  document.getElementById('report-search-input')?.addEventListener('input', filterReportHistory);
+  document.getElementById('compare-reports-btn')?.addEventListener('click', compareSelectedReports);
+  document.getElementById('delete-reports-btn')?.addEventListener('click', deleteSelectedReports);
+  document.getElementById('cancel-delete-btn')?.addEventListener('click', closeDeleteConfirmation);
+  document.getElementById('confirm-delete-btn')?.addEventListener('click', confirmDeleteSelectedReports);
+  document.getElementById('delete-confirmation-dialog')?.addEventListener('close', () => {
+    pendingDeleteIds = [];
+  });
+  document.getElementById('close-comparison-btn')?.addEventListener('click', () => {
+    const dialog = document.getElementById('report-comparison-dialog');
+    if (typeof dialog?.close === 'function') dialog.close();
+    else dialog?.removeAttribute('open');
+  });
 
   document.querySelectorAll('.filter-btn').forEach(button => {
     button.addEventListener('click', () => setVerdictFilter(button.dataset.filter, button));
@@ -1318,7 +1761,9 @@ function initInteractions() {
     });
   });
 
+  restoreChecksExplorerState();
   restoreCheckFilters();
+  initReportExplorer();
 }
 
 document.addEventListener('DOMContentLoaded', initInteractions);

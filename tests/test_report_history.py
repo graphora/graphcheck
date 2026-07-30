@@ -146,15 +146,26 @@ def test_report_list_deduplicates_latest_alias(tmp_path, monkeypatch):
 
 def test_report_open_id_opens_selected_historical_report(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    selected = _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
+    _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
     _write_run(tmp_path, "run-new", "2026-07-02T10:00:00Z")
     opened = []
-    monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
+
+    def open_in_current_terminal(runs_dir, run_id, opener, on_open):
+        opened.append((runs_dir, run_id, opener))
+        on_open("url")
+        return "url"
+
+    monkeypatch.setattr("graphcheck.cli.open_report_explorer", open_in_current_terminal)
 
     result = runner.invoke(app, ["report", "--open", "run-old"])
 
     assert result.exit_code == 0
-    assert opened == [(selected / "report.html").resolve().as_uri()]
+    assert len(opened) == 1
+    assert opened[0][0] == tmp_path / ".graphcheck" / "runs"
+    assert opened[0][1] == "run-old"
+    assert opened[0][2] is not None
+    assert "Opened report explorer for run-old" in result.stdout
+    assert "Keep this terminal open; press Ctrl+C to stop." in result.stdout
 
 
 def test_report_compare_highlights_regressions_between_results(tmp_path, monkeypatch):

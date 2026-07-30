@@ -3,6 +3,7 @@
 from graphcheck.reporting.history import (
     ReportHistoryError,
     ReportRun,
+    delete_report_runs,
     discover_report_runs,
     find_report_run,
     format_report_comparison,
@@ -15,6 +16,7 @@ from graphcheck.reporting.writer import load_results, write_results
 __all__ = [
     "ReportHistoryError",
     "ReportRun",
+    "delete_report_runs",
     "discover_report_runs",
     "find_report_run",
     "format_report_comparison",

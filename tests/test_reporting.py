@@ -78,7 +78,8 @@ def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     assert "https://" not in report
     assert ' src="' not in report
     assert ' href="' not in report
-    assert "fetch(" not in report
+    assert 'meta name="graphcheck-explorer-token"' not in report
+    assert "graphcheck report --open" in report
     assert "XMLHttpRequest" not in report
     assert "WebSocket(" not in report
     assert "EventSource(" not in report
@@ -320,6 +321,7 @@ def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
 def test_html_renderer_exposes_cypher_and_evidence_ids():
     html = render_html_report(_fixture("complete"))
 
+    assert "Severity:" not in html
     assert "MATCH (c:Customer" in html
     assert "4:abc:12" in html
     assert "4:abc:88" in html
@@ -380,3 +382,33 @@ def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "No matching issues" in html
     assert "No checks executed" not in html
+
+
+def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
+    html = render_html_report(_fixture("complete"))
+
+    assert 'id="report-explorer"' in html
+    assert "<h2>Report History</h2>" in html
+    assert '<span class="eyebrow explorer-eyebrow">' not in html
+    assert "Latest report" in html
+    assert "Last 5 reports" in html
+    assert ">Older</h3>" in html
+    assert "Open a run, or select reports to compare or delete." not in html
+    assert 'id="report-search-input"' in html
+    assert '<details id="latest-report-group" class="report-group" open>' in html
+    assert '<details id="last-five-report-group" class="report-group" open>' in html
+    assert '<details id="older-report-group" class="report-group">' in html
+    assert "reportHistory.slice(1, 6)" in html
+    assert "reportHistory.slice(6)" in html
+    assert html.index('id="report-explorer"') < html.index("Graph Health Overview")
+    assert "compare-reports-btn" in html
+    assert "delete-reports-btn" in html
+    assert "<h2>Are you sure?</h2>" in html
+    assert "window.confirm" not in html
+    assert "graphcheck.checksExplorerOpen" in html
+    assert "restoreChecksExplorerState();" in html
+    assert "graphcheck.theme" in html
+    assert "restoreTheme();" in html
+    assert "graphcheck.reportExplorerNavigation" in html
+    assert "restoreReportExplorerNavigation()" in html
+    assert "::-webkit-scrollbar-button { display: none; width: 0; height: 0; }" in html

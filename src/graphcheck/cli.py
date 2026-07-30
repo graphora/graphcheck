@@ -97,6 +97,10 @@ def write_html_report(*args, **kwargs):
     return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
 
 
+def open_report_explorer(*args, **kwargs):
+    return _call("graphcheck.reporting.explorer", "launch_report_explorer", *args, **kwargs)
+
+
 def render_run_artifacts(results: "Results") -> tuple[bytes, bytes, bytes]:
     model, rendered_json = _call("graphcheck.reporting.writer", "validated_results_json", results)
     rendered_html = _call("graphcheck.reporting.html", "render_validated_html_report", model)
@@ -759,9 +763,22 @@ def report(
             return
 
         if open_report:
-            if report_id is not None:
-                record = find_report_run(discover_report_runs(runs_dir), report_id)
-                _open_html_report(record.report_path)
+            records = discover_report_runs(runs_dir)
+            if records:
+                record = (
+                    find_report_run(records, report_id) if report_id is not None else records[0]
+                )
+                open_report_explorer(
+                    runs_dir,
+                    record.id,
+                    opener=webbrowser.open,
+                    on_open=lambda _: typer.echo(
+                        f"Opened report explorer for {record.id}. "
+                        "Keep this terminal open; press Ctrl+C to stop."
+                    ),
+                )
+            elif report_id is not None:
+                find_report_run(records, report_id)
             else:
                 _open_html_report(_latest_html_report(runs_dir))
     except ReportHistoryError as exc:

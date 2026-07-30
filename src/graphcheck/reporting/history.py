@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -87,16 +88,7 @@ def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
         return []
 
     by_id: dict[str, ReportRun] = {}
-    for results_path in runs_dir.rglob("results.json"):
-        relative_parent = results_path.parent.relative_to(runs_dir)
-        if any(part.startswith(".") for part in relative_parent.parts):
-            continue
-        summary_path = results_path.with_name(SUMMARY_FILENAME)
-        record = (
-            _load_summary_run(summary_path, results_path)
-            if summary_path.is_file()
-            else _load_report_run(results_path)
-        )
+    for record in _direct_report_runs(runs_dir):
         current = by_id.get(record.id)
         if current is None or _preferred_record(record) > _preferred_record(current):
             by_id[record.id] = record
@@ -222,6 +214,128 @@ def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
     return removed
 
 
+def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
+    """Delete selected logical reports and safely repoint the ``latest`` alias."""
+    requested = tuple(dict.fromkeys(run_id for run_id in run_ids if run_id))
+    if not requested:
+        raise ReportHistoryError("Select at least one report to delete.")
+
+    records = discover_report_runs(runs_dir)
+    by_id = {record.id: record for record in records}
+    missing = [run_id for run_id in requested if run_id not in by_id]
+    if missing:
+        raise ReportHistoryError(f"Report {missing[0]!r} was not found.")
+
+    selected_ids = set(requested)
+    direct_records = _direct_report_runs(runs_dir)
+    targets = [record.directory for record in direct_records if record.id in selected_ids]
+    if not targets:
+        raise ReportHistoryError("No selected report directories were found.")
+
+    resolved_runs = runs_dir.resolve()
+    _validate_removal_targets(resolved_runs, targets)
+    trash = resolved_runs / f".delete-{uuid.uuid4().hex}"
+    trash.mkdir()
+    moved: list[tuple[Path, Path]] = []
+    latest_staging: Path | None = None
+    try:
+        for target in targets:
+            destination = trash / target.name
+            target.replace(destination)
+            moved.append((target, destination))
+        remaining = discover_report_runs(resolved_runs)
+        if remaining and not (resolved_runs / "latest").exists():
+            latest_staging = _stage_latest_alias(resolved_runs, remaining[0])
+            latest_staging.replace(resolved_runs / "latest")
+            latest_staging = None
+    except Exception as exc:
+        if latest_staging is not None and latest_staging.exists():
+            shutil.rmtree(latest_staging)
+        latest = resolved_runs / "latest"
+        if latest.exists() and any(target.name.casefold() == "latest" for target, _ in moved):
+            shutil.rmtree(latest)
+        for target, destination in reversed(moved):
+            if destination.exists():
+                destination.replace(target)
+        if trash.exists():
+            shutil.rmtree(trash)
+        raise ReportHistoryError(f"Could not delete selected reports: {exc}") from exc
+
+    try:
+        shutil.rmtree(trash)
+    except OSError as exc:
+        raise ReportHistoryError(f"Could not finish deleting selected reports: {exc}") from exc
+    return [by_id[run_id] for run_id in requested]
+
+
+def _direct_report_runs(runs_dir: Path) -> list[ReportRun]:
+    if not runs_dir.is_dir():
+        return []
+    resolved_runs = runs_dir.resolve()
+    records: list[ReportRun] = []
+    try:
+        directories = sorted(runs_dir.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise ReportHistoryError(
+            f"Could not enumerate report history in {runs_dir}: {exc}"
+        ) from exc
+    for directory in directories:
+        if not _safe_report_directory(resolved_runs, directory):
+            continue
+        results_path = directory / "results.json"
+        if (
+            not results_path.is_file()
+            or results_path.is_symlink()
+            or results_path.resolve().parent != directory.resolve()
+        ):
+            continue
+        summary_path = results_path.with_name(SUMMARY_FILENAME)
+        record = (
+            _load_summary_run(summary_path, results_path)
+            if summary_path.is_file()
+            and not summary_path.is_symlink()
+            and summary_path.resolve().parent == directory.resolve()
+            else _load_report_run(results_path)
+        )
+        records.append(record)
+    return records
+
+
+def _safe_report_directory(resolved_runs: Path, directory: Path) -> bool:
+    is_junction = getattr(directory, "is_junction", lambda: False)
+    return (
+        directory.is_dir()
+        and not directory.name.startswith(".")
+        and not directory.is_symlink()
+        and not is_junction()
+        and directory.resolve().parent == resolved_runs
+    )
+
+
+def _validate_removal_targets(resolved_runs: Path, targets: list[Path]) -> None:
+    for target in targets:
+        if not _safe_report_directory(resolved_runs, target):
+            raise ReportHistoryError(f"Refusing to delete unexpected path: {target}")
+
+
+def _stage_latest_alias(resolved_runs: Path, source: ReportRun) -> Path:
+    staging = resolved_runs / f".latest.staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        for filename in ("results.json", "report.html", SUMMARY_FILENAME):
+            source_path = source.directory / filename
+            if (
+                source_path.is_file()
+                and not source_path.is_symlink()
+                and source_path.resolve().parent == source.directory.resolve()
+            ):
+                shutil.copy2(source_path, staging / filename)
+    except Exception:
+        shutil.rmtree(staging)
+        raise
+    return staging
+
+
 def _load_report_run(results_path: Path) -> ReportRun:
     try:
         results = load_results(results_path)
@@ -315,11 +429,15 @@ def _parse_summary(payload: object) -> ReportSummary:
 
 def _preferred_record(record: ReportRun) -> tuple[bool, bool, int, str]:
     return (
-        record.report_path.is_file(),
+        _safe_artifact_file(record.directory, record.report_path),
         record.directory.name.casefold() != "latest",
         record.modified_ns,
         str(record.directory),
     )
+
+
+def _safe_artifact_file(directory: Path, path: Path) -> bool:
+    return path.is_file() and not path.is_symlink() and path.resolve().parent == directory.resolve()
 
 
 def _recency(record: ReportRun) -> tuple[datetime, int, str]:
