@@ -406,7 +406,7 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert '<details id="last-five-report-group" class="report-group" open>' in html
     assert '<details id="older-report-group" class="report-group">' in html
     assert 'class="latest-pill"' not in html
-    assert 'font-size: 18px; line-height: 1;' in html
+    assert "font-size: 18px; line-height: 1;" in html
     assert html.count("justify-content: flex-start;") >= 2
     assert 'id="clear-report-selection-btn"' in html
     assert 'id="compare-most-recent-btn"' in html
