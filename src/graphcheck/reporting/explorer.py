@@ -21,7 +21,10 @@ from graphcheck.reporting.history import (
     find_report_run,
     format_report_comparison,
 )
-from graphcheck.reporting.html import render_validated_html_report
+from graphcheck.reporting.html import (
+    render_validated_html_report,
+    render_validated_html_report_fragments,
+)
 
 _COOKIE_NAME = "graphcheck_report_explorer"
 _MAX_REQUEST_BYTES = 64 * 1024
@@ -75,6 +78,13 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
                 self._json_error(403, "Report explorer authorization failed.")
             elif parsed.path == "/api/reports":
                 self._json(200, {"reports": _report_payload(self._records())})
+            elif parsed.path == "/api/report":
+                try:
+                    self._report(parsed)
+                except ReportHistoryError as exc:
+                    self._json_error(404, str(exc))
+                except ValueError as exc:
+                    self._json_error(400, str(exc))
             elif parsed.path == "/api/ping":
                 self._json(200, {"status": "ok"})
             else:
@@ -136,6 +146,13 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         first, second = (find_report_run(records, run_id) for run_id in ids)
         self._json(200, {"comparison": format_report_comparison(first, second)})
 
+    def _report(self, parsed: urllib.parse.SplitResult) -> None:
+        ids = urllib.parse.parse_qs(parsed.query).get("id", [])
+        if len(ids) != 1 or not ids[0]:
+            raise ValueError("Select one report ID.")
+        record = find_report_run(self._records(), ids[0])
+        self._json(200, {"report": _report_fragment_payload(record)})
+
     def _delete(self, payload: dict[str, Any]) -> None:
         ids = _selected_ids(payload)
         current = payload.get("current")
@@ -143,16 +160,18 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
             raise ValueError("The current report ID must be a string.")
         removed = delete_report_runs(self.server.runs_dir, ids)
         records = self._records()
+        current_removed = current in {record.id for record in removed}
         redirect = (
-            ("/empty" if not records else _report_href(records[0].id))
-            if current in {record.id for record in removed}
-            else None
+            ("/empty" if not records else _report_href(records[0].id)) if current_removed else None
         )
         self._json(
             200,
             {
                 "deleted": [record.id for record in removed],
                 "redirect": redirect,
+                "replacement": (
+                    _report_fragment_payload(records[0]) if current_removed and records else None
+                ),
                 "reports": _report_payload(records),
             },
         )
@@ -301,6 +320,15 @@ def _report_payload(records: list[ReportRun]) -> list[dict[str, object]]:
         }
         for index, record in enumerate(records)
     ]
+
+
+def _report_fragment_payload(record: ReportRun) -> dict[str, object]:
+    return {
+        "id": record.id,
+        "href": _report_href(record.id),
+        "title": f"GraphCheck Dashboard - {record.id}",
+        "fragments": render_validated_html_report_fragments(record.results),
+    }
 
 
 def _report_href(run_id: str) -> str:

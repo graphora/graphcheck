@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from graphcheck.contracts.results import Results, Verdict
 from graphcheck.contracts.schemas import results_schema
-from graphcheck.reporting.html import render_html_report
+from graphcheck.reporting.html import (
+    render_html_report,
+    render_validated_html_report_fragments,
+)
 from graphcheck.reporting.writer import load_results, results_json, write_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
@@ -387,6 +390,10 @@ def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
 def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     html = render_html_report(_fixture("complete"))
 
+    assert html.count('id="report-run-title"') == 1
+    assert html.count('id="report-banners"') == 1
+    assert html.count('id="report-overview"') == 1
+    assert html.count('id="checks-panel"') == 1
     assert 'id="report-explorer"' in html
     assert "<h2>Report History</h2>" in html
     assert '<span class="eyebrow explorer-eyebrow">' not in html
@@ -398,6 +405,26 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert '<details id="latest-report-group" class="report-group" open>' in html
     assert '<details id="last-five-report-group" class="report-group" open>' in html
     assert '<details id="older-report-group" class="report-group">' in html
+    assert 'class="latest-pill"' not in html
+    assert 'font-size: 18px; line-height: 1;' in html
+    assert html.count("justify-content: flex-start;") >= 2
+    assert 'id="clear-report-selection-btn"' in html
+    assert 'id="compare-most-recent-btn"' in html
+    assert html.index('id="report-search-input"') < html.index('id="clear-report-selection-btn"')
+    explorer_scroll_position = html.index('class="scrollable-content explorer-scroll"')
+    assert html.index('id="delete-reports-btn"') < explorer_scroll_position
+    assert explorer_scroll_position < html.index('id="compare-most-recent-btn"')
+    assert html.index('id="compare-reports-btn"') < html.index('id="compare-most-recent-btn"')
+    assert 'id="compare-most-recent-btn" class="btn-primary"' in html
+    assert ">Compare Selected</button>" in html
+    assert 'class="explorer-selection-actions"' in html
+    assert 'class="explorer-comparison-actions"' in html
+    assert "#delete-reports-btn {" not in html
+    assert ".explorer-scroll { margin-top: 20px; }" in html
+    assert "opacity: 1;" in html
+    assert "function clearReportSelection()" in html
+    assert "function compareMostRecentReports()" in html
+    assert "reportHistory.slice(0, 2)" in html
     assert "reportHistory.slice(1, 6)" in html
     assert "reportHistory.slice(6)" in html
     assert html.index('id="report-explorer"') < html.index("Graph Health Overview")
@@ -411,4 +438,35 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "restoreTheme();" in html
     assert "graphcheck.reportExplorerNavigation" in html
     assert "restoreReportExplorerNavigation()" in html
+    assert "handleReportLinkClick" in html
+    assert "fetch(path" in html
+    assert "/api/report?id=" in html
+    assert "history.pushState" in html
+    assert "history.replaceState" in html
+    assert "window.addEventListener('popstate'" in html
+    assert "new AbortController()" in html
+    assert "requestSequence !== reportNavigationSequence" in html
+    assert "setSummaryTableExpanded(issueSummaryExpanded);" in html
+    assert "checkDetailsOpenPreference = Array.from(details).some" in html
+    assert "applyCheckDetailsPreference();" in html
+    assert "showChecksExplorer(false);" in html
+    assert "Loading report…" in html
+    assert "window.location.assign" not in html
+    panel_footer_start = html.index(".panel-footer {")
+    panel_footer_css = html[panel_footer_start : html.index("}", panel_footer_start)]
+    assert "border-top" not in panel_footer_css
     assert "::-webkit-scrollbar-button { display: none; width: 0; height: 0; }" in html
+
+
+def test_html_renderer_exposes_report_specific_fragments_without_the_permanent_shell():
+    fragments = render_validated_html_report_fragments(load_results(_fixture("partial")))
+
+    assert set(fragments) == {"run_title", "banners", "overview", "checks"}
+    assert fragments["run_title"].startswith('<div id="report-run-title"')
+    assert '<div id="report-banners">' in fragments["banners"]
+    assert '<section id="report-overview"' in fragments["overview"]
+    assert '<section id="checks-panel"' in fragments["checks"]
+    assert "Run: <code>run_01HXATZ</code>" in fragments["run_title"]
+    assert "<strong>Partial Run.</strong>" in fragments["banners"]
+    assert 'id="report-explorer"' not in "".join(fragments.values())
+    assert 'id="theme-toggle"' not in "".join(fragments.values())

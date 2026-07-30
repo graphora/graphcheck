@@ -117,6 +117,29 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
         assert reports[0]["latest"] is True
         assert reports[1]["latest"] is False
 
+        status, headers, payload = _request(
+            server,
+            "GET",
+            "/api/report?id=run-old",
+            headers={
+                "Cookie": cookie,
+                "X-GraphCheck-Token": token,
+            },
+        )
+        fragment_report = json.loads(payload)["report"]
+        fragments = fragment_report["fragments"]
+        assert status == 200
+        assert headers["Content-Type"] == "application/json; charset=utf-8"
+        assert fragment_report["id"] == "run-old"
+        assert fragment_report["href"] == "/report?id=run-old"
+        assert fragment_report["title"] == "GraphCheck Dashboard - run-old"
+        assert set(fragments) == {"run_title", "banners", "overview", "checks"}
+        assert "Run: <code>run-old</code>" in fragments["run_title"]
+        assert "<strong>Partial Run.</strong>" in fragments["banners"]
+        assert '<section id="report-overview"' in fragments["overview"]
+        assert '<section id="checks-panel"' in fragments["checks"]
+        assert 'id="report-explorer"' not in "".join(fragments.values())
+
         status, _, payload = _request(
             server,
             "POST",
@@ -147,6 +170,9 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
         assert status == 200
         assert deletion["deleted"] == ["run-new"]
         assert deletion["redirect"] == "/report?id=run-old"
+        assert deletion["replacement"]["id"] == "run-old"
+        assert deletion["replacement"]["href"] == "/report?id=run-old"
+        assert "<strong>Partial Run.</strong>" in deletion["replacement"]["fragments"]["banners"]
 
     assert not new.exists()
     assert old.exists()
@@ -162,9 +188,32 @@ def test_report_explorer_rejects_unauthenticated_and_cross_origin_actions(tmp_pa
     with _server(runs_dir) as (server, token):
         status, _, _ = _request(server, "GET", "/api/reports")
         assert status == 403
+        status, _, _ = _request(server, "GET", "/api/report?id=run-one")
+        assert status == 403
 
         _, headers, _ = _request(server, "GET", f"/report?id=run-one&token={token}")
         cookie = headers["Set-Cookie"].split(";", 1)[0]
+        authorized_get_headers = {
+            "Cookie": cookie,
+            "X-GraphCheck-Token": token,
+        }
+        status, _, payload = _request(
+            server,
+            "GET",
+            "/api/report?id=missing",
+            headers=authorized_get_headers,
+        )
+        assert status == 404
+        assert "missing" in json.loads(payload)["error"]
+        status, _, payload = _request(
+            server,
+            "GET",
+            "/api/report",
+            headers=authorized_get_headers,
+        )
+        assert status == 400
+        assert json.loads(payload)["error"] == "Select one report ID."
+
         request_headers = _authorized_headers(server, token, cookie)
         request_headers["Origin"] = "https://example.com"
         status, _, _ = _request(
