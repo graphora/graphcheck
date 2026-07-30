@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -67,6 +68,16 @@ class GenerateResult(_Strict):
     dropped_candidates: list[DroppedCandidate] = Field(default_factory=list)
 
 
+class GenerationStage(StrEnum):
+    CONFIG_LOAD = "config_load"
+    BASELINE_LOAD = "baseline_load"
+    DOCUMENT_LOAD = "document_load"
+    CLIENT_SETUP = "client_setup"
+    PROVIDER_REQUEST = "provider_request"
+    GENERATION_VALIDATION = "generation_validation"
+    ARTIFACT_WRITE = "artifact_write"
+
+
 class GenerationService:
     """Own the disclosed, bounded, exactly-two-attempt generation workflow."""
 
@@ -91,7 +102,10 @@ class GenerationService:
         disclosure_sink: Callable[[GenerateDisclosure], None],
         warning_sink: Callable[[DroppedCandidate], None] | None = None,
         invocation_dir: Path | None = None,
+        stage_observer: Callable[[GenerationStage], None] | None = None,
     ) -> GenerateResult:
+        observe = stage_observer or (lambda stage: None)
+        observe(GenerationStage.CONFIG_LOAD)
         config = _load_generation_project_config(project_root)
         generate_config = config.generate
         if generate_config is None:
@@ -104,16 +118,19 @@ class GenerationService:
 
         # Credential resolution intentionally happens before reading either baseline or docs.
         api_key = resolve_api_key(generate_config)
+        observe(GenerationStage.BASELINE_LOAD)
         baseline_path, baseline = load_generation_baseline(
             project_root=project_root,
             artifacts=config.artifacts,
             requested=baseline_from,
         )
+        observe(GenerationStage.DOCUMENT_LOAD)
         documents = read_documents(
             document_paths,
             project_root=project_root,
             invocation_dir=invocation_dir,
         )
+        observe(GenerationStage.GENERATION_VALIDATION)
         request_context = GenerateRequest(
             profile=build_profile_context(baseline),
             documents=[document.document for document in documents],
@@ -127,6 +144,7 @@ class GenerationService:
             documents=documents,
         )
         first_request = build_initial_request(request_context)
+        observe(GenerationStage.CLIENT_SETUP)
         client = self._client_factory(generate_config, api_key)
 
         # This is deliberately adjacent to the first billable/network operation.
@@ -135,14 +153,18 @@ class GenerationService:
         dropped: list[DroppedCandidate] = []
         summaries: list[str] = []
         initial_envelope_invalid = False
+        observe(GenerationStage.PROVIDER_REQUEST)
         try:
             first_batch = _propose(client, first_request)
         except GraphCheckError as exc:
             if exc.error.code != "generate.output_invalid":
                 raise
+            observe(GenerationStage.GENERATION_VALIDATION)
             first_batch = None
             initial_envelope_invalid = True
             summaries.append("response envelope: invalid structured candidate batch")
+        else:
+            observe(GenerationStage.GENERATION_VALIDATION)
 
         if first_batch is not None:
             self._process_batch(
@@ -165,9 +187,11 @@ class GenerationService:
                 retained_ids=[candidate.id for candidate in retained],
                 replace_full_batch=initial_envelope_invalid,
             )
+            observe(GenerationStage.PROVIDER_REQUEST)
             try:
                 second_batch = _propose(client, correction)
             except GraphCheckError as exc:
+                observe(GenerationStage.GENERATION_VALIDATION)
                 if exc.error.code == "generate.output_invalid":
                     if retained:
                         rejection = DroppedCandidate(
@@ -194,6 +218,8 @@ class GenerationService:
                         ) from None
                 else:
                     raise
+            else:
+                observe(GenerationStage.GENERATION_VALIDATION)
             if second_batch is not None:
                 self._process_batch(
                     second_batch,
@@ -217,6 +243,7 @@ class GenerationService:
         serialize_validated_suite("generated-validation", retained)
         checks_path = Path(config.checks)
         checks_dir = checks_path if checks_path.is_absolute() else project_root / checks_path
+        observe(GenerationStage.ARTIFACT_WRITE)
         written = self._writer_factory(checks_dir).write(retained)
         result_path = display_path(written.path, project_root)
         dropped_count = max(requested_count - len(retained), len(dropped))

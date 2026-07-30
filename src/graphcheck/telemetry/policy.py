@@ -197,6 +197,7 @@ class CommandCompleted(_StrictPayload):
     results_artifact: ArtifactOutcome
     report_artifact: ArtifactOutcome
     baseline_artifact: ArtifactOutcome
+    generated_artifact: ArtifactOutcome
     telemetry_command_id: UUID4
     telemetry_run_id: UUID4 | None
     probe_outcome: EventOutcome | None
@@ -257,6 +258,16 @@ class CommandCompleted(_StrictPayload):
             and self.failure_stage is not CliFailureStage.BASELINE_WRITE
         ):
             raise ValueError("a failed baseline artifact requires baseline_write failure_stage")
+        if (
+            self.generated_artifact is ArtifactOutcome.ERROR
+            and self.failure_stage is not CliFailureStage.ARTIFACT_WRITE
+        ):
+            raise ValueError("a failed generated artifact requires artifact_write failure_stage")
+        if (
+            self.generated_artifact is not ArtifactOutcome.NOT_REQUESTED
+            and self.artifact_write_ms is None
+        ):
+            raise ValueError("a requested generated artifact requires artifact_write_ms")
         return self
 
 
@@ -527,6 +538,7 @@ _COMMAND_COMPLETED_PROPERTY_KEYS = frozenset(
         "results_artifact",
         "report_artifact",
         "baseline_artifact",
+        "generated_artifact",
         "telemetry_run_id",
         "probe_outcome",
         "probe_duration_ms",

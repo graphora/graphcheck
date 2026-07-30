@@ -88,6 +88,7 @@ field in the code allowlist differs from this document.
         "count_store_available",
         "duration_ms",
         "failure_stage",
+        "generated_artifact",
         "graphcheck_version",
         "interactive",
         "os_family",

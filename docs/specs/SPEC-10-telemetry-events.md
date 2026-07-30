@@ -299,12 +299,13 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 | `failure_stage` | safe stage enum or null | Set if and only if `process_outcome` is not `success`; the pipeline stage that failed. Null on success. |
 | `duration_ms` | non-negative integer | Total command duration. |
 | `setup_ms` | non-negative integer or null | Time before the engine ran (discovery, config, suite/profile load, client setup). |
-| `artifact_write_ms` | non-negative integer or null | Time spent writing result or baseline artifacts. |
+| `artifact_write_ms` | non-negative integer or null | Time spent writing result, baseline, or generated-suite artifacts. |
 | `render_ms` | non-negative integer or null | Time spent rendering the HTML report. |
 | `output_mode` | `human` or `json` | Selected output mode. |
 | `results_artifact` | `not_requested`, `written`, or `error` | Outcome of the `results.json` write. |
 | `report_artifact` | `not_requested`, `written`, or `error` | Outcome of the HTML report write. |
 | `baseline_artifact` | `not_requested`, `written`, or `error` | Outcome of the baseline write. |
+| `generated_artifact` | `not_requested`, `written`, or `error` | Outcome of the generated-suite write. |
 | `telemetry_command_id` | UUID | Random UUID v4 for this invocation; correlates every PostHog event from this command. |
 | `telemetry_run_id` | UUID or null | Equal to the engine run's `telemetry_run_id` when a run occurred; null otherwise. A non-null value is the definitive signal that the engine ran. |
 | `probe_outcome` | `success`, `error`, `timeout`, or null | For `init` and `debug`: connection-probe result outside a run; null when no probe occurred. |
@@ -543,7 +544,7 @@ diff_compare | artifact_write | report_render | report_open
 - `skip_reason`: `generated`, `unsupported`, `not_run`.
 - `partial_reason_codes` (run): `suite_input_invalid`, `unsupported_check`, `partial_baseline`, `baseline_measurement_missing`, `deadline_exhausted`, `unknown`.
 - `partial_reason` (profile): `deadline_exhausted`, `property_coverage_incomplete`, `degree_distribution_incomplete`, `schema_incomplete`, `probe_incomplete`, `unknown`.
-- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`): `not_requested`, `written`, `error`.
+- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`, `generated_artifact`): `not_requested`, `written`, `error`.
 
 ## Privacy denylist
 

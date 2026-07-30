@@ -30,6 +30,7 @@ from graphcheck.generation.service import (
     DroppedCandidate,
     GenerateResult,
     GenerationService,
+    GenerationStage,
 )
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
@@ -561,6 +562,20 @@ def generate(
 ) -> None:
     """Generate non-deterministic, inert check suggestions for human review."""
 
+    telemetry = _command_telemetry()
+    current_stage = CliFailureStage.PROJECT_DISCOVERY
+    artifact_started: float | None = None
+
+    def observe_stage(stage: GenerationStage) -> None:
+        nonlocal artifact_started, current_stage
+        current_stage = CliFailureStage(stage.value)
+        if stage is GenerationStage.ARTIFACT_WRITE:
+            artifact_started = time.monotonic()
+
+    def mark_generated_artifact(outcome: ArtifactOutcome) -> None:
+        if telemetry is not None and artifact_started is not None:
+            telemetry.mark_generated_artifact(artifact_started, outcome)
+
     def disclose(event: GenerateDisclosure) -> None:
         if json_output:
             typer.echo(
@@ -579,6 +594,7 @@ def generate(
 
     try:
         root = find_project_root()
+        current_stage = CliFailureStage.CONFIG_LOAD
         result = generation_service_factory().generate(
             project_root=root,
             baseline_from=from_,
@@ -587,9 +603,12 @@ def generate(
             disclosure_sink=disclose,
             warning_sink=warn,
             invocation_dir=Path.cwd(),
+            stage_observer=observe_stage,
         )
     except GraphCheckError as exc:
-        if (telemetry := _command_telemetry()) is not None:
+        if exc.error.code.startswith("generate.write_"):
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
             telemetry.fail(
                 ProcessOutcome.USER_ERROR,
                 _cli_stage_for_error(exc.error.code),
@@ -611,7 +630,18 @@ def generate(
             typer.echo(f"Error [{exc.error.code}]: {exc.error.message}", err=True)
             typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
+    except Exception:
+        if current_stage is CliFailureStage.ARTIFACT_WRITE:
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                current_stage,
+                SafeErrorCode.UNKNOWN,
+            )
+        raise
 
+    mark_generated_artifact(ArtifactOutcome.WRITTEN)
     _render_generate_result(result, json_output=json_output)
 
 

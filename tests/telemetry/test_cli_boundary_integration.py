@@ -109,7 +109,7 @@ def _command_event(transport: RecordingTransport) -> dict[str, object]:
     return matches[0]
 
 
-def _generation_project(tmp_path: Path, monkeypatch, client) -> Path:
+def _generation_project(tmp_path: Path, monkeypatch, client, *, writer_factory=None) -> Path:
     write_default_project(tmp_path)
     config_path = tmp_path / "graphcheck.yml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -127,7 +127,10 @@ def _generation_project(tmp_path: Path, monkeypatch, client) -> Path:
     document = tmp_path / "private-domain-document.txt"
     document.write_text("private document contents", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    service = GenerationService(client_factory=lambda config, key: client)
+    service = GenerationService(
+        client_factory=lambda config, key: client,
+        **({"writer_factory": writer_factory} if writer_factory is not None else {}),
+    )
     monkeypatch.setattr(cli_module, "generation_service_factory", lambda: service)
     return document
 
@@ -186,6 +189,8 @@ def test_generate_success_is_instrumented_at_true_cli_boundary(
     assert command["failure_stage"] is None
     assert command["safe_error_code"] is None
     assert command["output_mode"] == "json"
+    assert command["generated_artifact"] == "written"
+    assert command["artifact_write_ms"] is not None
     assert all(
         secret not in repr(command)
         for secret in (
@@ -199,6 +204,56 @@ def test_generate_success_is_instrumented_at_true_cli_boundary(
             str(tmp_path),
         )
     )
+
+
+def test_generate_write_failure_marks_generated_artifact_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    class Client:
+        def propose(self, request):
+            return RawProposalBatch(
+                candidates=[
+                    RawProposal(
+                        kind="conformance",
+                        spec={
+                            "id": "private-check-id",
+                            "check": "completeness",
+                            "with": {"label": "PrivateLabel", "property": "private_property"},
+                        },
+                    )
+                ]
+            )
+
+    class Writer:
+        def write(self, candidates):
+            raise GraphCheckError(
+                "generate.write_failed",
+                "The generated suite could not be written.",
+                "Check the configured checks path and filesystem permissions, then retry.",
+            )
+
+    _generation_project(
+        tmp_path,
+        monkeypatch,
+        Client(),
+        writer_factory=lambda path: Writer(),
+    )
+
+    exit_code = _invoke_entrypoint(monkeypatch, "generate", "--count", "1")
+
+    assert exit_code == 1
+    command = _command_event(recording_transport)
+    assert command["command"] == "generate"
+    assert command["process_outcome"] == "user_error"
+    assert command["failure_stage"] == "artifact_write"
+    assert command["safe_error_code"] == "artifact.write_failed"
+    assert command["generated_artifact"] == "error"
+    assert command["artifact_write_ms"] is not None
+    assert command["results_artifact"] == "not_requested"
+    assert command["report_artifact"] == "not_requested"
+    assert command["baseline_artifact"] == "not_requested"
 
 
 def test_generate_provider_failure_is_classified_at_true_cli_boundary(
@@ -242,6 +297,76 @@ def test_generate_provider_failure_is_classified_at_true_cli_boundary(
             str(tmp_path),
         )
     )
+
+
+def test_generate_unexpected_provider_failure_retains_stage_at_true_cli_boundary(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    class Client:
+        def propose(self, request):
+            raise RuntimeError("private provider response")
+
+    _generation_project(tmp_path, monkeypatch, Client())
+    monkeypatch.setattr(sys, "argv", ["graphcheck", "generate", "--count", "1"])
+
+    with pytest.raises(RuntimeError, match="private provider response"):
+        cli()
+
+    command = _command_event(recording_transport)
+    assert command["command"] == "generate"
+    assert command["process_outcome"] == "unexpected_error"
+    assert command["failure_stage"] == "provider_request"
+    assert command["safe_error_code"] == "unknown"
+    assert command["generated_artifact"] == "not_requested"
+    assert command["artifact_write_ms"] is None
+    assert "private provider response" not in repr(command)
+
+
+def test_generate_unexpected_writer_failure_retains_stage_and_artifact(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    class Client:
+        def propose(self, request):
+            return RawProposalBatch(
+                candidates=[
+                    RawProposal(
+                        kind="conformance",
+                        spec={
+                            "id": "private-check-id",
+                            "check": "completeness",
+                            "with": {"label": "PrivateLabel", "property": "private_property"},
+                        },
+                    )
+                ]
+            )
+
+    class Writer:
+        def write(self, candidates):
+            raise RuntimeError("private writer path")
+
+    _generation_project(
+        tmp_path,
+        monkeypatch,
+        Client(),
+        writer_factory=lambda path: Writer(),
+    )
+    monkeypatch.setattr(sys, "argv", ["graphcheck", "generate", "--count", "1"])
+
+    with pytest.raises(RuntimeError, match="private writer path"):
+        cli()
+
+    command = _command_event(recording_transport)
+    assert command["command"] == "generate"
+    assert command["process_outcome"] == "unexpected_error"
+    assert command["failure_stage"] == "artifact_write"
+    assert command["safe_error_code"] == "unknown"
+    assert command["generated_artifact"] == "error"
+    assert command["artifact_write_ms"] is not None
+    assert "private writer path" not in repr(command)
 
 
 def test_baseline_set_success_is_instrumented_at_true_cli_boundary(
