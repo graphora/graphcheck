@@ -34,6 +34,23 @@ All notable changes to this project are documented here. Format follows [Keep a 
   validation, redacted findings, mandatory node evidence, and confidence intervals.
 - A pure deterministic severity-weighted scorer with exact half-even rounding, execution
   coverage, and independently calculated per-suite scores for the machine-readable contract.
+- SPEC-10 telemetry event infrastructure: six strict, immutable, content-free engine events;
+  run/probe/query/check/terminal/fault instrumentation; reconciled aggregate mapping to six
+  allowlisted PostHog events; and correlated outermost CLI command telemetry, including safe
+  boundaries for the forthcoming `profile`, `diff`, and `baseline` commands.
+- User-controlled anonymous telemetry that is disabled by default, with
+  `graphcheck telemetry enable`, `disable`, `status`, `preview`, and `reset-id`; persisted,
+  versioned consent; `DO_NOT_TRACK` and process overrides; non-persistent process identities; and
+  no client construction or network activity before opt-in.
+- A dependency-free, asynchronous PostHog Cloud adapter with a bounded queue and final flush,
+  short request timeouts, a release-owned project-key seam, person-profile and geo-enrichment
+  suppression, exact per-event property schemas, and complete failure isolation for offline,
+  timed-out, refused, or otherwise unsuccessful delivery.
+- Telemetry privacy and transparency safeguards: no queries, schema tokens, graph values,
+  credentials, project/check identity, results, verdicts, paths, arguments, or free-form
+  diagnostics; a complete public event/field inventory in `docs/telemetry.md`; CI enforcement
+  against allowlist drift; property-based anonymization coverage; explicit network-failure tests;
+  and a fresh-install command matrix proving zero events before opt-in.
 
 ### Changed
 

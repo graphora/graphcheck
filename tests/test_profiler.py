@@ -18,7 +18,7 @@ from graphcheck.contracts.profile import (
     profile_fingerprint,
 )
 from graphcheck.contracts.results import Capabilities, RunTarget
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import Counts, Neo4jClient
 from graphcheck.profiler import (
     _collect_degree_distribution,
@@ -632,6 +632,39 @@ def test_profile_returns_partial_baseline_when_budget_is_exceeded_after_probe(
         baseline.graph_schema,
         baseline.statistics,
     )
+
+
+def test_profile_reports_structured_deadline_state_for_a_bounded_query_timeout(
+    monkeypatch,
+) -> None:
+    clock = [0.0]
+    observed_results: list[tuple[str, str | None, bool]] = []
+
+    def timeout_labels(
+        client: Neo4jClient,
+        *,
+        timeout_s: float | None = None,
+        _deadline: float | None = None,
+    ):
+        clock[0] = 61.0
+        raise GraphCheckTimeoutError(
+            "neo4j.query_failed",
+            "Neo4j timed out the read-only query before it completed.",
+            "retry",
+        )
+
+    monkeypatch.setattr("graphcheck.profiler.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("graphcheck.profiler.collect_labels", timeout_labels)
+
+    baseline = profile(
+        cast(Neo4jClient, FakeNeo4jClient()),
+        telemetry_result_observer=lambda outcome, reason, exhausted: observed_results.append(
+            (outcome, reason, exhausted)
+        ),
+    )
+
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert observed_results == [("partial", "deadline_exhausted", True)]
 
 
 @pytest.mark.parametrize(

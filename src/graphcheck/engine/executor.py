@@ -13,6 +13,10 @@ from graphcheck.errors import GraphCheckError
 class ExecutionResult:
     rows: list[dict[str, Any]]
     columns: tuple[str, ...]
+    notification_count: int | None = None
+    server_available_after_ms: int | None = None
+    server_consumed_after_ms: int | None = None
+    read_guard_ms: int | None = None
 
 
 class ReadOnlyExecutor:
@@ -35,7 +39,14 @@ class ReadOnlyExecutor:
             kwargs = {"timeout_s": timeout_s} if _accepts_timeout(rich) else {}
             result = rich(query, values, **kwargs)
             if hasattr(result, "rows"):
-                return ExecutionResult(list(result.rows), tuple(result.columns))
+                return ExecutionResult(
+                    list(result.rows),
+                    tuple(result.columns),
+                    notification_count=len(getattr(result, "notifications", ())),
+                    server_available_after_ms=getattr(result, "server_available_after_ms", None),
+                    server_consumed_after_ms=getattr(result, "server_consumed_after_ms", None),
+                    read_guard_ms=getattr(result, "read_guard_ms", None),
+                )
             rows = list(result)
             return ExecutionResult(rows, tuple(rows[0]) if rows else ())
 
