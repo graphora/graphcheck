@@ -77,7 +77,7 @@ GraphCheck never modifies customer graphs.
 
 ## Accuracy Guarantees
 
-- [Evidence](specs/SPEC-01-results-json.md): Every failed validation includes supporting evidence.
+- [Evidence](specs/SPEC-01-results-json.md): Every `fail` and `warn` result includes supporting evidence.
 - [No LLM-as-Judge](README.md): Validation is rule-based.
 - [Offline Reports](specs/SPEC-06-scorer-html-report.md): HTML reports require no network connection.
 - [Opt-in Telemetry](specs/SPEC-10-telemetry-events.md): Telemetry is disabled by default.
