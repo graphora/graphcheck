@@ -88,6 +88,7 @@ class CommandName(StrEnum):
     RUN = "run"
     REPORT = "report"
     PROFILE = "profile"
+    GENERATE = "generate"
     DIFF = "diff"
     BASELINE = "baseline"
     TELEMETRY = "telemetry"
@@ -126,6 +127,9 @@ class CliFailureStage(StrEnum):
     ENGINE = "engine"
     PROFILE_COLLECTION = "profile_collection"
     BASELINE_LOAD = "baseline_load"
+    DOCUMENT_LOAD = "document_load"
+    PROVIDER_REQUEST = "provider_request"
+    GENERATION_VALIDATION = "generation_validation"
     BASELINE_WRITE = "baseline_write"
     DIFF_COMPARE = "diff_compare"
     ARTIFACT_WRITE = "artifact_write"
@@ -193,6 +197,7 @@ class CommandCompleted(_StrictPayload):
     results_artifact: ArtifactOutcome
     report_artifact: ArtifactOutcome
     baseline_artifact: ArtifactOutcome
+    generated_artifact: ArtifactOutcome
     telemetry_command_id: UUID4
     telemetry_run_id: UUID4 | None
     probe_outcome: EventOutcome | None
@@ -253,6 +258,16 @@ class CommandCompleted(_StrictPayload):
             and self.failure_stage is not CliFailureStage.BASELINE_WRITE
         ):
             raise ValueError("a failed baseline artifact requires baseline_write failure_stage")
+        if (
+            self.generated_artifact is ArtifactOutcome.ERROR
+            and self.failure_stage is not CliFailureStage.ARTIFACT_WRITE
+        ):
+            raise ValueError("a failed generated artifact requires artifact_write failure_stage")
+        if (
+            self.generated_artifact is not ArtifactOutcome.NOT_REQUESTED
+            and self.artifact_write_ms is None
+        ):
+            raise ValueError("a requested generated artifact requires artifact_write_ms")
         return self
 
 
@@ -360,6 +375,18 @@ _ERROR_CODE_MAP.update(
         "neo4j.write_rejected": SafeErrorCode.READ_GUARD_REJECTED,
         "neo4j.read_guard_unavailable": SafeErrorCode.READ_GUARD_REJECTED,
         "engine.timeout": SafeErrorCode.NEO4J_QUERY_FAILED,
+        "generate.config_missing": SafeErrorCode.CONFIG_INVALID,
+        "generate.config_invalid": SafeErrorCode.CONFIG_INVALID,
+        "generate.api_key_missing": SafeErrorCode.CONFIG_INVALID,
+        "generate.provider_unsupported": SafeErrorCode.CONFIG_INVALID,
+        "generate.baseline_missing": SafeErrorCode.BASELINE_MISSING,
+        "generate.baseline_not_found": SafeErrorCode.BASELINE_MISSING,
+        "generate.baseline_invalid": SafeErrorCode.BASELINE_INVALID,
+        "generate.doc_not_found": SafeErrorCode.CONFIG_INVALID,
+        "generate.doc_invalid": SafeErrorCode.CONFIG_INVALID,
+        "generate.doc_too_large": SafeErrorCode.CONFIG_INVALID,
+        "generate.write_failed": SafeErrorCode.ARTIFACT_WRITE_FAILED,
+        "generate.write_invalid": SafeErrorCode.ARTIFACT_WRITE_FAILED,
     }
 )
 
@@ -511,6 +538,7 @@ _COMMAND_COMPLETED_PROPERTY_KEYS = frozenset(
         "results_artifact",
         "report_artifact",
         "baseline_artifact",
+        "generated_artifact",
         "telemetry_run_id",
         "probe_outcome",
         "probe_duration_ms",
@@ -573,6 +601,9 @@ _DENIED_FIELD_NAMES = frozenset(
         "database",
         "database_name",
         "description",
+        "destination",
+        "document",
+        "document_contents",
         "edition",
         "email",
         "environment",
@@ -602,6 +633,8 @@ _DENIED_FIELD_NAMES = frozenset(
         "measured",
         "measured_value",
         "message",
+        "model",
+        "model_name",
         "notification",
         "notification_position",
         "notification_text",
@@ -616,12 +649,15 @@ _DENIED_FIELD_NAMES = frozenset(
         "profile_name",
         "project",
         "project_name",
+        "prompt",
         "property",
         "property_name",
         "property_names",
         "property_value",
         "property_values",
         "provenance",
+        "provider",
+        "provider_name",
         "question",
         "query",
         "query_plan",
