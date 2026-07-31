@@ -202,8 +202,7 @@ def generate(
     docs: Annotated[list[Path] | None, typer.Option("--docs")] = None,
     count: Annotated[int, typer.Option(min=1, max=20)] = 5,
     json_output: Annotated[bool, typer.Option("--json")] = False,
-) -> None:
-    ...
+) -> None: ...
 ```
 
 Rules:
