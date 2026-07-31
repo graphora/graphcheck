@@ -10,6 +10,7 @@ from graphcheck.reporting import (
     write_results,
 )
 
+
 def write_run_artifacts(results: Results, runs_dir: Path) -> tuple[Path, Path]:
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()

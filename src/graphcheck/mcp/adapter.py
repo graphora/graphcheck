@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
-from typer.testing import CliRunner
-
+from graphcheck.application.paths import project_path
+from graphcheck.application.run import (
+    RunRequest,
+    execute_run,
+)
 from graphcheck.packs.catalog import builtin_pack_catalog
+from graphcheck.project import (
+    find_project_root,
+    load_project_config,
+)
 from graphcheck.reporting import load_results
 
 
@@ -31,35 +37,34 @@ def list_checks() -> dict[str, list[dict[str, Any]]]:
     return {"checks": checks}
 
 
-def get_results(path: str | Path) -> Any:
+def get_results(run_id: str) -> Any:
     """
     Load a GraphCheck results.json file.
     """
-    return load_results(path)
+    root = find_project_root()
+    config = load_project_config(root)
+    artifacts = project_path(root, config.artifacts)
+
+    results_path = artifacts / "runs" / run_id / "results.json"
+
+    return load_results(results_path)
 
 
 def run_suite(
     suite: str,
     profile: str | None = None,
-) -> dict[str, Any]:
+) -> Any:
     """
-    Run a GraphCheck suite by invoking the existing CLI.
+    Run a GraphCheck suite.
     """
-    from graphcheck.cli import app
 
-    runner = CliRunner()
+    outcome = execute_run(
+        RunRequest(
+            profile=profile,
+            suite_ids=[suite],
+            tags=[],
+            fail_fast=False,
+        )
+    )
 
-    args = ["run"]
-
-    if profile:
-        args.extend(["--profile", profile])
-
-    args.extend(["--suite", suite])
-
-    result = runner.invoke(app, args)
-
-    return {
-        "exit_code": result.exit_code,
-        "stdout": result.stdout,
-        "exception": str(result.exception) if result.exception else None,
-    }
+    return outcome.results

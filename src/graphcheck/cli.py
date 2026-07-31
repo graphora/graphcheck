@@ -11,13 +11,13 @@ from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
-from graphcheck.application.artifacts import write_run_artifacts
 
 import typer
 from pydantic import ValidationError
-from graphcheck.application.suites import load_suite_inputs
-from graphcheck.application.paths import project_path
+
 from graphcheck import __version__
+from graphcheck.application.paths import project_path
+from graphcheck.application.suites import load_suite_inputs
 from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
 from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
@@ -71,6 +71,7 @@ from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 _DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
+
 # Kept as an injection point for integrations that patched the original comparator.
 compare_baselines = compare
 
@@ -80,6 +81,10 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+mcp_app = typer.Typer(help="Model Context Protocol commands.")
+
+app.add_typer(mcp_app, name="mcp")
+
 telemetry_app = typer.Typer(
     name="telemetry",
     help="Manage anonymous opt-in product telemetry.",
@@ -1159,13 +1164,13 @@ def _open_html_report(path: Path) -> None:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
     typer.echo(f"Opened {path}")
 
+
 @mcp_app.command("serve")
 def mcp_serve() -> None:
-    """
-    Start the GraphCheck MCP server.
-    """
+    """Start the GraphCheck MCP server."""
     run_mcp_server()
-    
+
+
 @app.command("run")
 @_telemetry_command(CommandName.RUN)
 def run_command(
@@ -1202,8 +1207,10 @@ def run_command(
         artifacts = project_path(root, config.artifacts)
         runs_dir = artifacts / "runs"
         tags = _selection_tags(select or [])
+        checks_dir = project_path(root, config.checks)
+
         suite_inputs = load_suite_inputs(
-            project_path(root, config.artifacts),
+            checks_dir,
             requested_suites,
         )
         profiles = load_profiles(root)

@@ -12,8 +12,10 @@ async def test_mcp_failure_isolation():
         args=["run", "graphcheck", "mcp", "serve"],
     )
 
-    async with stdio_client(server) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as session:
+    async with (
+            stdio_client(server) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
             await session.initialize()
 
             # First call succeeds
@@ -27,7 +29,7 @@ async def test_mcp_failure_isolation():
             )
 
             assert result.isError is True
-            assert "Unknown tool" in result.content[0].text      
+            assert "Unknown tool" in result.content[0].text
 
             # Server should still work afterwards
             result2 = await session.call_tool("list_checks", {})

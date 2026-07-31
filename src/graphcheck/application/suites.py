@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from graphcheck.errors import GraphCheckError
 from graphcheck.engine.runner import SuiteInput
+from graphcheck.errors import GraphCheckError
 
 
 def load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[SuiteInput]:

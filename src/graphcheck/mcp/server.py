@@ -28,9 +28,9 @@ def run_suite(
 
 
 @mcp.tool()
-def get_results(path: str) -> Any:
+def get_results(run_id: str) -> Any:
     """Load a GraphCheck results.json file."""
-    return adapter.get_results(path)
+    return adapter.get_results(run_id)
 
 
 def run() -> None:

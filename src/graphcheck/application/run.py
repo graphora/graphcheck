@@ -3,21 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from graphcheck.application.artifacts import write_run_artifacts
 from graphcheck.application.paths import project_path
 from graphcheck.application.suites import load_suite_inputs
-from graphcheck.application.artifacts import write_run_artifacts
-
-from graphcheck.baselines import DirectoryBaselineProvider
-from graphcheck.contracts.results import CheckError
+from graphcheck.connection_profiles import (
+    load_profiles,
+    select_profile,
+)
+from graphcheck.contracts.results import CheckError, Results
+from graphcheck.engine import (
+    DirectoryBaselineProvider,
+    Engine,
+    failed_results,
+)
 from graphcheck.errors import GraphCheckError
-from graphcheck.contracts.results import Results, failed_results
-from graphcheck.engine import Engine
 from graphcheck.neo4j_adapter import Neo4jClient
 from graphcheck.project import (
     find_project_root,
     load_project_config,
-    load_profiles,
-    select_profile,
 )
 
 
@@ -34,7 +37,6 @@ class RunOutcome:
     results: Results
     results_path: Path
     report_path: Path
-
 
 
 def execute_run(
@@ -62,7 +64,6 @@ def execute_run(
             checks_dir,
             request.suite_ids,
         )
-
         results = Engine(
             client,
             baselines=DirectoryBaselineProvider(
@@ -85,7 +86,7 @@ def execute_run(
             results_path=results_path,
             report_path=report_path,
         )
-    
+
     except GraphCheckError as exc:
         results = failed_results(
             exc.error,
@@ -104,7 +105,7 @@ def execute_run(
             results_path=results_path,
             report_path=report_path,
         )
-    
+
     except Exception as exc:
         error = CheckError(
             code="run.configuration",
@@ -129,6 +130,6 @@ def execute_run(
             results_path=results_path,
             report_path=report_path,
         )
-    
+
     finally:
         client.close()
