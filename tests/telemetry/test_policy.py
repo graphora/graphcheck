@@ -101,6 +101,11 @@ def test_reset_breaks_linkage_and_allowlists_map_unknown_values(tmp_path):
     assert safe_pattern("future-private-pattern") is Pattern.UNKNOWN
     assert safe_error_code("profile.counts_unavailable") is SafeErrorCode.PROFILE_COLLECTION_FAILED
     assert safe_error_code("baseline.not_found") is SafeErrorCode.BASELINE_MISSING
+    assert (
+        safe_error_code("generate.provider_auth_failed")
+        is SafeErrorCode.GENERATE_PROVIDER_AUTH_FAILED
+    )
+    assert safe_error_code("generate.doc_invalid") is SafeErrorCode.CONFIG_INVALID
     assert safe_error_code("customer.secret.failure") is SafeErrorCode.UNKNOWN
 
 
@@ -155,3 +160,6 @@ def test_privacy_assertion_rejects_content_fields_and_values():
             {"safe_error_code": "unknown-secret"},
             sensitive_values=("secret",),
         )
+    for field in ("provider", "model", "document_contents", "path"):
+        with pytest.raises(ValueError, match="privacy-denied"):
+            assert_private_payload({field: "private"})

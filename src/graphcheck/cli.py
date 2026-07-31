@@ -12,7 +12,7 @@ from dataclasses import replace
 from functools import wraps
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from graphcheck.contracts.profile import BaselineProfile
     from graphcheck.contracts.results import CheckError, Results, RunTarget
     from graphcheck.engine import SuiteInput
+    from graphcheck.generation.disclosure import GenerateDisclosure
+    from graphcheck.generation.service import DroppedCandidate, GenerateResult
     from graphcheck.reporting.history import ReportRun
 
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
@@ -87,6 +89,10 @@ def resolve_diff_baselines(*args, **kwargs):
 
 def compare_baselines(*args, **kwargs):
     return _call("graphcheck.diff", "compare", *args, **kwargs)
+
+
+def generation_service_factory(*args, **kwargs):
+    return _call("graphcheck.generation.service", "GenerationService", *args, **kwargs)
 
 
 def write_results(*args, **kwargs):
@@ -513,6 +519,7 @@ def profile(
     from graphcheck.baselines import write_baseline
     from graphcheck.contracts.profile import ProfileStatus
     from graphcheck.errors import GraphCheckError
+    from graphcheck.project import PROJECT_FILE, default_project_config, load_project_config
 
     telemetry = _command_telemetry()
     setup_started = time.monotonic()
@@ -520,6 +527,11 @@ def profile(
     unexpected_stage = CliFailureStage.PROJECT_DISCOVERY
     try:
         root = find_project_root()
+        config = (
+            load_project_config(root)
+            if (root / PROJECT_FILE).is_file()
+            else default_project_config()
+        )
         unexpected_stage = CliFailureStage.PROFILE_LOAD
         profiles = load_profiles(root)
         _, selected = select_profile(profiles, profile)
@@ -586,7 +598,7 @@ def profile(
         )
     artifact_started = time.monotonic()
     try:
-        path = write_baseline(baseline)
+        path = write_baseline(baseline, root, config.artifacts)
     except OSError as exc:
         if telemetry is not None:
             telemetry.baseline_artifact = ArtifactOutcome.ERROR
@@ -614,6 +626,133 @@ def profile(
             baseline,
             path,
         )
+
+
+@app.command()
+@_telemetry_command(CommandName.GENERATE)
+def generate(
+    from_: Annotated[
+        Path | None,
+        typer.Option("--from", help="Baseline JSON; defaults to the latest valid snapshot."),
+    ] = None,
+    docs: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--docs",
+            help="UTF-8 domain document sent verbatim. Repeat for multiple files.",
+        ),
+    ] = None,
+    count: Annotated[
+        int,
+        typer.Option("--count", min=1, max=20, help="Approximate number of checks to propose."),
+    ] = 5,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a stable machine-readable result."),
+    ] = False,
+) -> None:
+    """Generate non-deterministic, inert check suggestions for human review."""
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.generation.service import GenerationStage
+
+    telemetry = _command_telemetry()
+    current_stage = CliFailureStage.PROJECT_DISCOVERY
+    artifact_started: float | None = None
+
+    def observe_stage(stage: GenerationStage) -> None:
+        nonlocal artifact_started, current_stage
+        current_stage = CliFailureStage(stage.value)
+        if stage is GenerationStage.ARTIFACT_WRITE:
+            artifact_started = time.monotonic()
+
+    def mark_generated_artifact(outcome: ArtifactOutcome) -> None:
+        if telemetry is not None and artifact_started is not None:
+            telemetry.mark_generated_artifact(artifact_started, outcome)
+
+    def disclose(event: "GenerateDisclosure") -> None:
+        if json_output:
+            typer.echo(
+                json.dumps(event.as_json(), separators=(",", ":"), ensure_ascii=False),
+                err=True,
+            )
+        else:
+            typer.echo(event.render_human(), err=True)
+
+    def warn(candidate: "DroppedCandidate") -> None:
+        if not json_output:
+            typer.echo(
+                f"Warning [{candidate.code}] {candidate.candidate}: {candidate.reason}",
+                err=True,
+            )
+
+    try:
+        root = find_project_root()
+        current_stage = CliFailureStage.CONFIG_LOAD
+        result = generation_service_factory().generate(
+            project_root=root,
+            baseline_from=from_,
+            document_paths=docs,
+            requested_count=count,
+            disclosure_sink=disclose,
+            warning_sink=warn,
+            invocation_dir=Path.cwd(),
+            stage_observer=observe_stage,
+        )
+    except GraphCheckError as exc:
+        if exc.error.code.startswith("generate.write_"):
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "command": "generate",
+                        "status": "error",
+                        "error": exc.error.model_dump(mode="json"),
+                    },
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            typer.echo(f"Error [{exc.error.code}]: {exc.error.message}", err=True)
+            typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    except Exception:
+        if current_stage is CliFailureStage.ARTIFACT_WRITE:
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                current_stage,
+                SafeErrorCode.UNKNOWN,
+            )
+        raise
+
+    mark_generated_artifact(ArtifactOutcome.WRITTEN)
+    _render_generate_result(result, json_output=json_output)
+
+
+def _render_generate_result(result: "GenerateResult", *, json_output: bool) -> None:
+    if json_output:
+        typer.echo(
+            json.dumps(
+                result.model_dump(mode="json"),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+        return
+    dropped = f" ({result.dropped} dropped)" if result.dropped else ""
+    typer.echo(
+        f"Wrote {result.written} generated checks to {result.path}{dropped}; "
+        "review them and remove generated: true to activate."
+    )
 
 
 @app.command()
@@ -1149,6 +1288,16 @@ def _cli_stage_for_error(code: str) -> CliFailureStage:
         return CliFailureStage.PROBE
     if code.startswith("report."):
         return CliFailureStage.REPORT_RENDER
+    if code.startswith("generate.baseline_"):
+        return CliFailureStage.BASELINE_LOAD
+    if code.startswith("generate.doc_"):
+        return CliFailureStage.DOCUMENT_LOAD
+    if code.startswith("generate.provider_"):
+        return CliFailureStage.PROVIDER_REQUEST
+    if code in {"generate.output_invalid", "generate.no_valid_candidates"}:
+        return CliFailureStage.GENERATION_VALIDATION
+    if code.startswith("generate.write_"):
+        return CliFailureStage.ARTIFACT_WRITE
     return CliFailureStage.CONFIG_LOAD
 
 

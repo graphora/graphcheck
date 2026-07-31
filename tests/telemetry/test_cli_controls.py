@@ -16,9 +16,9 @@ _DEFAULT_OFF_COMMANDS = (
     (CommandName.DEBUG, ("debug", "--help")),
     (CommandName.RUN, ("run", "--help")),
     (CommandName.REPORT, ("report", "--help")),
-    # These three commands are modeled by SPEC-10 but have not landed yet. Exercising their
-    # parse-time boundary proves the default-off gate already covers them.
+    # Help invocations exercise the parse-time boundary without running command side effects.
     (CommandName.PROFILE, ("profile", "--help")),
+    (CommandName.GENERATE, ("generate", "--help")),
     (CommandName.DIFF, ("diff", "--help")),
     (CommandName.BASELINE, ("baseline", "--help")),
     (CommandName.TELEMETRY, ("telemetry", "status")),
@@ -90,6 +90,7 @@ def test_default_off_command_matrix_covers_every_allowlisted_command():
         "run",
         "report",
         "profile-future",
+        "generate",
         "diff-future",
         "baseline-future",
         "telemetry-status",

@@ -68,6 +68,7 @@ def _command():
         results_artifact=ArtifactOutcome.WRITTEN,
         report_artifact=ArtifactOutcome.WRITTEN,
         baseline_artifact=ArtifactOutcome.NOT_REQUESTED,
+        generated_artifact=ArtifactOutcome.NOT_REQUESTED,
         telemetry_command_id=COMMAND_ID,
         telemetry_run_id=None,
         probe_outcome=None,

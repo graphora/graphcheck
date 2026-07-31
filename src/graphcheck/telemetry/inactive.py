@@ -35,6 +35,7 @@ class InactiveCommandTelemetryRuntime:
     results_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     report_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     baseline_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
+    generated_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     _callback_entered: bool = False
     _profile_result_recorded: bool = False
 
@@ -90,6 +91,14 @@ class InactiveCommandTelemetryRuntime:
         self.artifact_write_ms = max(0, _elapsed_ms(started_perf) - max(0, exclude_ms))
         self.results_artifact = results
         self.report_artifact = report
+
+    def mark_generated_artifact(
+        self,
+        started_perf: float,
+        outcome: ArtifactOutcome,
+    ) -> None:
+        self.artifact_write_ms = _elapsed_ms(started_perf)
+        self.generated_artifact = outcome
 
     def fail(
         self,

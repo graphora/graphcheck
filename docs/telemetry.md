@@ -92,6 +92,7 @@ field in the code allowlist differs from this document.
         "count_store_available",
         "duration_ms",
         "failure_stage",
+        "generated_artifact",
         "graphcheck_version",
         "interactive",
         "os_family",
@@ -229,6 +230,7 @@ No telemetry payload contains:
   values;
 - check IDs or names, suite IDs or names, tags, questions, descriptions, or provenance;
 - database names, URIs, credentials, profile names, target fingerprints, or server addresses;
+- generation provider names, model names, destinations, prompts, or document contents;
 - project or repository names, branches, remotes, commit hashes, paths, filenames, file contents, or
   artifact run IDs;
 - command-line arguments, environment-variable names or values, hostnames, usernames, emails, IP

@@ -40,6 +40,7 @@ def _command(**updates):
         "results_artifact": ArtifactOutcome.WRITTEN,
         "report_artifact": ArtifactOutcome.WRITTEN,
         "baseline_artifact": ArtifactOutcome.NOT_REQUESTED,
+        "generated_artifact": ArtifactOutcome.NOT_REQUESTED,
         "telemetry_command_id": COMMAND_ID,
         "telemetry_run_id": RUN_ID,
         "probe_outcome": None,
@@ -108,6 +109,27 @@ def test_artifact_write_timing_excludes_separately_reported_render_time(monkeypa
     )
 
     assert runtime.artifact_write_ms == 60
+
+
+def test_generated_artifact_error_requires_artifact_write_stage(monkeypatch):
+    runtime = CommandTelemetryRuntime.start(
+        CommandName.GENERATE,
+        consent=ConsentState(False, ConsentSource.DEFAULT),
+    )
+    monkeypatch.setattr(runtime_module.time, "monotonic", lambda: 10.1)
+
+    runtime.mark_generated_artifact(10.0, ArtifactOutcome.ERROR)
+
+    assert runtime.artifact_write_ms == 100
+    assert runtime.generated_artifact is ArtifactOutcome.ERROR
+    with pytest.raises(ValidationError, match="generated artifact"):
+        _command(generated_artifact=ArtifactOutcome.ERROR)
+    with pytest.raises(ValidationError, match="artifact_write_ms"):
+        _command(
+            command=CommandName.GENERATE,
+            generated_artifact=ArtifactOutcome.WRITTEN,
+            artifact_write_ms=None,
+        )
 
 
 def test_per_label_degree_timing_does_not_complete_the_aggregate_stage():
