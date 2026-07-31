@@ -293,18 +293,19 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `command` | `init`, `debug`, `run`, `report`, `profile`, `diff`, `baseline`, `telemetry`, or `other` | Command name only. `profile`, `diff`, and `baseline` are first-class and are never folded into `other`. |
+| `command` | `init`, `debug`, `run`, `report`, `profile`, `generate`, `diff`, `baseline`, `telemetry`, or `other` | Command name only. `profile`, `generate`, `diff`, and `baseline` are first-class and are never folded into `other`. |
 | `action` | safe action enum or null | Per-command action from the *Safe allowlists* set; null for commands with no sub-action. Arbitrary arguments are never included. |
 | `process_outcome` | `success`, `user_error`, `engine_error`, or `unexpected_error` | CLI boundary result, defined by operational failure — not by exit code (see the semantic rule below). |
 | `failure_stage` | safe stage enum or null | Set if and only if `process_outcome` is not `success`; the pipeline stage that failed. Null on success. |
 | `duration_ms` | non-negative integer | Total command duration. |
 | `setup_ms` | non-negative integer or null | Time before the engine ran (discovery, config, suite/profile load, client setup). |
-| `artifact_write_ms` | non-negative integer or null | Time spent writing result or baseline artifacts. |
+| `artifact_write_ms` | non-negative integer or null | Time spent writing result, baseline, or generated-suite artifacts. |
 | `render_ms` | non-negative integer or null | Time spent rendering the HTML report. |
 | `output_mode` | `human` or `json` | Selected output mode. |
 | `results_artifact` | `not_requested`, `written`, or `error` | Outcome of the `results.json` write. |
 | `report_artifact` | `not_requested`, `written`, or `error` | Outcome of the HTML report write. |
 | `baseline_artifact` | `not_requested`, `written`, or `error` | Outcome of the baseline write. |
+| `generated_artifact` | `not_requested`, `written`, or `error` | Outcome of the generated-suite write. |
 | `telemetry_command_id` | UUID | Random UUID v4 for this invocation; correlates every PostHog event from this command. |
 | `telemetry_run_id` | UUID or null | Equal to the engine run's `telemetry_run_id` when a run occurred; null otherwise. A non-null value is the definitive signal that the engine ran. |
 | `probe_outcome` | `success`, `error`, `timeout`, or null | For `init` and `debug`: connection-probe result outside a run; null when no probe occurred. |
@@ -466,7 +467,7 @@ and privacy review.
 | `report` | `open`, `list`, `compare`, `prune`, `failures-only` |
 | `baseline` | `set`, `list` |
 | `telemetry` | `enable`, `disable`, `status`, `preview`, `reset-id` |
-| `init`, `debug`, `run`, `diff`, `profile` | none — `action` is null |
+| `init`, `debug`, `run`, `diff`, `profile`, `generate` | none — `action` is null |
 
 ### Check templates (`template`)
 
@@ -495,7 +496,11 @@ diff.incomparable | diff.failed |
 engine.compile_failed | engine.parameter_resolution_failed |
 engine.evaluate_failed | engine.unexpected |
 read_guard.rejected | artifact.write_failed |
-report.render_failed | report.open_failed | unknown
+report.render_failed | report.open_failed |
+generate.provider_auth_failed | generate.provider_unreachable |
+generate.provider_rate_limited | generate.provider_timeout |
+generate.provider_failed | generate.output_invalid |
+generate.no_valid_candidates | unknown
 ```
 
 ### Exception types (`exception_type`)
@@ -527,7 +532,8 @@ CLI failure stages (`failure_stage`):
 
 ```
 project_discovery | config_load | suite_load | profile_load | client_setup |
-probe | engine | profile_collection | baseline_load | baseline_write |
+probe | engine | profile_collection | baseline_load | document_load |
+provider_request | generation_validation | baseline_write |
 diff_compare | artifact_write | report_render | report_open
 ```
 
@@ -538,7 +544,7 @@ diff_compare | artifact_write | report_render | report_open
 - `skip_reason`: `generated`, `unsupported`, `not_run`.
 - `partial_reason_codes` (run): `suite_input_invalid`, `unsupported_check`, `partial_baseline`, `baseline_measurement_missing`, `deadline_exhausted`, `unknown`.
 - `partial_reason` (profile): `deadline_exhausted`, `property_coverage_incomplete`, `degree_distribution_incomplete`, `schema_incomplete`, `probe_incomplete`, `unknown`.
-- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`): `not_requested`, `written`, `error`.
+- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`, `generated_artifact`): `not_requested`, `written`, `error`.
 
 ## Privacy denylist
 
@@ -550,6 +556,7 @@ No telemetry payload may contain:
 - check IDs, check names, suite IDs, suite names, tags, questions, descriptions, or provenance;
 - database names, URIs, usernames, passwords, profile names, target fingerprints, or server
   addresses;
+- generation provider names, model names, destinations, prompts, or document contents;
 - project names, repository names, branches, remotes, commit hashes, working directories, paths,
   filenames, file contents, or artifact run IDs;
 - command-line arguments, environment-variable names or values, hostnames, OS usernames, emails,

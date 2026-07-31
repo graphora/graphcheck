@@ -23,9 +23,10 @@ _NEO4J_RESTRICTED_PASSWORD = "graphora-restricted-test"
 
 
 @pytest.fixture(autouse=True)
-def prevent_real_posthog_delivery(monkeypatch):
-    """Tests may inject a fake transport, but never inherit a release/operator project key."""
+def isolate_telemetry_configuration(monkeypatch, tmp_path):
+    """Tests may opt in explicitly, but never inherit user telemetry configuration."""
 
+    monkeypatch.setenv("GRAPHCHECK_TELEMETRY_CONFIG", str(tmp_path / "telemetry.json"))
     from graphcheck.telemetry import posthog
 
     monkeypatch.delenv("GRAPHCHECK_POSTHOG_API_KEY", raising=False)

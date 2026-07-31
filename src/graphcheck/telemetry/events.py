@@ -141,6 +141,13 @@ class SafeErrorCode(StrEnum):
     ARTIFACT_WRITE_FAILED = "artifact.write_failed"
     REPORT_RENDER_FAILED = "report.render_failed"
     REPORT_OPEN_FAILED = "report.open_failed"
+    GENERATE_PROVIDER_AUTH_FAILED = "generate.provider_auth_failed"
+    GENERATE_PROVIDER_UNREACHABLE = "generate.provider_unreachable"
+    GENERATE_PROVIDER_RATE_LIMITED = "generate.provider_rate_limited"
+    GENERATE_PROVIDER_TIMEOUT = "generate.provider_timeout"
+    GENERATE_PROVIDER_FAILED = "generate.provider_failed"
+    GENERATE_OUTPUT_INVALID = "generate.output_invalid"
+    GENERATE_NO_VALID_CANDIDATES = "generate.no_valid_candidates"
     UNKNOWN = "unknown"
 
 

@@ -61,6 +61,7 @@ class CommandTelemetryRuntime:
     results_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     report_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     baseline_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
+    generated_artifact: ArtifactOutcome = ArtifactOutcome.NOT_REQUESTED
     probe_outcome: EventOutcome | None = None
     probe_duration_ms: int | None = None
     server_version_major: int | None = None
@@ -153,6 +154,14 @@ class CommandTelemetryRuntime:
         self.artifact_write_ms = max(0, _elapsed_ms(started_perf) - max(0, exclude_ms))
         self.results_artifact = results
         self.report_artifact = report
+
+    def mark_generated_artifact(
+        self,
+        started_perf: float,
+        outcome: ArtifactOutcome,
+    ) -> None:
+        self.artifact_write_ms = _elapsed_ms(started_perf)
+        self.generated_artifact = outcome
 
     def record_probe(
         self,
@@ -295,6 +304,7 @@ class CommandTelemetryRuntime:
                 results_artifact=self.results_artifact,
                 report_artifact=self.report_artifact,
                 baseline_artifact=self.baseline_artifact,
+                generated_artifact=self.generated_artifact,
                 telemetry_command_id=self.session.telemetry_command_id,
                 telemetry_run_id=self.telemetry_run_id,
                 probe_outcome=self.probe_outcome,
