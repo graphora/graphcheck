@@ -26,7 +26,7 @@ GraphCheck never modifies customer graphs.
 - [Check YAML Specification](specs/SPEC-02-check-yaml.md): Validation suite format, supported check types, and YAML schema.
 - [Results Specification](specs/SPEC-01-results-json.md): `results.json` schema, verdicts, evidence, scoring, and exit codes.
 - [Connector Specification](specs/SPEC-03-connector.md): Project initialization, connection profiles, capability probing, and read-only execution.
-- [Engine Specification](specs/SPEC-04 Engine.md): Validation pipeline, execution model, and run orchestration.
+- [Engine Specification](specs/SPEC-04%20Engine.md): Validation pipeline, execution model, and run orchestration.
 - [Profiler & Baseline Specification](specs/SPEC-05-profiler-baseline.md): Graph profiling, baseline generation, and drift detection inputs.
 - [Pack Specification](specs/SPEC-09-packs.md): Built-in packs, supported checks, and pack metadata.
 - [HTML Report Specification](specs/SPEC-06-scorer-html-report.md): Report generation and rendering.
@@ -57,7 +57,7 @@ GraphCheck never modifies customer graphs.
 
 ## Architecture
 
-- [Core Engine](specs/SPEC-04 Engine.md): Executes validation suites.
+- [Core Engine](specs/SPEC-04%20Engine.md): Executes validation suites.
 - [Neo4j Connector](specs/SPEC-03-connector.md): Read-only graph access.
 - [Graph Profiler](specs/SPEC-05-profiler-baseline.md): Collects graph schema and statistical metadata.
 - [Check Packs](specs/SPEC-09-packs.md): Reusable validation rules.
@@ -69,8 +69,8 @@ GraphCheck never modifies customer graphs.
 ## Important Invariants
 
 - [Read-only Execution](specs/SPEC-03-connector.md): Never modify customer graph data.
-- [Deterministic Validation](specs/SPEC-04 Engine.md): Same inputs produce the same results.
-- [Thin Adapters](specs/SPEC-04 Engine.md): CLI and MCP wrap existing engine logic.
+- [Deterministic Validation](specs/SPEC-04%20Engine.md): Same inputs produce the same results.
+- [Thin Adapters](specs/SPEC-04%20Engine.md): CLI and MCP wrap existing engine logic.
 - [Connector Abstraction](specs/SPEC-03-connector.md): All graph access goes through connectors.
 
 ---
