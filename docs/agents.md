@@ -142,11 +142,12 @@ generated: true
 
 ```yaml
 suite: Fraud Ring
+generated: true
+defaults: { severity: error, tags: [Fraud Ring] }
 
-checks:
+conformance:
   - id: unique-person-id
     generated: true
-    pack: core
     check: uniqueness
     with:
       label: Person
@@ -154,7 +155,6 @@ checks:
 
   - id: account-owner
     generated: true
-    pack: core
     check: cardinality
     with:
       from_label: Person
