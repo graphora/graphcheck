@@ -27,9 +27,6 @@ from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_p
 from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
 from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
 from graphcheck.errors import GraphCheckError
-
-from graphcheck.mcp.server import run as run_mcp_server
-
 from graphcheck.generation.disclosure import GenerateDisclosure
 from graphcheck.generation.service import (
     DroppedCandidate,
@@ -37,7 +34,7 @@ from graphcheck.generation.service import (
     GenerationService,
     GenerationStage,
 )
-
+from graphcheck.mcp.server import run as run_mcp_server
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
 from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
