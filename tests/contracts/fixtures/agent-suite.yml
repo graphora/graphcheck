@@ -1,0 +1,20 @@
+suite: Fraud Ring
+generated: true
+defaults: { severity: error, tags: [Fraud Ring] }
+
+conformance:
+  - id: unique-person-id
+    generated: true
+    check: uniqueness
+    with:
+      label: Person
+      property: personId
+
+  - id: account-owner
+    generated: true
+    check: cardinality
+    with:
+      from_label: Person
+      rel_type: OWNS
+      to_label: Account
+      exactly: 1
