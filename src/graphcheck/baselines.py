@@ -12,16 +12,48 @@ from graphcheck.project import find_project_root
 _BASELINE_NAME = re.compile(r"\d{8}T\d{6}(?:\.\d{6})?\.json")
 
 
-def _baselines_dir() -> Path:
-    return find_project_root() / ".graphcheck" / "baselines"
+def baseline_directory(
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path:
+    """Return the configured timestamped-baseline directory."""
+
+    root = find_project_root() if project_root is None else project_root
+    if project_root is None and Path(artifacts) == Path(".graphcheck"):
+        artifacts = _discovered_artifacts(root)
+    configured = Path(artifacts)
+    artifacts_dir = configured if configured.is_absolute() else root / configured
+    return artifacts_dir / "baselines"
 
 
-def _current_baseline_file() -> Path:
-    return find_project_root() / ".graphcheck" / "current-baseline.json"
+def current_baseline_file(
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path:
+    root = find_project_root() if project_root is None else project_root
+    if project_root is None and Path(artifacts) == Path(".graphcheck"):
+        artifacts = _discovered_artifacts(root)
+    configured = Path(artifacts)
+    artifacts_dir = configured if configured.is_absolute() else root / configured
+    return artifacts_dir / "current-baseline.json"
 
 
-def write_baseline(profile: BaselineProfile) -> Path:
-    baselines_dir = _baselines_dir()
+def _discovered_artifacts(root: Path) -> str | Path:
+    """Use configured artifacts when a real project file exists; aid legacy callers/tests."""
+
+    from graphcheck.project import PROJECT_FILE, load_project_config
+
+    if not (root / PROJECT_FILE).is_file():
+        return ".graphcheck"
+    return load_project_config(root).artifacts
+
+
+def write_baseline(
+    profile: BaselineProfile,
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path:
+    baselines_dir = baseline_directory(project_root, artifacts)
     baselines_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC)
     content = profile.model_dump_json(
@@ -38,8 +70,11 @@ def write_baseline(profile: BaselineProfile) -> Path:
             timestamp += timedelta(microseconds=1)
 
 
-def list_baselines() -> list[Path]:
-    baselines_dir = _baselines_dir()
+def list_baselines(
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> list[Path]:
+    baselines_dir = baseline_directory(project_root, artifacts)
     if not baselines_dir.is_dir():
         return []
     return sorted(
@@ -49,14 +84,21 @@ def list_baselines() -> list[Path]:
     )
 
 
-def latest_baseline() -> Path | None:
-    baselines = list_baselines()
+def latest_baseline(
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path | None:
+    baselines = list_baselines(project_root, artifacts)
     return baselines[-1] if baselines else None
 
 
-def set_current_baseline(filename: str | None = None) -> Path:
-    baselines_dir = _baselines_dir()
-    baselines = list_baselines()
+def set_current_baseline(
+    filename: str | None = None,
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path:
+    baselines_dir = baseline_directory(project_root, artifacts)
+    baselines = list_baselines(project_root, artifacts)
 
     if filename is None:
         if not baselines:
@@ -79,9 +121,9 @@ def set_current_baseline(filename: str | None = None) -> Path:
                 "Choose an existing timestamped snapshot, or run `graphcheck profile`.",
             )
 
-    current_baseline_file = _current_baseline_file()
-    current_baseline_file.parent.mkdir(parents=True, exist_ok=True)
-    current_baseline_file.write_text(
+    selected_file = current_baseline_file(project_root, artifacts)
+    selected_file.parent.mkdir(parents=True, exist_ok=True)
+    selected_file.write_text(
         json.dumps({"baseline": selected.name}, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -89,26 +131,29 @@ def set_current_baseline(filename: str | None = None) -> Path:
     return selected
 
 
-def get_current_baseline() -> Path | None:
-    current_baseline_file = _current_baseline_file()
-    if not current_baseline_file.exists():
+def get_current_baseline(
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path | None:
+    selected_file = current_baseline_file(project_root, artifacts)
+    if not selected_file.exists():
         return None
     try:
-        payload = json.loads(current_baseline_file.read_text(encoding="utf-8"))
+        payload = json.loads(selected_file.read_text(encoding="utf-8"))
         filename = payload["baseline"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise GraphCheckError(
             "baseline.current_invalid",
-            f"{current_baseline_file} is not valid baseline metadata.",
+            f"{selected_file} is not valid baseline metadata.",
             "Run `graphcheck baseline set` to select an active baseline again.",
         ) from exc
     if not isinstance(filename, str):
         raise GraphCheckError(
             "baseline.current_invalid",
-            f"{current_baseline_file} is not valid baseline metadata.",
+            f"{selected_file} is not valid baseline metadata.",
             "Run `graphcheck baseline set` to select an active baseline again.",
         )
-    baselines = list_baselines()
+    baselines = list_baselines(project_root, artifacts)
     selected = {path.name: path for path in baselines}.get(filename)
     if selected is None:
         raise GraphCheckError(
@@ -122,6 +167,9 @@ def get_current_baseline() -> Path | None:
 def resolve_diff_baselines(
     current_baseline_name: str | None = None,
     latest_baseline_name: str | None = None,
+    *,
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
 ) -> tuple[Path, Path]:
     """Resolve the Current and Latest Baseline snapshots for a diff."""
     if (current_baseline_name is None) != (latest_baseline_name is None):
@@ -133,11 +181,19 @@ def resolve_diff_baselines(
 
     if current_baseline_name is not None and latest_baseline_name is not None:
         return (
-            _resolve_baseline_path(current_baseline_name),
-            _resolve_baseline_path(latest_baseline_name),
+            _resolve_baseline_path(
+                current_baseline_name,
+                project_root=project_root,
+                artifacts=artifacts,
+            ),
+            _resolve_baseline_path(
+                latest_baseline_name,
+                project_root=project_root,
+                artifacts=artifacts,
+            ),
         )
 
-    baselines = list_baselines()
+    baselines = list_baselines(project_root, artifacts)
     if len(baselines) < 2:
         raise GraphCheckError(
             "baseline.missing",
@@ -145,18 +201,23 @@ def resolve_diff_baselines(
             "Run `graphcheck profile` at least twice to create baseline snapshots.",
         )
 
-    current_baseline = get_current_baseline()
+    current_baseline = get_current_baseline(project_root, artifacts)
     if current_baseline is None:
         current_baseline = baselines[-2]
     return current_baseline, baselines[-1]
 
 
-def _resolve_baseline_path(name: str) -> Path:
+def _resolve_baseline_path(
+    name: str,
+    *,
+    project_root: Path | None = None,
+    artifacts: str | Path = ".graphcheck",
+) -> Path:
     requested = Path(name)
     if requested.is_file():
         return requested
 
-    selected = {path.name: path for path in list_baselines()}.get(name)
+    selected = {path.name: path for path in list_baselines(project_root, artifacts)}.get(name)
     if selected is not None:
         return selected
 
