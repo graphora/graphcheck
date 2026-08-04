@@ -35,9 +35,21 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - A pure deterministic severity-weighted scorer with exact half-even rounding, execution
   coverage, and independently calculated per-suite scores for the machine-readable contract.
 - `graphcheck generate` with disclosed, allow-listed baseline/document transmission; pinned
-  Instructor adapters for Anthropic, OpenAI, and explicit-endpoint Ollama; one correction request;
+  Instructor adapters for Anthropic, Google Gemini/Gemma, OpenAI, and explicit-endpoint Ollama; one
+  correction request;
   candidate and final SPEC-02 validation; inert generated markers; atomic exclusive YAML
   publication; stable human/JSON output; and network-free fake-provider integration coverage.
+- Google tool schemas use flat, required function arguments and locally normalize them into
+  conformance, competency, and drift objects, avoiding Gemma's unreliable nested object output.
+- Google generation retries HTTP 500/502/503 once with bounded backoff before reporting provider
+  unavailability.
+- Google generation no longer retries timeouts or performs a correction call after a non-empty
+  valid first batch; its compact prompt and 2,048-token output cap bound free-tier latency.
+- Google conformance and drift candidates must reference labels/properties present in the baseline,
+  preventing malformed tool arguments from being published as apparently valid checks.
+- Google `gemini-*` models use native JSON structured output with the full typed GraphCheck
+  proposal union and standard correction workflow, while the working Gemma tool path remains
+  isolated and unchanged.
 - SPEC-10 telemetry event infrastructure: six strict, immutable, content-free engine events;
   run/probe/query/check/terminal/fault instrumentation; reconciled aggregate mapping to six
   allowlisted PostHog events; and correlated outermost CLI command telemetry, including safe

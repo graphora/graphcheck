@@ -221,6 +221,22 @@ Generation is opt-in. Add one of these strict blocks to `graphcheck.yml`:
 
 ```yaml
 generate:
+  provider: google
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: google
+  model: gemma-4-26b-a4b-it
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
   provider: openai
   model: gpt-5-mini
   api_key_env: OPENAI_API_KEY
@@ -236,8 +252,16 @@ generate:
   temperature: 0
 ```
 
-Anthropic and OpenAI require a populated environment variable named by `api_key_env`. Ollama
-requires an explicit `base_url` and may omit the key. Then run:
+Google, Anthropic, and OpenAI require a populated environment variable named by `api_key_env`.
+Google's [Gemini structured-output models](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#model-support)
+and [hosted Gemma models](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api) use the
+[Gemini API](https://ai.google.dev/gemini-api/docs/pricing) subject to Google's current quotas and
+data terms. Models named `gemini-*` use native structured output and the full GraphCheck proposal
+contract. Other Google model names retain the conservative Gemma tool path: conformance targets
+completeness/uniqueness, competency expectations target returned columns, and drift targets
+labeled node counts. Gemma publishes a valid partial first batch without a slower correction, so
+`written` may be below `requested`. Ollama requires an explicit `base_url` and may omit the key.
+Then run:
 
 ```console
 graphcheck generate

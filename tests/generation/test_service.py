@@ -40,12 +40,17 @@ class FakeClient:
         return response
 
 
-def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str = "openai",
+    model: str = "gpt-test",
+) -> Path:
     write_default_project(tmp_path)
     config = yaml.safe_load((tmp_path / "graphcheck.yml").read_text(encoding="utf-8"))
     config["generate"] = {
-        "provider": "openai",
-        "model": "gpt-test",
+        "provider": provider,
+        "model": model,
         "api_key_env": "TEST_LLM_KEY",
         "temperature": 0,
     }
@@ -58,6 +63,84 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (baseline_dir / "20260724T120000.000000.json").write_bytes(FIXTURE.read_bytes())
     monkeypatch.setenv("TEST_LLM_KEY", "super-secret")
     return tmp_path
+
+
+def test_gemma_accepts_partial_first_batch_without_slow_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = project(tmp_path, monkeypatch, "google", "gemma-4-31b-it")
+    fake = FakeClient([RawProposalBatch(candidates=[proposal("one")])])
+
+    result = GenerationService(client_factory=lambda config, key: fake).generate(
+        project_root=root,
+        baseline_from=None,
+        document_paths=None,
+        requested_count=3,
+        disclosure_sink=lambda event: None,
+    )
+
+    assert len(fake.requests) == 1
+    assert result.written == 1
+    assert result.dropped == 2
+
+
+def test_gemini_uses_normal_correction_after_partial_first_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = project(tmp_path, monkeypatch, "google", "gemini-2.5-flash")
+    fake = FakeClient(
+        [
+            RawProposalBatch(candidates=[proposal("one")]),
+            RawProposalBatch(candidates=[proposal("two")]),
+        ]
+    )
+
+    result = GenerationService(client_factory=lambda config, key: fake).generate(
+        project_root=root,
+        baseline_from=None,
+        document_paths=None,
+        requested_count=2,
+        disclosure_sink=lambda event: None,
+    )
+
+    assert len(fake.requests) == 2
+    assert fake.requests[1].requested_count == 1
+    assert result.written == 2
+    assert result.dropped == 0
+
+
+def test_google_rejects_profile_references_corrupted_by_tool_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = project(tmp_path, monkeypatch, "google", "gemma-4-31b-it")
+    malformed = RawProposalBatch(
+        candidates=[
+            RawProposal(
+                kind="conformance",
+                spec={
+                    "id": "bad",
+                    "check": "uniqueness",
+                    "with": {"label": "Customer**,property:", "property": "id"},
+                },
+            )
+        ]
+    )
+    fake = FakeClient([malformed, RawProposalBatch(candidates=[proposal("good")])])
+
+    result = GenerationService(client_factory=lambda config, key: fake).generate(
+        project_root=root,
+        baseline_from=None,
+        document_paths=None,
+        requested_count=1,
+        disclosure_sink=lambda event: None,
+    )
+
+    assert len(fake.requests) == 2
+    assert "not present in baseline profile" in fake.requests[1].user_prompt
+    assert result.checks[0].id == "good"
 
 
 def test_service_reasks_once_and_writes_partial_result(

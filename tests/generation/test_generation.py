@@ -59,6 +59,22 @@ def test_generate_config_and_secret_resolution() -> None:
     assert cloud.model == "claude"
     assert resolve_api_key(cloud, environ={"CORP_TOKEN": "secret"}) == "secret"
 
+    google = GenerateConfig(
+        provider="google",
+        model="gemma-4-26b-a4b-it",
+        api_key_env="GEMINI_API_KEY",
+    )
+    assert resolve_api_key(google, environ={"GEMINI_API_KEY": "secret"}) == "secret"
+    assert google.uses_google_tool_transport is True
+    assert google.uses_google_native_structured_output is False
+    gemini = GenerateConfig(
+        provider="google",
+        model="gemini-2.5-flash",
+        api_key_env="GEMINI_API_KEY",
+    )
+    assert gemini.uses_google_native_structured_output is True
+    assert gemini.uses_google_tool_transport is False
+
     with pytest.raises(GraphCheckError) as caught:
         resolve_api_key(cloud, environ={})
     assert caught.value.error.code == "generate.api_key_missing"
@@ -74,6 +90,8 @@ def test_generate_config_and_secret_resolution() -> None:
         GenerateConfig(provider="ollama", model="qwen3:8b")
     with pytest.raises(ValidationError):
         GenerateConfig(provider="openai", model="gpt", api_key_env=None)
+    with pytest.raises(ValidationError):
+        GenerateConfig(provider="google", model="gemma-4-26b-a4b-it", api_key_env=None)
 
 
 @pytest.mark.parametrize(
