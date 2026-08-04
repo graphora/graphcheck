@@ -637,7 +637,7 @@ source = { editable = "." }
 dependencies = [
     { name = "instructor", extra = ["anthropic"] },
     { name = "jsonschema" },
-    { name = "mcp", extra = ["cli"] },
+    { name = "mcp" },
     { name = "neo4j" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -658,7 +658,7 @@ dev = [
 requires-dist = [
     { name = "instructor", extras = ["anthropic"], specifier = "==1.15.4" },
     { name = "jsonschema", specifier = ">=4" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.28.1" },
+    { name = "mcp", specifier = ">=2.0.0,<3" },
     { name = "neo4j", specifier = ">=5.20" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -1058,12 +1058,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/33/32d4dff2c95bb5d897c3ef4c83649a08996b17b58f0a326d2495d4c81179/mcp-2.0.0.tar.gz", hash = "sha256:0f440e735c13ece8bb19bc62cf0b86f4313448432fbb77d35e14034f4e050728", size = 1662284, upload-time = "2026-07-28T13:45:32.346Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/72/7d7897418912c1d12e87556630dfb7bf0eac71160e9bef8b447960804ee3/mcp-2.0.0-py3-none-any.whl", hash = "sha256:1cb4c75d2d2c7b8c1d756355e5d82a39f2822cc7f13e22a2051d7ca3592349d6", size = 349980, upload-time = "2026-07-28T13:45:28.853Z" },
-]
-
-[package.optional-dependencies]
-cli = [
-    { name = "python-dotenv" },
-    { name = "typer" },
 ]
 
 [[package]]

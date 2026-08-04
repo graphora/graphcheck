@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from graphcheck.mcp import adapter
 
-mcp = FastMCP("GraphCheck")
+mcp = MCPServer("GraphCheck")
 
 
 @mcp.tool()

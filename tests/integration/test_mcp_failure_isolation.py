@@ -28,7 +28,7 @@ async def test_mcp_failure_isolation():
                 {},
             )
 
-            assert result.isError is True
+            assert result.is_error is True
             assert "Unknown tool" in result.content[0].text
 
             # Server should still work afterwards
