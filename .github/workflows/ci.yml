@@ -30,6 +30,10 @@ jobs:
           # runs on the matrix interpreter (not the pinned 3.12).
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
+      - run: uv run python --version
+      - run: uv run python -c "import typer; print('Typer:', typer.__version__)"
+      - run: uv run python -c "import importlib.metadata as m; print('Click:', m.version('click'))"
+      - run: uv run python -c "import importlib.metadata as m; print('MCP:', m.version('mcp'))"
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)
         env:
           WANT: ${{ matrix.python-version }}
