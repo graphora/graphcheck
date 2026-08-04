@@ -1026,13 +1026,16 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .explorer-comparison-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .explorer-selection-actions button, .explorer-comparison-actions button { width: 100%; min-width: 0; }
 .btn-danger { padding: 6px 12px; border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; background: var(--fail-bg); color: var(--fail-color); font-size: 12px; font-weight: 600; cursor: pointer; }
-.comparison-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); }
+.comparison-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); }
 .comparison-dialog::backdrop, .confirmation-dialog::backdrop { background: rgba(15, 23, 42, 0.62); }
 .comparison-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .comparison-dialog-header h2 { margin: 0; font-size: 17px; }
 .dialog-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 24px; line-height: 1; cursor: pointer; }
 .dialog-close:hover { background: var(--bg-subtle); color: var(--text-main); }
 #report-comparison-content { max-height: calc(100vh - 130px); margin: 0; padding: 18px; overflow: auto; background: var(--bg-card); color: var(--text-main); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.comparison-status-complete, .comparison-delta-positive { color: var(--pass-color); font-weight: 700; }
+.comparison-status-partial { color: var(--errored-color); font-weight: 700; }
+.comparison-status-failed, .comparison-delta-negative { color: var(--fail-color); font-weight: 700; }
 .confirmation-dialog { width: min(420px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); }
 .confirmation-dialog h2 { margin: 0; font-size: 18px; }
 .confirmation-dialog p { margin: 8px 0 20px; color: var(--text-muted); font-size: 13px; }
@@ -1506,11 +1509,39 @@ async function reportExplorerRequest(path, options = {}) {
   return payload;
 }
 
+function renderComparisonMessage(content, message) {
+  const lines = String(message).split('\\n');
+  content.replaceChildren();
+  lines.forEach((line, index) => {
+    const status = line.match(/^Status: (complete|partial|failed) -> (complete|partial|failed)$/);
+    const delta = line.match(/^(  .+: .* )(\\([+-]\\d+\\))$/);
+    if (status) {
+      content.append('Status: ');
+      [status[1], status[2]].forEach((value, statusIndex) => {
+        if (statusIndex) content.append(' -> ');
+        const span = document.createElement('span');
+        span.className = `comparison-status-${value}`;
+        span.textContent = value;
+        content.append(span);
+      });
+    } else if (delta && Number.parseInt(delta[2].slice(1, -1), 10) !== 0) {
+      const value = Number.parseInt(delta[2].slice(1, -1), 10);
+      const span = document.createElement('span');
+      span.className = value > 0 ? 'comparison-delta-positive' : 'comparison-delta-negative';
+      span.textContent = delta[2];
+      content.append(delta[1], span);
+    } else {
+      content.append(line);
+    }
+    if (index < lines.length - 1) content.append('\\n');
+  });
+}
+
 function openComparisonDialog(message) {
   const dialog = document.getElementById('report-comparison-dialog');
   const content = document.getElementById('report-comparison-content');
   if (!dialog || !content) return;
-  content.textContent = message;
+  renderComparisonMessage(content, message);
   if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
   else dialog.setAttribute('open', '');
   content.focus();

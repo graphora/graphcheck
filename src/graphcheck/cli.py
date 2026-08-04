@@ -2,6 +2,7 @@ import json
 import logging
 import shutil
 import sys
+import threading
 import time
 import uuid
 import webbrowser
@@ -123,6 +124,7 @@ app = typer.Typer(
     help="Semantic observability for property graphs.",
     add_completion=False,
     no_args_is_help=True,
+    rich_markup_mode="rich",
 )
 telemetry_app = typer.Typer(
     name="telemetry",
@@ -263,7 +265,7 @@ def _start_telemetry_runtime(
 
 def _version(value: bool) -> None:
     if value:
-        typer.echo(f"graphcheck {__version__}")
+        typer.secho(f"graphcheck {__version__}", fg=typer.colors.BRIGHT_BLUE, bold=True)
         raise typer.Exit()
 
 
@@ -289,9 +291,12 @@ def telemetry_enable() -> None:
     before = resolve_consent()
     enable_telemetry()
     state = resolve_consent()
-    typer.echo("Anonymous GraphCheck telemetry is enabled.")
+    typer.secho("Anonymous GraphCheck telemetry is enabled.", fg=typer.colors.GREEN)
     if not _telemetry_delivery_configured():
-        typer.echo("Telemetry delivery is not configured in this build; consent remains stored.")
+        typer.secho(
+            "Telemetry delivery is not configured in this build; consent remains stored.",
+            fg=typer.colors.YELLOW,
+        )
     # This is the single telemetry control action that may emit: consent exists only after the
     # state has been stored, so construct the command runtime at that point.
     try:
@@ -314,7 +319,7 @@ def telemetry_disable() -> None:
     """Disable telemetry without sending an event."""
 
     disable_telemetry()
-    typer.echo("Anonymous GraphCheck telemetry is disabled.")
+    typer.secho("Anonymous GraphCheck telemetry is disabled.", fg=typer.colors.YELLOW)
 
 
 @telemetry_app.command("status")
@@ -322,12 +327,18 @@ def telemetry_status() -> None:
     """Show the effective user/process telemetry state."""
 
     state = resolve_consent()
-    typer.echo(f"Telemetry: {'enabled' if state.enabled else 'disabled'}")
+    typer.secho(
+        f"Telemetry: {'enabled' if state.enabled else 'disabled'}",
+        fg=typer.colors.GREEN if state.enabled else typer.colors.YELLOW,
+    )
     typer.echo(f"Source: {state.source.value}")
     delivery = "configured" if _telemetry_delivery_configured() else "not configured"
     typer.echo(f"Delivery: {delivery}")
     if state.renewal_required:
-        typer.echo("Consent renewal is required for the current telemetry consent version.")
+        typer.secho(
+            "Consent renewal is required for the current telemetry consent version.",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @telemetry_app.command("preview")
@@ -344,9 +355,12 @@ def telemetry_reset_id() -> None:
 
     state = reset_installation_id()
     if state.enabled:
-        typer.echo("Telemetry installation ID was reset; telemetry remains enabled.")
+        typer.secho(
+            "Telemetry installation ID was reset; telemetry remains enabled.",
+            fg=typer.colors.GREEN,
+        )
     else:
-        typer.echo("Inactive telemetry installation ID was cleared.")
+        typer.secho("Inactive telemetry installation ID was cleared.", fg=typer.colors.GREEN)
 
 
 @app.command()
@@ -368,9 +382,9 @@ def init() -> None:
     ensure_gitignore_entries(root)
     write_example_suite(root)
 
-    typer.echo(f"Wrote {PROJECT_FILE}")
-    typer.echo("Wrote profiles.yml")
-    typer.echo("Wrote checks/example.yml with 3 sample checks")
+    typer.secho(f"Wrote {PROJECT_FILE}", fg=typer.colors.GREEN)
+    typer.secho("Wrote profiles.yml", fg=typer.colors.GREEN)
+    typer.secho("Wrote checks/example.yml with 3 sample checks", fg=typer.colors.GREEN)
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
@@ -383,9 +397,9 @@ def init() -> None:
                 started_perf=probe_started,
                 outcome=EventOutcome.ERROR,
             )
-        typer.echo(f"Neo4j was not detected: {exc.error.code}")
-        typer.echo(exc.error.message)
-        typer.echo(f"Fix: {exc.error.fix}")
+        typer.secho(f"Neo4j was not detected: {exc.error.code}", fg=typer.colors.YELLOW)
+        typer.secho(exc.error.message, fg=typer.colors.YELLOW)
+        typer.secho(f"Fix: {exc.error.fix}", fg=typer.colors.CYAN)
     else:
         if (telemetry := _command_telemetry()) is not None:
             telemetry.record_probe(
@@ -393,9 +407,15 @@ def init() -> None:
                 outcome=EventOutcome.SUCCESS,
                 target=trace.target,
             )
-        typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
-        typer.echo(f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}")
-    typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
+        typer.secho(
+            f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})",
+            fg=typer.colors.GREEN,
+        )
+        typer.secho(
+            f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}",
+            fg=typer.colors.GREEN if trace.target.capabilities.apoc else typer.colors.YELLOW,
+        )
+    typer.secho("Next: edit checks/example.yml, then run `graphcheck run`", fg=typer.colors.CYAN)
 
 
 @app.command()
@@ -896,7 +916,7 @@ def report(
             if telemetry is not None:
                 telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
                 telemetry.report_artifact = ArtifactOutcome.WRITTEN
-            typer.echo(f"Wrote {output}")
+            typer.secho(f"Wrote {output}", fg=typer.colors.GREEN)
             if open_report:
                 _open_html_report(output)
             return
@@ -969,7 +989,7 @@ def baseline_set(
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(f"Baseline set to {selected.name}")
+    typer.secho(f"Baseline set to {selected.name}", fg=typer.colors.GREEN)
 
 
 @app.command("diff")
@@ -1074,7 +1094,7 @@ def diff_command(
             raise typer.Exit(2)
         _print_target_identity_warning(current_baseline, latest_baseline)
         if not typer.confirm("Do you want to continue?", default=False):
-            typer.echo("Diff cancelled by user.")
+            typer.secho("Diff cancelled by user.", fg=typer.colors.YELLOW)
             return
 
     try:
@@ -1108,9 +1128,9 @@ def diff_command(
         raise
     if isinstance(report, list):  # Compatibility with the original line-oriented hook.
         if not report:
-            typer.echo("No drift detected.")
+            typer.secho("No drift detected.", fg=typer.colors.GREEN, bold=True)
             return
-        typer.echo("Graph drift detected.\n")
+        typer.secho("Graph drift detected.\n", fg=typer.colors.YELLOW, bold=True)
         for message in report:
             typer.echo(message)
         return
@@ -1136,7 +1156,7 @@ def _print_target_identity_warning(
     current_baseline: "BaselineProfile",
     latest_baseline: "BaselineProfile",
 ) -> None:
-    typer.echo("WARNING")
+    typer.secho("WARNING", fg=typer.colors.YELLOW, bold=True)
     typer.echo()
     typer.echo("The selected baseline snapshots belong to different database / target identities.")
     typer.echo()
@@ -1159,7 +1179,7 @@ def _print_profile_summary(
     from graphcheck.contracts.profile import ProfileStatus
 
     if baseline.status is ProfileStatus.PARTIAL:
-        typer.echo("Profile completed with partial data.")
+        typer.secho("Profile completed with partial data.", fg=typer.colors.YELLOW, bold=True)
         typer.echo()
         typer.echo(f"Status: {baseline.status}")
         typer.echo(f"Reason: {baseline.partial_reason}")
@@ -1171,7 +1191,7 @@ def _print_profile_summary(
         typer.echo(f"Baseline written to:\n{baseline_path}")
         return
 
-    typer.echo("Profile completed.")
+    typer.secho("Profile completed.", fg=typer.colors.GREEN, bold=True)
     typer.echo()
 
     typer.echo(f"Status: {baseline.status}")
@@ -1448,7 +1468,7 @@ def _open_html_report(path: Path) -> None:
         raise ReportHistoryError(f"Could not open {path} in the default browser: {exc}") from exc
     if not opened:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
-    typer.echo(f"Opened {path}")
+    typer.secho(f"Opened {path}", fg=typer.colors.CYAN)
 
 
 @app.command("run")
@@ -1578,7 +1598,11 @@ def run_command(
             try:
                 client.close()
             except Exception as exc:  # a close failure must not discard a completed run artifact
-                typer.echo(f"Warning: Neo4j driver cleanup failed: {exc}", err=True)
+                typer.secho(
+                    f"Warning: Neo4j driver cleanup failed: {exc}",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
 
     if (
         results.run.status.value == "failed"
@@ -1631,8 +1655,17 @@ def run_command(
             )
         if results.run.error is not None:
             _print_setup_error(results.run.error)
-        typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
-        typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
+        typer.secho(
+            f"run.artifact_failed: Could not write run artifacts: {exc}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(
+            "Fix: Check the configured artifacts path and filesystem permissions.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
         raise typer.Exit(3) from exc
     if telemetry is not None:
         telemetry.render_ms = sum(render_times)
@@ -1677,6 +1710,15 @@ def _interactive_stderr() -> bool:
     return bool(getattr(sys.stderr, "isatty", lambda: False)())
 
 
+def _elapsed_clock(started: float) -> str:
+    minutes, seconds = divmod(max(0, int(time.monotonic() - started)), 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _progress_template(check_name: str) -> str:
+    return "%(label)s  [%(bar)s]  %(info)s Complete | Checking: " + check_name.replace("%", "%%")
+
+
 @contextmanager
 def _run_progress(
     total_checks: int,
@@ -1685,23 +1727,51 @@ def _run_progress(
         yield None
         return
 
+    started = time.monotonic()
+    state = {"check": "Preparing graph checks"}
+    lock = threading.Lock()
+    stopped = threading.Event()
     with typer.progressbar(
         length=total_checks,
-        label="Running graph checks",
+        label="00:00",
         file=sys.stderr,
-        show_eta=True,
+        show_eta=False,
         show_percent=True,
         show_pos=True,
-        fill_char="=",
-        empty_char="-",
+        fill_char=typer.style("=", fg=typer.colors.GREEN),
+        empty_char=typer.style("-", fg=typer.colors.BRIGHT_BLACK),
         width=28,
+        color=True,
+        bar_template=_progress_template(state["check"]),
     ) as bar:
 
-        def update(completed: int, total: int, check_name: str) -> None:
-            bar.label = "Checks complete" if completed == total else f"Completed {check_name}"
-            bar.update(1)
+        def refresh() -> None:
+            with lock:
+                bar.label = _elapsed_clock(started)
+                bar.bar_template = _progress_template(state["check"])
+                render = getattr(bar, "render_progress", None)
+                if callable(render):
+                    render()
 
-        yield update
+        def tick() -> None:
+            while not stopped.wait(1):
+                refresh()
+
+        ticker = threading.Thread(target=tick, name="graphcheck-progress-clock", daemon=True)
+        ticker.start()
+
+        def update(completed: int, total: int, check_name: str) -> None:
+            with lock:
+                state["check"] = check_name
+                bar.label = _elapsed_clock(started)
+                bar.bar_template = _progress_template(check_name)
+                bar.update(1)
+
+        try:
+            yield update
+        finally:
+            stopped.set()
+            ticker.join(timeout=1)
 
 
 def _selection_tags(selectors: list[str]) -> list[str]:
@@ -1828,8 +1898,29 @@ def _publish_run_directory(artifacts: tuple[bytes, bytes, bytes], directory: Pat
 
 
 def _print_setup_error(error: "CheckError") -> None:
-    typer.echo(f"{error.code}: {error.message}", err=True)
-    typer.echo(f"Fix: {error.fix}", err=True)
+    typer.secho(f"{error.code}: {error.message}", fg=typer.colors.RED, bold=True, err=True)
+    typer.secho(f"Fix: {error.fix}", fg=typer.colors.YELLOW, err=True)
+
+
+def _run_status_color(status: str) -> str:
+    return {
+        "complete": typer.colors.GREEN,
+        "partial": typer.colors.MAGENTA,
+        "failed": typer.colors.RED,
+    }.get(status, typer.colors.WHITE)
+
+
+def _check_summary(totals) -> str:
+    values = (
+        ("passed", totals.passed, typer.colors.GREEN),
+        ("failed", totals.fail, typer.colors.RED),
+        ("warnings", totals.warn, typer.colors.YELLOW),
+        ("errored", totals.errored, typer.colors.MAGENTA),
+        ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
+    )
+    return "".join(
+        f" | {typer.style(f'{label} {value}', fg=color)}" for label, value, color in values
+    )
 
 
 def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
@@ -1837,7 +1928,11 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
 
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
-    typer.echo(f"GraphCheck run {results.run.id}: {display_run_status(results).value}")
+    status = display_run_status(results).value
+    typer.echo(
+        f"GraphCheck run {results.run.id}: "
+        f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
+    )
     if results.run.target is not None:
         nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
         relationships = (
@@ -1854,17 +1949,11 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
             suite_score = "n/a" if suite.score is None else str(suite.score)
             typer.echo(
                 f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
-                f"passed {suite.totals.passed} | failed {suite.totals.fail} | "
-                f"warnings {suite.totals.warn} | errored {suite.totals.errored} | "
-                f"skipped {suite.totals.skipped}"
+                f"{_check_summary(suite.totals).removeprefix(' | ')}"
             )
         typer.echo(f"Exit code: {results.run.exit_code}")
     else:
-        typer.echo(
-            "Checks: "
-            f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
-            f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
-        )
+        typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
         typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")

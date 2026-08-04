@@ -370,6 +370,7 @@ competency:
 
     class FakeProgressBar:
         label = ""
+        bar_template = ""
 
         def __enter__(self):
             return self
@@ -378,12 +379,13 @@ competency:
             return False
 
         def update(self, amount):
-            progress["updates"].append((amount, self.label))
+            progress["updates"].append((amount, self.label, self.bar_template))
 
     def progressbar(**kwargs):
         progress["options"] = kwargs
         bar = FakeProgressBar()
         bar.label = kwargs["label"]
+        bar.bar_template = kwargs["bar_template"]
         return bar
 
     monkeypatch.chdir(tmp_path)
@@ -395,11 +397,32 @@ competency:
 
     assert result.exit_code == 0
     assert progress["options"]["length"] == 2
-    assert progress["options"]["label"] == "Running graph checks"
+    assert progress["options"]["label"] == "00:00"
+    assert progress["options"]["show_eta"] is False
+    assert progress["options"]["color"] is True
+    assert "\x1b[32m" in progress["options"]["fill_char"]
     assert progress["updates"] == [
-        (1, "Completed progress/first"),
-        (1, "Checks complete"),
+        (
+            1,
+            "00:00",
+            "%(label)s  [%(bar)s]  %(info)s Complete | Checking: progress/first",
+        ),
+        (
+            1,
+            "00:00",
+            "%(label)s  [%(bar)s]  %(info)s Complete | Checking: progress/second",
+        ),
     ]
+
+
+def test_run_elapsed_clock_uses_minutes_and_seconds(monkeypatch):
+    monkeypatch.setattr("graphcheck.cli.time.monotonic", lambda: 185.9)
+
+    assert cli_module._elapsed_clock(60) == "02:05"
+
+
+def test_run_progress_template_escapes_percent_signs():
+    assert cli_module._progress_template("suite/check%name").endswith("suite/check%%name")
 
 
 def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(

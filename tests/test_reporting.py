@@ -455,10 +455,19 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "#delete-reports-btn {" not in html
     assert ".explorer-scroll { margin-top: 20px; }" in html
     assert ".explorer-status:empty { display: none; }" in html
+    comparison_dialog_start = html.index(".comparison-dialog {")
+    comparison_dialog_css = html[comparison_dialog_start : html.index("}", comparison_dialog_start)]
+    assert "overflow: hidden;" in comparison_dialog_css
     assert ".navbar h1, .panel-section h2 { font-size: 18px; }" in html
     assert "opacity: 1;" in html
     assert "function clearReportSelection()" in html
     assert "function compareMostRecentReports()" in html
+    assert "function renderComparisonMessage(content, message)" in html
+    assert "comparison-status-${value}" in html
+    assert "comparison-delta-positive" in html
+    assert "comparison-delta-negative" in html
+    assert "content.replaceChildren();" in html
+    assert "content.innerHTML" not in html
     assert "reportHistory.slice(0, 2)" in html
     assert "reportHistory.slice(1, 6)" in html
     assert "reportHistory.slice(6)" in html
