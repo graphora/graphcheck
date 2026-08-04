@@ -1,0 +1,54 @@
+name: 'GraphCheck'
+description: 'Run GraphCheck checks against your graph and report results in the PR.'
+
+inputs:
+  profile:
+    description: 'Connection profile name, as defined in graphcheck.yml'
+    required: true
+  fail-fast:
+    description: 'Stop on the first failing check'
+    required: false
+    default: 'false'
+  version:
+    description: 'Exact GraphCheck version to install (e.g. 0.1.0)'
+    required: false
+    default: '0.1.0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install GraphCheck
+      shell: bash
+      run: pip install graphcheck==${{ inputs.version }}
+
+    - name: Run GraphCheck
+      shell: bash
+      id: graphcheck_run
+      run: |
+        set +e
+        graphcheck run \
+          --profile "${{ inputs.profile }}" \
+          $( [ "${{ inputs.fail-fast }}" = "true" ] && echo "--fail-fast" )
+        code=$?
+        echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+        exit 0
+        
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: graphcheck-results
+        path: |
+          .graphcheck/runs/latest/results.json
+          .graphcheck/runs/latest/report.html
+        if-no-files-found: ignore
+
+    - name: Write summary
+      if: always()
+      shell: bash
+      run: python .github/actions/graphcheck-action/write_summary.py
+
+    - name: Set final job status
+      if: always()
+      shell: bash
+      run: exit ${{ steps.graphcheck_run.outputs.exit_code }}
