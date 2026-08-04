@@ -13,22 +13,22 @@ async def test_mcp_agent_surface():
     )
 
     async with (
-            stdio_client(server) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
+        stdio_client(server) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
     ):
-            await session.initialize()
+        await session.initialize()
 
-            tools = await session.list_tools()
+        tools = await session.list_tools()
 
-            names = {tool.name for tool in tools.tools}
+        names = {tool.name for tool in tools.tools}
 
-            assert "list_checks" in names
-            assert "run_suite" in names
-            assert "get_results" in names
+        assert "list_checks" in names
+        assert "run_suite" in names
+        assert "get_results" in names
 
-            result = await session.call_tool(
-                "list_checks",
-                {},
-            )
+        result = await session.call_tool(
+            "list_checks",
+            {},
+        )
 
-            assert result is not None
+        assert result is not None

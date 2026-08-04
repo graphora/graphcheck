@@ -13,24 +13,24 @@ async def test_mcp_failure_isolation():
     )
 
     async with (
-            stdio_client(server) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
-        ):
-            await session.initialize()
+        stdio_client(server) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
 
-            # First call succeeds
-            result1 = await session.call_tool("list_checks", {})
-            assert result1 is not None
+        # First call succeeds
+        result1 = await session.call_tool("list_checks", {})
+        assert result1 is not None
 
-            # Call a tool that does not exist
-            result = await session.call_tool(
-                "tool_that_does_not_exist",
-                {},
-            )
+        # Call a tool that does not exist
+        result = await session.call_tool(
+            "tool_that_does_not_exist",
+            {},
+        )
 
-            assert result.is_error is True
-            assert "Unknown tool" in result.content[0].text
+        assert result.is_error is True
+        assert "Unknown tool" in result.content[0].text
 
-            # Server should still work afterwards
-            result2 = await session.call_tool("list_checks", {})
-            assert result2 is not None
+        # Server should still work afterwards
+        result2 = await session.call_tool("list_checks", {})
+        assert result2 is not None
