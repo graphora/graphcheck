@@ -20,7 +20,7 @@ adds no new checking behaviour of its own.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| profile | yes | - | Connection profile name, as defined in graphcheck.yml |
+| profile | yes | - | Connection profile name, as defined in profiles.yml |
 | fail-fast | no | false | Stop after the first error-severity failure |
 | version | no | 0.1.0 | Exact GraphCheck version to install from PyPI |
 

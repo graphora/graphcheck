@@ -3,7 +3,7 @@ description: 'Run GraphCheck checks against your graph and report results in the
 
 inputs:
   profile:
-    description: 'Connection profile name, as defined in graphcheck.yml'
+    description: 'Connection profile name, as defined in profiles.yml'
     required: true
   fail-fast:
     description: 'Stop on the first failing check'
