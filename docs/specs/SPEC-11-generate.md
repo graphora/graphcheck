@@ -18,7 +18,7 @@ Implement `graphcheck generate` with:
 - direct, final validation through the existing `load_suite` SPEC-02 loader;
 - a dedicated allow-list transmission model built from `BaselineProfile`, never
   `BaselineProfile.model_dump()` with exclusions;
-- Anthropic, OpenAI, and Ollama support in v0;
+- Anthropic, Gemini, OpenAI, OpenRouter, and Ollama support;
 - a nullable `api_key_env` only for Ollama;
 - one GraphCheck-owned correction request, followed by candidate-level dropping;
 - file-level and per-check `generated: true` markers injected by GraphCheck, never supplied by the
@@ -61,8 +61,8 @@ writes a partially validated file.
   and prompt experimentation infrastructure.
 - Reading directories or URLs through `--docs`; every input must be an explicitly named file.
 - Provider-specific tuning beyond the common fields in `graphcheck.yml`.
-- Providers other than Anthropic, OpenAI, and Ollama. The protocol permits later adapters without
-  changing the service.
+- Providers other than Anthropic, Gemini, OpenAI, OpenRouter, and Ollama. The protocol permits
+  later adapters without changing the service.
 - Streaming output.
 
 ## 3. Why Instructor, and where its responsibility ends
@@ -79,9 +79,9 @@ dependencies = [
 Regenerate and commit `uv.lock` in the same change.
 
 Instructor is a focused Pydantic structured-output layer. Its OpenAI support is included by
-default, the `anthropic` extra supplies the Anthropic SDK, and Ollama uses its OpenAI-compatible
-endpoint without adding an Ollama SDK. It avoids the dependency and abstraction footprint of a
-general orchestration framework. The pinned version and wheel are recorded on
+default, the `anthropic` extra supplies the Anthropic SDK, and Gemini, OpenRouter, and Ollama use
+OpenAI-compatible endpoints without adding provider SDKs. It avoids the dependency and abstraction
+footprint of a general orchestration framework. The pinned version and wheel are recorded on
 [PyPI](https://pypi.org/project/instructor/), while the provider-extra behavior is documented in
 [Instructor's installation guide](https://python.useinstructor.com/getting-started/).
 
@@ -96,13 +96,18 @@ Provider modes are explicit:
 | Provider | Instructor construction | Mode |
 |---|---|---|
 | Anthropic | `from_provider("anthropic/<model>", ...)` | `Mode.TOOLS` |
+| Gemini | `from_provider("openai/<model>", base_url=Gemini, ...)` | `Mode.JSON_SCHEMA` |
 | OpenAI | `from_provider("openai/<model>", ...)` | provider default structured mode |
+| OpenRouter | `from_provider("openai/<model>", base_url=OpenRouter, ...)` | `Mode.JSON_SCHEMA` |
 | Ollama | `from_provider("ollama/<model>", base_url=..., ...)` | `Mode.JSON` |
 
 `Mode.TOOLS` is Instructor's recommended Anthropic structured-output mode. Its local Ollama example
 uses an OpenAI-compatible `/v1` base URL and `Mode.JSON`; see the official
 [Anthropic integration](https://python.useinstructor.com/integrations/anthropic/) and
-[Ollama integration](https://python.useinstructor.com/examples/ollama/).
+[Ollama integration](https://python.useinstructor.com/examples/ollama/). Gemini and OpenRouter use
+their documented [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) and
+[OpenRouter OpenAI SDK compatibility](https://openrouter.ai/docs/quickstart#using-the-openai-sdk)
+endpoints with JSON Schema structured output.
 
 Instructor is not the GraphCheck contract authority. It parses the provider response into a bounded
 raw proposal envelope. GraphCheck then validates candidates independently and finally validates the
@@ -129,7 +134,7 @@ The Pydantic model is:
 
 ```python
 class GenerateConfig(StrictModel):
-    provider: Literal["anthropic", "openai", "ollama"]
+    provider: Literal["anthropic", "gemini", "openai", "openrouter", "ollama"]
     model: str
     api_key_env: str | None = None
     base_url: AnyHttpUrl | None = None
@@ -140,12 +145,13 @@ Additional validation:
 
 1. `model` must be non-blank after trimming.
 2. `api_key_env` must be a non-blank environment-variable name when present.
-3. Anthropic and OpenAI require `api_key_env`.
+3. Every cloud provider requires `api_key_env`.
 4. Ollama permits `api_key_env: null`. If it is present, it is resolved and passed to the client.
 5. Ollama requires an explicit `base_url`; the fix should recommend
    `http://localhost:11434/v1`. Requiring the destination makes disclosure and air-gap review
    unambiguous.
-6. Anthropic and OpenAI permit `base_url: null` for their provider default or a URL for an
+6. Anthropic and OpenAI permit `base_url: null` for their provider default. Gemini and OpenRouter
+   map null to their official OpenAI-compatible endpoint. Every cloud provider permits a URL for an
    explicitly configured compatible/self-hosted endpoint.
 7. Unknown keys are rejected.
 
@@ -157,6 +163,26 @@ generate:
   provider: openai
   model: gpt-5-mini
   api_key_env: OPENAI_API_KEY
+  base_url: null
+  temperature: 0
+```
+
+```yaml
+# Google AI Studio Gemini
+generate:
+  provider: gemini
+  model: gemini-3.5-flash
+  api_key_env: GEMINI_API_KEY
+  base_url: null
+  temperature: 0
+```
+
+```yaml
+# OpenRouter free-model router
+generate:
+  provider: openrouter
+  model: openrouter/free
+  api_key_env: OPENROUTER_API_KEY
   base_url: null
   temperature: 0
 ```
@@ -830,7 +856,7 @@ Every controlled error is a `GraphCheckError` with a non-empty, actionable fix.
 | `generate.config_missing` | No `generate` block | Add a `generate:` block to `graphcheck.yml` with provider, model, and credential environment-variable name. |
 | `generate.config_invalid` | Invalid provider/model/key/base URL/temperature or unknown key | Correct the named `graphcheck.yml` field. |
 | `generate.api_key_missing` | Required env var absent/blank | Exactly `set $<NAME>`. |
-| `generate.provider_unsupported` | Provider not implemented | Set `generate.provider` to `anthropic`, `openai`, or `ollama`. |
+| `generate.provider_unsupported` | Provider not implemented | Set `generate.provider` to `anthropic`, `gemini`, `openai`, `openrouter`, or `ollama`. |
 | `generate.baseline_missing` | Default baseline directory has no baseline | Run `graphcheck profile`, or pass `--from <baseline.json>`. |
 | `generate.baseline_not_found` | `--from` does not resolve to a file | Pass an existing baseline JSON path. |
 | `generate.baseline_invalid` | JSON/Pydantic/fingerprint validation fails | Regenerate it with `graphcheck profile`, or pass a valid C4 baseline. |
@@ -903,8 +929,8 @@ contract.
 
 `tests/generation/test_config.py`
 
-- accepts Anthropic and OpenAI with a named, populated environment variable;
-- rejects Anthropic/OpenAI with null, blank, missing, or blank-valued `api_key_env`;
+- accepts Anthropic, Gemini, OpenAI, and OpenRouter with a named, populated environment variable;
+- rejects every cloud provider with null, blank, missing, or blank-valued `api_key_env`;
 - asserts missing key fix is exactly `set $ANTHROPIC_API_KEY`;
 - accepts Ollama with `api_key_env: null`;
 - accepts Ollama with an optional populated key;
@@ -999,6 +1025,8 @@ Patch `instructor.from_provider`; do not make network calls.
   response model, and zero validation/transport retries;
 - OpenAI uses `openai/<model>`, direct API key, optional base URL, and zero validation/transport
   retries;
+- Gemini and OpenRouter use `openai/<model>`, their official OpenAI-compatible endpoint by default,
+  `Mode.JSON_SCHEMA`, a direct API key, and zero validation/transport retries;
 - Ollama uses `ollama/<model>`, explicit base URL, `Mode.JSON`, no key argument when null, and
   zero validation/transport retries;
 - arbitrary key environment-variable names work without copying values into other environment
@@ -1199,9 +1227,9 @@ the disclosure and transmission-boundary tests exist.
 | Every check satisfies SPEC-02 | Per-item one-check `load_suite` plus final whole-file `load_suite`. |
 | Invalid re-asked once, then dropped | GraphCheck-owned two-call algorithm and service call-count/drop tests. |
 | Never writes half-valid YAML | Final validation before atomic writer; writer failure tests. |
-| Provider/model/key from config/env | Strict config and three-provider adapter tests. |
+| Provider/model/key from config/env | Strict config and five-provider adapter tests. |
 | Missing key has a clear fix | Locked `set $<NAME>` error and CLI assertion. |
-| Anthropic, OpenAI, local Ollama | Provider factory tests; Ollama nullable-key path; optional live smoke. |
+| Anthropic, Gemini, OpenAI, OpenRouter, local Ollama | Provider factory tests; Ollama nullable-key path; optional live smoke. |
 | Minimal egress | Dedicated allow-list model, negative/canary/property tests, exact disclosure. |
 | Disclosure before data is sent | Ordered disclosure/client spy test in service and CLI integration. |
 | Never judges | LLM DTO excludes judgment fields; prompt and rejection tests. |
@@ -1225,6 +1253,6 @@ The component is complete only when:
 - no generated destination is created when zero candidates survive or final validation fails;
 - every written file immediately round-trips through `load_suite`;
 - every written check is skipped without connector access until both applicable markers are removed;
-- Anthropic/OpenAI require user-supplied environment credentials;
+- Anthropic, Gemini, OpenAI, and OpenRouter require user-supplied environment credentials;
 - Ollama works with an explicit base URL and `api_key_env: null`; and
 - docs and CLI state that output is non-deterministic, inert, and requires human review.

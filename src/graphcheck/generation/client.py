@@ -13,6 +13,7 @@ from graphcheck.generation.proposals import ProposalRequest, RawProposalBatch
 MAX_PROVIDER_CALLS = 2
 PROVIDER_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_TOKENS = 8192
+OPENAI_COMPATIBLE_PROVIDERS = {"gemini", "openai", "openrouter"}
 
 # Instructor's own exception logging can contain provider exception strings or response material.
 # GraphCheck emits only its safe category mapping.
@@ -34,7 +35,10 @@ class InstructorStructuredOutputClient:
         api_key: str | None,
     ) -> None:
         self._config = config
-        provider_model = f"{config.provider}/{config.model}"
+        adapter_provider = (
+            "openai" if config.provider in OPENAI_COMPATIBLE_PROVIDERS else config.provider
+        )
+        provider_model = f"{adapter_provider}/{config.model}"
         kwargs: dict[str, object] = {
             "timeout": PROVIDER_TIMEOUT_SECONDS,
             "temperature": config.temperature,
@@ -49,17 +53,20 @@ class InstructorStructuredOutputClient:
             kwargs["max_tokens"] = MAX_OUTPUT_TOKENS
         if api_key is not None:
             kwargs["api_key"] = api_key
-        if config.base_url is not None and config.provider != "anthropic":
-            kwargs["base_url"] = str(config.base_url)
+        if config.normalized_base_url is not None and config.provider != "anthropic":
+            kwargs["base_url"] = config.normalized_base_url
         if config.provider == "anthropic":
             kwargs["mode"] = instructor.Mode.TOOLS
         elif config.provider == "ollama":
             kwargs["mode"] = instructor.Mode.JSON
+        elif config.provider in {"gemini", "openrouter"}:
+            kwargs["mode"] = instructor.Mode.JSON_SCHEMA
         elif config.provider != "openai":
             raise GraphCheckError(
                 "generate.provider_unsupported",
                 f"Generation provider is not supported: {config.provider}",
-                "Set `generate.provider` to `anthropic`, `openai`, or `ollama`.",
+                "Set `generate.provider` to `anthropic`, `gemini`, `openai`, `openrouter`, or "
+                "`ollama`.",
             )
         try:
             self._client = instructor.from_provider(provider_model, **kwargs)

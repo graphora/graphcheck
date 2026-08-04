@@ -7,13 +7,18 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, 
 
 from graphcheck.errors import GraphCheckError
 
+OPENAI_COMPATIBLE_BASE_URLS = {
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
 
 class GenerateConfig(BaseModel):
     """Strict provider configuration for ``graphcheck generate``."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    provider: Literal["anthropic", "openai", "ollama"]
+    provider: Literal["anthropic", "gemini", "openai", "openrouter", "ollama"]
     model: str
     api_key_env: str | None = None
     base_url: AnyHttpUrl | None = None
@@ -39,7 +44,7 @@ class GenerateConfig(BaseModel):
 
     @model_validator(mode="after")
     def provider_requirements(self) -> GenerateConfig:
-        if self.provider in {"anthropic", "openai"} and self.api_key_env is None:
+        if self.provider != "ollama" and self.api_key_env is None:
             raise ValueError(f"{self.provider} requires api_key_env")
         if self.provider == "ollama" and self.base_url is None:
             raise ValueError(
@@ -61,12 +66,16 @@ class GenerateConfig(BaseModel):
 
     @property
     def normalized_base_url(self) -> str | None:
-        return None if self.base_url is None else str(self.base_url)
+        return (
+            OPENAI_COMPATIBLE_BASE_URLS.get(self.provider)
+            if self.base_url is None
+            else str(self.base_url)
+        )
 
     @property
     def destination(self) -> str:
-        if self.base_url is not None:
-            return str(self.base_url)
+        if self.normalized_base_url is not None:
+            return self.normalized_base_url
         return f"{self.provider.capitalize()} provider default"
 
 

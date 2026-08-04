@@ -72,8 +72,17 @@ def test_generate_config_and_secret_resolution() -> None:
     assert resolve_api_key(local, environ={}) is None
     with pytest.raises(ValidationError):
         GenerateConfig(provider="ollama", model="qwen3:8b")
-    with pytest.raises(ValidationError):
-        GenerateConfig(provider="openai", model="gpt", api_key_env=None)
+    for provider in ("anthropic", "gemini", "openai", "openrouter"):
+        with pytest.raises(ValidationError):
+            GenerateConfig(provider=provider, model="model", api_key_env=None)
+
+    for provider, destination in {
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "openrouter": "https://openrouter.ai/api/v1",
+    }.items():
+        compatible = GenerateConfig(provider=provider, model="model", api_key_env="COMPAT_KEY")
+        assert compatible.destination == destination
+        assert resolve_api_key(compatible, environ={"COMPAT_KEY": "secret"}) == "secret"
 
 
 @pytest.mark.parametrize(
