@@ -133,9 +133,9 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
         assert fragment_report["id"] == "run-old"
         assert fragment_report["href"] == "/report?id=run-old"
         assert fragment_report["title"] == "GraphCheck Dashboard - run-old"
-        assert set(fragments) == {"run_title", "banners", "overview", "checks"}
-        assert "Run: <code>run-old</code>" in fragments["run_title"]
-        assert "<strong>Partial Run.</strong>" in fragments["banners"]
+        assert set(fragments) == {"run_title", "overview", "checks"}
+        assert "run-old" not in fragments["run_title"]
+        assert "<strong>Partial Run.</strong>" in fragments["run_title"]
         assert '<section id="report-overview"' in fragments["overview"]
         assert '<section id="checks-panel"' in fragments["checks"]
         assert 'id="report-explorer"' not in "".join(fragments.values())
@@ -172,7 +172,7 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
         assert deletion["redirect"] == "/report?id=run-old"
         assert deletion["replacement"]["id"] == "run-old"
         assert deletion["replacement"]["href"] == "/report?id=run-old"
-        assert "<strong>Partial Run.</strong>" in deletion["replacement"]["fragments"]["banners"]
+        assert "<strong>Partial Run.</strong>" in deletion["replacement"]["fragments"]["run_title"]
 
     assert not new.exists()
     assert old.exists()

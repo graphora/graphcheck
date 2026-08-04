@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -118,7 +119,7 @@ def format_report_history(records: list[ReportRun]) -> str:
         )
         for record in records
     ]
-    headers = ("RUN ID", "FINISHED AT", "STATUS", "SUITE SCORES")
+    headers = ("REPORT NAME", "FINISHED AT", "STATUS", "SUITE SCORES")
     widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
     lines = [
         _format_row(headers, widths),
@@ -126,6 +127,25 @@ def format_report_history(records: list[ReportRun]) -> str:
     ]
     lines.extend(_format_row(row, widths) for row in rows)
     return "\n".join(lines)
+
+
+def report_name(results: Results) -> str:
+    """Return the filesystem-safe target and basic-ISO report identifier."""
+    database = results.run.target.database if results.run.target is not None else "unknown"
+    target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
+    timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%SZ")
+    return f"{target}_{timestamp}"
+
+
+def display_run_status(results: Results) -> RunStatus:
+    """Map machine run outcomes to user-facing statuses."""
+    if results.run.error is not None and results.run.error.code == "neo4j.unreachable":
+        return RunStatus.FAILED
+    return (
+        RunStatus.PARTIAL
+        if results.run.status is not RunStatus.COMPLETE or results.totals.errored > 0
+        else RunStatus.COMPLETE
+    )
 
 
 def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
@@ -163,7 +183,8 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
 
     lines = [
         f"Comparing {first.id} -> {second.id}",
-        f"Status: {first.results.run.status.value} -> {second.results.run.status.value}",
+        f"Status: {display_run_status(first.results).value} -> "
+        f"{display_run_status(second.results).value}",
         "Suite scores:",
         *_suite_score_changes(first.results, second.results),
         "",
@@ -373,7 +394,7 @@ def report_summary(results: Results) -> ReportSummary:
     return ReportSummary(
         id=results.run.id,
         finished_at=results.run.finished_at,
-        status=results.run.status,
+        status=display_run_status(results),
         suite_scores=tuple(
             (suite.id, suite.score) for suite in sorted(results.suites, key=lambda suite: suite.id)
         ),

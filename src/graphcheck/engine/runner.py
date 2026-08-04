@@ -23,6 +23,7 @@ from graphcheck.contracts.results import (
     CheckResult,
     RedactionPolicy,
     Results,
+    ResultsTarget,
     RunStatus,
     RunTarget,
     Severity,
@@ -972,7 +973,7 @@ class Engine:
         self,
         target: RunTarget | None,
         deadline: float,
-    ) -> RunTarget:
+    ) -> ResultsTarget:
         if target is not None:
             major, minor = version_major_minor(target.server_version)
             if self._telemetry is not None and self._telemetry.enabled:
@@ -988,7 +989,7 @@ class Engine:
                     error_code=None,
                 )
             self._telemetry_probe_ms = 0
-            return target
+            return ResultsTarget.model_validate(target.model_dump())
 
         probe_started = self._timing_start()
         try:
@@ -1338,7 +1339,7 @@ class Engine:
             return None
         return _duration_ms(started, self._monotonic())
 
-    def _probe_target(self, deadline: float) -> RunTarget:
+    def _probe_target(self, deadline: float) -> ResultsTarget:
         probe = getattr(self.client, "probe", None)
         if not callable(probe):
             raise GraphCheckError(
@@ -1350,7 +1351,18 @@ class Engine:
         result = probe(timeout_s=timeout_s) if self._probe_accepts_timeout else probe()
         _remaining(deadline, self._monotonic())
         target = result[0] if isinstance(result, tuple) else result
-        return RunTarget.model_validate(target)
+        validated = ResultsTarget.model_validate(
+            target.model_dump() if isinstance(target, RunTarget) else target
+        )
+        if isinstance(result, tuple) and len(result) > 2:
+            counts = result[2]
+            validated = validated.model_copy(
+                update={
+                    "nodes": getattr(counts, "nodes", validated.nodes),
+                    "relationships": getattr(counts, "relationships", validated.relationships),
+                }
+            )
+        return validated
 
     def _results(
         self,

@@ -97,7 +97,7 @@ def test_report_list_displays_newest_first_with_metadata(tmp_path, monkeypatch):
     result = runner.invoke(app, ["report", "--list"])
 
     assert result.exit_code == 0
-    assert "RUN ID" in result.stdout
+    assert "REPORT NAME" in result.stdout
     assert "FINISHED AT" in result.stdout
     assert "SUITE SCORES" in result.stdout
     assert "run-new" in result.stdout
@@ -361,3 +361,33 @@ def test_report_history_uses_summaries_and_loads_only_compared_runs(tmp_path, mo
     second = find_report_run(records, "run-two")
     assert "Comparing run-one -> run-two" in format_report_comparison(first, second)
     assert loaded == [first.results_path, second.results_path]
+
+
+def test_report_summary_maps_errored_checks_to_partial():
+    raw = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+    raw["checks"][0].update(
+        verdict="errored",
+        measured=None,
+        evidence=None,
+        error={
+            "code": "query.execution",
+            "message": "Query execution failed",
+            "fix": "Check the generated Cypher",
+        },
+    )
+    raw["totals"].update(fail=0, errored=1)
+    raw["suites"][0]["totals"].update(fail=0, errored=1)
+
+    summary = json.loads(report_summary_json(load_results(raw)))
+
+    assert summary["schema_version"] == "1.0"
+    assert summary["status"] == "partial"
+
+
+def test_report_summary_maps_unreachable_neo4j_to_failed():
+    raw = json.loads((FIXTURES / "results.failed.json").read_text(encoding="utf-8"))
+    raw["run"]["error"]["code"] = "neo4j.unreachable"
+
+    summary = json.loads(report_summary_json(load_results(raw)))
+
+    assert summary["status"] == "failed"

@@ -11,7 +11,7 @@ from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import QueryResult
+from graphcheck.neo4j_adapter import Counts, QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.history import discover_report_runs
 from graphcheck.reporting.writer import json_compatible, load_results
@@ -37,7 +37,7 @@ class FakeClient:
     def probe(self, *, timeout_s=None):
         if self.probe_error is not None:
             raise self.probe_error
-        return TARGET
+        return TARGET, object(), Counts(nodes=1250, relationships=3480)
 
     def run_read_result(self, query, params, *, timeout_s=None):
         self.read_calls.append((query, params, timeout_s))
@@ -69,31 +69,31 @@ def test_artifact_value_normalization_is_deterministic_for_yaml_sets():
 
 def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path):
     first = load_results(FIXTURES / "results.complete.json")
-    first.run.id = "run-one"
     second = load_results(FIXTURES / "results.complete.json")
-    second.run.id = "run-two"
+    second.run.finished_at = "2026-07-06T09:03:41Z"
     runs_dir = tmp_path / "runs"
 
     _write_run_artifacts(first, runs_dir)
     latest_results, latest_report = _write_run_artifacts(second, runs_dir)
 
-    assert (runs_dir / "run-one" / "results.json").is_file()
-    assert (runs_dir / "run-one" / "report.html").is_file()
-    assert (runs_dir / "run-two" / "results.json").is_file()
-    assert (runs_dir / "run-two" / "report.html").is_file()
-    assert (runs_dir / "run-two" / "summary.json").is_file()
-    assert load_results(latest_results).run.id == "run-two"
+    first_name = "neo4j_20260706T090241Z"
+    second_name = "neo4j_20260706T090341Z"
+    assert (runs_dir / first_name / "results.json").is_file()
+    assert (runs_dir / first_name / "report.html").is_file()
+    assert (runs_dir / second_name / "results.json").is_file()
+    assert (runs_dir / second_name / "report.html").is_file()
+    assert (runs_dir / second_name / "summary.json").is_file()
+    assert load_results(latest_results).run.id == second_name
     assert latest_report.is_file()
-    assert latest_results.read_bytes() == (runs_dir / "run-two" / "results.json").read_bytes()
-    assert latest_report.read_bytes() == (runs_dir / "run-two" / "report.html").read_bytes()
-    assert {record.id for record in discover_report_runs(runs_dir)} == {"run-one", "run-two"}
+    assert latest_results.read_bytes() == (runs_dir / second_name / "results.json").read_bytes()
+    assert latest_report.read_bytes() == (runs_dir / second_name / "report.html").read_bytes()
+    assert {record.id for record in discover_report_runs(runs_dir)} == {first_name, second_name}
 
 
 def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path, monkeypatch):
     first = load_results(FIXTURES / "results.complete.json")
-    first.run.id = "run-one"
     second = load_results(FIXTURES / "results.complete.json")
-    second.run.id = "run-two"
+    second.run.finished_at = "2026-07-06T09:03:41Z"
     runs_dir = tmp_path / "runs"
     latest_results, latest_report = _write_run_artifacts(first, runs_dir)
     previous_results = latest_results.read_bytes()
@@ -112,7 +112,7 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
 
     assert latest_results.read_bytes() == previous_results
     assert latest_report.read_bytes() == previous_report
-    assert (runs_dir / "run-two" / "results.json").is_file()
+    assert (runs_dir / "neo4j_20260706T090341Z" / "results.json").is_file()
     assert not list(runs_dir.glob(".*.staging-*"))
     assert not list(runs_dir.glob(".*.backup-*"))
 
@@ -519,6 +519,35 @@ competency:
     assert payload["checks"][0]["verdict"] == verdict
 
 
+def test_run_maps_errored_checks_to_partial_in_cli(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: errored
+competency:
+  - id: broken-query
+    question: Can the query execute?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class ErroredClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            raise GraphCheckError("neo4j.query_failed", "Query failed.", "Fix the query.")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: ErroredClient())
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 1
+    assert ": partial" in result.stdout
+    assert "errored 1" in result.stdout
+
+
 def test_run_connection_failure_is_exit_three_and_still_writes_reports(tmp_path, monkeypatch):
     _project(
         tmp_path,
@@ -550,8 +579,36 @@ competency:
     assert payload["run"]["status"] == "failed"
     assert payload["run"]["error"]["code"] == "neo4j.unreachable"
     assert (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").exists()
+    assert ": failed" in result.stdout
+    assert "neo4j.unreachable: Neo4j could not be reached." in result.stderr
     assert "Fix: Start Neo4j" in result.stderr
     assert client.closed is True
+
+
+def test_run_connection_failure_keeps_root_error_when_artifact_write_fails(tmp_path, monkeypatch):
+    _project(tmp_path, {})
+    client = FakeClient(
+        probe_error=GraphCheckError(
+            "neo4j.unreachable",
+            "Neo4j could not be reached.",
+            "Start Neo4j and verify the configured URI.",
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr(
+        cli_module,
+        "_write_run_artifacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError(5, "Access is denied")),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 3
+    assert "neo4j.unreachable: Neo4j could not be reached." in result.stderr
+    assert "Fix: Start Neo4j and verify the configured URI." in result.stderr
+    assert "run.artifact_failed: Could not write run artifacts:" in result.stderr
+    assert "Fix: Check the configured artifacts path and filesystem permissions." in result.stderr
 
 
 def test_run_invalid_selector_is_configuration_failure(tmp_path, monkeypatch):

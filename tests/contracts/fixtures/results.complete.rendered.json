@@ -143,6 +143,8 @@
       "database": "neo4j",
       "edition": "community",
       "fingerprint": "sha256:abc123",
+      "nodes": 1250,
+      "relationships": 3480,
       "server_version": "5.18.0"
     }
   },

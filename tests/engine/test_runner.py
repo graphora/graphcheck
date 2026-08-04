@@ -244,7 +244,8 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert results.run.graphcheck_version == __version__
     assert results.run.pack_version == PACK_VERSION
     assert results.run.status is RunStatus.COMPLETE
-    assert results.run.target == TARGET
+    assert results.run.target is not None
+    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump()
     assert results.run.selection.suites == ["customer-quality"]
     assert results.run.selection.fail_fast is False
     assert results.run.redaction.policy.value == "none"

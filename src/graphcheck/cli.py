@@ -1629,6 +1629,8 @@ def run_command(
                     else SafeErrorCode.ARTIFACT_WRITE_FAILED
                 ),
             )
+        if results.run.error is not None:
+            _print_setup_error(results.run.error)
         typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
         typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
         raise typer.Exit(3) from exc
@@ -1769,8 +1771,11 @@ def _write_run_artifacts(
     *,
     render_observer: Callable[[int, bool], None] | None = None,
 ) -> tuple[Path, Path]:
+    from graphcheck.reporting.history import report_name
+
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
+    results.run.id = report_name(results)
     historical_dir = runs_dir / results.run.id
     if (
         historical_dir.name.casefold() == "latest"
@@ -1828,9 +1833,22 @@ def _print_setup_error(error: "CheckError") -> None:
 
 
 def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
+    from graphcheck.reporting.history import display_run_status
+
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
-    typer.echo(f"GraphCheck run {results.run.id}: {results.run.status.value}")
+    typer.echo(f"GraphCheck run {results.run.id}: {display_run_status(results).value}")
+    if results.run.target is not None:
+        nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
+        relationships = (
+            "unavailable"
+            if results.run.target.relationships is None
+            else str(results.run.target.relationships)
+        )
+        typer.echo(
+            f"Target graph: {results.run.target.database} | nodes {nodes} | "
+            f"relationships {relationships}"
+        )
     if len(results.suites) > 1:
         for suite in results.suites:
             suite_score = "n/a" if suite.score is None else str(suite.score)

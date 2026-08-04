@@ -3,11 +3,11 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Collection
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, RunStatus, Verdict
+from graphcheck.reporting.history import display_run_status
 from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
@@ -58,7 +58,6 @@ def render_validated_html_report(
             "<body>",
             _header(fragments["run_title"]),
             '<main class="dashboard-body">',
-            fragments["banners"],
             '<div class="dashboard-grid">',
             _report_explorer(model),
             fragments["overview"],
@@ -93,7 +92,6 @@ def render_validated_html_report_fragments(
     )
     return {
         "run_title": _run_title(model),
-        "banners": f'<div id="report-banners">{_banners(model)}</div>',
         "overview": _status_overview(model, checks, filtered=verdicts is not None),
         "checks": _checks(checks),
     }
@@ -182,30 +180,6 @@ def _run_title(results: Results) -> str:
     version_info = (
         f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
     )
-
-    return (
-        '<div id="report-run-title" class="brand-container">'
-        f'    <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
-        f"    <h1>Run: <code>{_escape(results.run.id)}</code></h1>"
-        "</div>"
-    )
-
-
-def _header(run_title: str) -> str:
-    return (
-        '<header class="navbar">'
-        f"{run_title}"
-        '  <div class="navbar-actions">'
-        '    <span id="report-navigation-status" class="report-navigation-status" '
-        'role="status" aria-live="polite"></span>'
-        '    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme" '
-        'title="Toggle Theme">🌙</button>'
-        "  </div>"
-        "</header>"
-    )
-
-
-def _banners(results: Results) -> str:
     total_issues = results.totals.fail + results.totals.warn + results.totals.errored
     executed = results.totals.checks - results.totals.skipped
 
@@ -230,50 +204,64 @@ def _banners(results: Results) -> str:
         check_str = "check" if results.totals.skipped == 1 else "checks"
         skipped_text = f" ({results.totals.skipped} {check_str} skipped)"
 
+    action = ""
+    fix = ""
+    status = display_run_status(results)
     if results.run.error is not None:
-        return (
-            '<div class="banner-stack">'
-            '<section class="banner banner-error" role="alert">'
-            '<span aria-hidden="true">⚠️</span>'
-            "<strong>Run Failed.</strong>"
-            f'<span class="banner-message">{_escape(results.run.error.message)}</span>'
-            '<button id="run-error-fix-toggle" class="banner-action" type="button" '
+        kind, label, heading = (
+            ("error", "FAILED", "Run Failed.")
+            if status is RunStatus.FAILED
+            else ("partial", "PARTIAL", "Partial Run.")
+        )
+        message = results.run.error.message
+        action = (
+            '<button id="run-error-fix-toggle" class="header-status-action" type="button" '
             'aria-expanded="false" aria-controls="run-error-fix">See fix.</button>'
-            "</section>"
-            '<section id="run-error-fix" class="banner-fix hidden-banner-fix">'
-            f"<span>💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</span>"
-            "</section>"
-            "</div>"
         )
-
-    if results.run.status is RunStatus.PARTIAL:
-        return (
-            '<div class="banner-stack">'
-            '<section class="banner banner-partial">'
-            "<strong>Partial Run.</strong>"
-            f'<span class="banner-message">{_escape(status_text)}.</span>'
-            '<button id="run-summary-toggle" class="banner-action" type="button" '
+        fix = (
+            '<span id="run-error-fix" class="header-status-fix hidden-status-fix">'
+            f"💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</span>"
+        )
+    elif status is RunStatus.PARTIAL:
+        kind, label, heading, message = "partial", "PARTIAL", "Partial Run.", f"{status_text}."
+        action = (
+            '<button id="run-summary-toggle" class="header-status-action" type="button" '
             'aria-expanded="false" aria-controls="summary-table-container">See more.</button>'
-            "</section>"
-            "</div>"
         )
+    else:
+        kind = "warning" if total_issues > 0 else "complete"
+        label, heading = "COMPLETE", "Run Complete."
+        celebration = " 🎉" if status_text == "No issues found" and executed > 0 else ""
+        message = f"{status_text}{skipped_text}.{celebration}"
+        if total_issues > 0:
+            action = (
+                '<button id="run-summary-toggle" class="header-status-action" type="button" '
+                'aria-expanded="false" aria-controls="summary-table-container">See issues.</button>'
+            )
 
-    celebration = " 🎉" if status_text == "No issues found" and executed > 0 else ""
-    banner_class = "banner-warning" if total_issues > 0 else "banner-complete"
-    issues_action = (
-        '<button id="run-summary-toggle" class="banner-action" type="button" '
-        'aria-expanded="false" aria-controls="summary-table-container">See issues.</button>'
-        if total_issues > 0
-        else ""
-    )
     return (
-        '<div class="banner-stack">'
-        f'<section class="banner {banner_class}">'
-        "<strong>Run Complete.</strong>"
-        f'<span class="banner-message">{_escape(status_text)}'
-        f"{_escape(skipped_text)}.{celebration}</span>{issues_action}"
-        "</section>"
+        '<div id="report-run-title" class="brand-container">'
+        f'  <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
+        '  <div class="header-status">'
+        f'    <span class="status-pill status-pill-{kind}">{label}</span>'
+        f'    <h1><strong>{heading}</strong> <span class="header-status-message">'
+        f"{_escape(message)}</span>{action}{fix}</h1>"
+        "  </div>"
         "</div>"
+    )
+
+
+def _header(run_title: str) -> str:
+    return (
+        '<header class="navbar">'
+        f"{run_title}"
+        '  <div class="navbar-actions">'
+        '    <span id="report-navigation-status" class="report-navigation-status" '
+        'role="status" aria-live="polite"></span>'
+        '    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme" '
+        'title="Toggle Theme">🌙</button>'
+        "  </div>"
+        "</header>"
     )
 
 
@@ -294,10 +282,6 @@ def _status_overview(
             f"(Neo4j version: {_escape(target.server_version)}, {_escape(target.edition)})"
         )
 
-    time_info_html = _format_time_info(
-        results.run.started_at,
-        results.run.finished_at,
-    )
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
     for check in checks:
@@ -394,12 +378,16 @@ def _status_overview(
         "      <h2>Graph Health Overview</h2>"
         '      <div class="summary-meta-grid">'
         '        <div class="meta-item">'
-        '          <span class="meta-label">CHECKED ON</span>'
-        f"          <div>{_escape(time_info_html)}</div>"
-        "        </div>"
-        '        <div class="meta-item">'
         '          <span class="meta-label">Target Graph</span>'
         f"          <div>{target_html}</div>"
+        "        </div>"
+        '        <div class="meta-item graph-count-item">'
+        '          <span class="meta-label">Nodes</span>'
+        f"          <div>{_target_count(results, 'nodes')}</div>"
+        "        </div>"
+        '        <div class="meta-item graph-count-item">'
+        '          <span class="meta-label">Relationships</span>'
+        f"          <div>{_target_count(results, 'relationships')}</div>"
         "        </div>"
         "      </div>"
         "    </div>"
@@ -476,9 +464,7 @@ def _issue(check: CheckResult) -> str:
 
 
 def _checks(checks: list[CheckResult]) -> str:
-    items = "".join(_check(check) for check in checks) or (
-        '<p class="empty-panel-message text-muted">No checks to explore.</p>'
-    )
+    items = "".join(_check(check) for check in checks)
     return (
         '<section id="checks-panel" class="card panel-section hidden-panel">'
         '  <div class="checks-header">'
@@ -496,7 +482,9 @@ def _checks(checks: list[CheckResult]) -> str:
         '      <button id="toggle-details-btn" class="btn-secondary">Toggle Details</button>'
         "    </div>"
         "  </div>"
-        f'  <div id="checks-container" class="scrollable-content">{items}</div>'
+        f'  <div id="checks-container" class="scrollable-content">{items}'
+        '    <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>'
+        "  </div>"
         "</section>"
     )
 
@@ -581,34 +569,9 @@ def _details_open(check: CheckResult) -> str:
     return ""
 
 
-def _format_time_info(
-    started: Any,
-    finished: Any,
-) -> str:
-    s_dt = _parse_datetime(started)
-    f_dt = _parse_datetime(finished)
-
-    if s_dt is None:
-        return "n/a"
-
-    formatted_date = s_dt.strftime("%d-%m-%Y at %H:%M:%S")
-    if f_dt is not None:
-        duration = max(0, int((f_dt - s_dt).total_seconds()))
-        unit = "second" if duration == 1 else "seconds"
-        return f"{formatted_date} (in {duration} {unit})"
-    return formatted_date
-
-
-def _parse_datetime(val: Any) -> datetime | None:
-    if not val:
-        return None
-    if isinstance(val, datetime):
-        return val
-    s = str(val).replace("Z", "").replace("z", "").strip()
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        return None
+def _target_count(results: Results, field: str) -> str:
+    value = getattr(results.run.target, field, None) if results.run.target is not None else None
+    return '<span class="text-muted">Unavailable</span>' if value is None else f"{value:,}"
 
 
 def _json(value: object) -> str:
@@ -712,7 +675,7 @@ body {
   gap: 20px;
   border-bottom: 1px solid var(--border);
 }
-.brand-container { flex-shrink: 0; }
+.brand-container { min-width: 0; }
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -720,8 +683,18 @@ body {
   color: #94a3b8;
   font-weight: 600;
 }
-.navbar h1 { margin: 0; font-size: 18px; font-weight: 600; }
-.navbar code { background: #1e293b; color: #f8fafc; padding: 2px 8px; border-radius: 4px; font-size: 14px; }
+.navbar h1 { margin: 0; font-weight: 400; }
+.navbar h1, .panel-section h2 { font-size: 18px; }
+.header-status { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.header-status-message { font-weight: 400; }
+.status-pill { padding: 2px 7px; border-radius: 999px; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: 0.06em; }
+.status-pill-complete { background: var(--pass-color); }
+.status-pill-warning { background: var(--warn-color); color: #422006; }
+.status-pill-partial { background: var(--errored-color); }
+.status-pill-error { background: var(--fail-color); }
+.header-status-action { margin-left: 6px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.header-status-fix { margin-left: 6px; color: #cbd5e1; font-size: 12px; font-weight: 400; }
+.hidden-status-fix { display: none; }
 .navbar-actions { display: flex; align-items: center; gap: 12px; }
 .report-navigation-status { min-width: 94px; color: #cbd5e1; font-size: 12px; text-align: right; }
 
@@ -778,6 +751,7 @@ body {
   flex-wrap: wrap;
 }
 .meta-item { display: flex; flex-direction: column; }
+.graph-count-item { min-width: 92px; }
 .meta-item .meta-label {
   font-size: 11px;
   text-transform: uppercase;
@@ -954,10 +928,8 @@ body {
   justify-content: stretch;
 }
 
-#report-banners { flex-shrink: 0; }
-#report-run-title, #report-banners, #report-overview, #checks-panel { transition: opacity 0.15s ease; }
+#report-run-title, #report-overview, #checks-panel { transition: opacity 0.15s ease; }
 body.report-navigation-loading #report-run-title,
-body.report-navigation-loading #report-banners,
 body.report-navigation-loading #report-overview,
 body.report-navigation-loading #checks-panel { opacity: 0.55; }
 
@@ -978,7 +950,7 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
   overflow: hidden;
 }
 .panel-header, .checks-header { flex-shrink: 0; }
-.panel-section h2 { margin: 0 0 4px 0; font-size: 18px; }
+.panel-section h2 { margin: 0 0 4px 0; }
 .panel-section h3 { margin: 14px 0 8px 0; font-size: 14px; }
 
 .scrollable-content {
@@ -1046,8 +1018,9 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .report-id { display: block; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .report-meta { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; line-height: 1.35; }
 .report-status { text-transform: capitalize; }
-.explorer-footer { flex-direction: column; align-items: stretch; gap: 8px; }
+.explorer-footer { flex-direction: column; align-items: stretch; gap: 6px; margin-top: 5px; margin-bottom: 0; padding-top: 5px; padding-bottom: 0; border-bottom: 0; }
 .explorer-status { min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.explorer-status:empty { display: none; }
 .explorer-status.error { color: var(--fail-color); }
 .explorer-selection-actions { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .explorer-comparison-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
@@ -1119,29 +1092,6 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .badge-skipped { background: var(--skipped-bg); color: var(--skipped-color); border: 1px solid var(--border); }
 .badge-score { background: #eff6ff; color: #2563eb; border: 1px solid rgba(37, 99, 235, 0.3); order: 999; }
 [data-theme="dark"] .badge-score { background: #1e3a8a; color: #bfdbfe; }
-
-.banner-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex-shrink: 0;
-  max-width: 1176px;
-  width: 100%;
-  margin: 0 auto;
-  transition: max-width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.banner-stack.has-checks {
-  max-width: 100%;
-}
-.banner { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; flex-shrink: 0; }
-.banner-message { min-width: 0; }
-.banner-error { background: var(--fail-color); color: #fff; }
-.banner-partial { background: var(--errored-color); color: #fff; }
-.banner-complete { background: var(--pass-color); color: #fff; }
-.banner-warning { background: var(--warn-bg); color: var(--warn-color); border: 1px solid rgba(245, 158, 11, 0.3); }
-.banner-action { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; white-space: nowrap; cursor: pointer; }
-.banner-fix { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border: 1px solid var(--fail-color); border-radius: var(--radius); background: var(--bg-card); color: var(--text-main); font-size: 13px; }
-.hidden-banner-fix { display: none; }
 
 .table-container { overflow-x: auto; margin-top: 8px; }
 .styled-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
@@ -1308,7 +1258,7 @@ function reportHref(runId) {
 
 function setReportNavigationLoading(loading) {
   document.body.classList.toggle('report-navigation-loading', loading);
-  document.querySelectorAll('#report-run-title, #report-banners, #report-overview, #checks-panel').forEach(
+  document.querySelectorAll('#report-run-title, #report-overview, #checks-panel').forEach(
     fragment => fragment.setAttribute('aria-busy', String(loading))
   );
   const status = document.getElementById('report-navigation-status');
@@ -1332,7 +1282,6 @@ function updateCurrentReportRow(runId) {
 function applyReport(report, historyMode = 'push') {
   const fragmentIds = {
     run_title: 'report-run-title',
-    banners: 'report-banners',
     overview: 'report-overview',
     checks: 'checks-panel',
   };
@@ -1417,10 +1366,17 @@ function reportRow(report) {
   id.className = 'report-id';
   id.textContent = report.id;
   meta.className = 'report-meta';
-  meta.textContent = `${report.finished_at} · ${report.status}`;
+  meta.textContent = `${formatReportFinishedAt(report.finished_at)} · ${report.status}`;
   link.append(id, meta);
   row.append(checkbox, link);
   return row;
+}
+
+function formatReportFinishedAt(value) {
+  const finishedAt = new Date(value);
+  if (Number.isNaN(finishedAt.getTime())) return String(value || '');
+  const pad = part => String(part).padStart(2, '0');
+  return `${finishedAt.getFullYear()}-${pad(finishedAt.getMonth() + 1)}-${pad(finishedAt.getDate())} at ${pad(finishedAt.getHours())}:${pad(finishedAt.getMinutes())}:${pad(finishedAt.getSeconds())}`;
 }
 
 function appendReportRows(list, reports, emptyMessage) {
@@ -1700,6 +1656,7 @@ function setVerdictFilter(verdict, btn) {
 function filterChecks() {
   const query = document.getElementById('search-input').value.toLowerCase();
   const cards = document.querySelectorAll('.check-card');
+  let visible = 0;
 
   cards.forEach(card => {
     const verdict = card.getAttribute('data-verdict');
@@ -1708,8 +1665,27 @@ function filterChecks() {
     const matchesVerdict = (activeVerdictFilter === 'all' || verdict === activeVerdictFilter);
     const matchesSearch = !query || text.includes(query);
 
-    card.style.display = (matchesVerdict && matchesSearch) ? 'block' : 'none';
+    const matches = matchesVerdict && matchesSearch;
+    card.style.display = matches ? 'block' : 'none';
+    if (matches) visible += 1;
   });
+  const empty = document.getElementById('checks-empty-message');
+  if (empty) {
+    const categoryMessages = {
+      fail: 'No checks failed.',
+      warn: 'No checks with warnings.',
+      errored: 'No checks with errors.',
+      pass: 'No checks passed.',
+      skipped: 'No checks skipped.',
+    };
+    const categoryHasChecks = Array.from(cards).some(
+      card => activeVerdictFilter === 'all' || card.dataset.verdict === activeVerdictFilter
+    );
+    empty.textContent = !categoryHasChecks
+      ? (categoryMessages[activeVerdictFilter] || 'No checks to explore.')
+      : 'No matching checks.';
+    empty.hidden = visible > 0;
+  }
   persistCheckFilters();
 }
 
@@ -1802,7 +1778,7 @@ function toggleRunErrorFix() {
   const fix = document.getElementById('run-error-fix');
   const btn = document.getElementById('run-error-fix-toggle');
   if (!fix || !btn) return;
-  const isHidden = fix.classList.toggle('hidden-banner-fix');
+  const isHidden = fix.classList.toggle('hidden-status-fix');
   btn.setAttribute('aria-expanded', String(!isHidden));
   btn.textContent = isHidden ? 'See fix.' : 'Hide fix.';
 }
@@ -1840,11 +1816,9 @@ function showChecksExplorer(animate = true) {
   const grid = document.querySelector('.dashboard-grid');
   const checksPanel = document.getElementById('checks-panel');
   const btn = document.getElementById('explore-checks-btn');
-  const bannerStack = document.querySelector('.banner-stack');
 
   if (checksPanel.classList.contains('hidden-panel')) {
     grid.classList.add('has-checks');
-    if (bannerStack) bannerStack.classList.add('has-checks');
     checksPanel.classList.remove('hidden-panel');
     checksPanel.classList.toggle('visible-panel', animate);
     if (btn) btn.style.display = 'none';

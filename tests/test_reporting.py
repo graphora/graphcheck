@@ -104,17 +104,18 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
     assert "<h2>Graph Health Overview</h2>" in html
-    assert '<span class="meta-label">CHECKED ON</span>' in html
-    assert '<section class="banner banner-warning">' in html
+    assert "CHECKED ON" not in html
+    assert '<span class="status-pill status-pill-warning">COMPLETE</span>' in html
     assert "<strong>Run Complete.</strong>" in html
-    assert '<span class="banner-message">1 failure, 1 warning.</span>' in html
+    assert '<span class="header-status-message">1 failure, 1 warning.</span>' in html
     assert 'aria-controls="summary-table-container">See issues.</button>' in html
-    assert "background: var(--warn-bg); color: var(--warn-color);" in html
     assert "localStorage.setItem(" in html
     assert "restoreCheckFilters();" in html
-    assert "06-07-2026 at 09:00:00 (in 161 seconds)" in html
-    assert "ran in" not in html
     assert "<strong>neo4j</strong> (Neo4j version: 5.18.0, community)" in html
+    assert '<span class="meta-label">Nodes</span>' in html
+    assert '<span class="meta-label">Relationships</span>' in html
+    assert "1,250" in html
+    assert "3,480" in html
     assert "<code>customer-360</code>" in html
     assert '<span class="suite-check-stats">3/3 checks run</span>' in html
     assert '<span class="badge badge-fail">1 FAILED</span>' in html
@@ -137,18 +138,23 @@ def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
     assert "<strong>Partial Run.</strong>" in html
-    assert '<span class="banner-message">No issues found.</span>' in html
+    assert '<span class="header-status-message">No issues found.</span>' in html
     assert 'aria-controls="summary-table-container">See more.</button>' in html
     assert "run-summary-toggle')?.addEventListener('click', showIssueSummary)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
     assert '<span class="badge badge-skipped">1 SKIPPED</span>' in html
     assert 'class="status-box status-box-skipped"' in html
     assert 'class="status-box status-box-pass"' in html
-    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert "CHECKED ON" not in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
     assert "No issues found in the checks that were evaluated." in html
+    assert "No checks failed." in html
+    assert "No checks with warnings." in html
+    assert "No checks with errors." in html
+    assert "No checks passed." in html
+    assert "No checks skipped." in html
 
 
 def test_html_renderer_reports_all_checks_skipped():
@@ -161,7 +167,7 @@ def test_html_renderer_reports_all_checks_skipped():
         '<span class="badge badge-score">SCORE: N/A</span></div>'
     ) in html
     assert '<span class="badge badge-score">SCORE: N/A</span>' in html
-    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert "CHECKED ON" not in html
     assert "No issues found (1 check skipped)" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
@@ -232,7 +238,10 @@ def test_html_renderer_appends_skips_to_issue_status_text():
 
     html = render_html_report(raw)
 
-    assert '<span class="banner-message">1 failure, 1 warning (2 checks skipped).</span>' in html
+    assert (
+        '<span class="header-status-message">1 failure, 1 warning (2 checks skipped).</span>'
+        in html
+    )
 
 
 def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
@@ -253,7 +262,7 @@ def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
 
     html = render_html_report(raw)
 
-    assert '<span class="banner-message">1 warning.</span>' in html
+    assert '<span class="header-status-message">1 warning.</span>' in html
     assert "Run interrupted" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-warn">1 WARNING</span>'
@@ -290,7 +299,9 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     html = render_html_report(raw)
 
-    assert '<span class="banner-message">1 warning, 3 errors.</span>' in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="header-status-message">1 warning, 3 errors.</span>' in html
     assert (
         '<div class="suite-badges-row">'
         '<span class="badge badge-errored">3 ERRORED</span>'
@@ -350,18 +361,40 @@ def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
     assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
-    assert '<p class="empty-panel-message text-muted">No checks to explore.</p>' in html
-    assert '<section class="banner banner-error" role="alert">' in html
-    assert "<strong>Run Failed.</strong>" in html
+    assert 'id="checks-empty-message"' in html
+    assert "No checks to explore." in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert "<strong>Partial Run.</strong>" in html
     assert 'aria-controls="run-error-fix">See fix.</button>' in html
-    assert '<section id="run-error-fix" class="banner-fix hidden-banner-fix">' in html
+    assert '<span id="run-error-fix" class="header-status-fix hidden-status-fix">' in html
+    assert (
+        html.index('aria-controls="run-error-fix">See fix.</button>')
+        < html.index('<span id="run-error-fix"')
+        < html.index("</h1>", html.index('<span id="run-error-fix"'))
+    )
     assert "run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix)" in html
-    assert '<span class="meta-label">CHECKED ON</span>' in html
+    assert "CHECKED ON" not in html
     assert "connection.auth" not in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
     assert "Run failed before any checks could be evaluated." in html
     assert "All clear! No issues found." not in html
+
+
+def test_html_renderer_displays_unreachable_neo4j_as_failed():
+    raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
+    raw["run"]["error"] = {
+        "code": "neo4j.unreachable",
+        "message": "Neo4j is unreachable at the configured Bolt URI.",
+        "fix": "Start Neo4j and verify the configured URI.",
+    }
+
+    html = render_html_report(raw)
+
+    assert '<span class="status-pill status-pill-error">FAILED</span>' in html
+    assert "<strong>Run Failed.</strong>" in html
+    assert "Neo4j is unreachable at the configured Bolt URI." in html
+    assert "Start Neo4j and verify the configured URI." in html
 
 
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
@@ -391,7 +424,7 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     html = render_html_report(_fixture("complete"))
 
     assert html.count('id="report-run-title"') == 1
-    assert html.count('id="report-banners"') == 1
+    assert 'id="report-banners"' not in html
     assert html.count('id="report-overview"') == 1
     assert html.count('id="checks-panel"') == 1
     assert 'id="report-explorer"' in html
@@ -421,6 +454,8 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert 'class="explorer-comparison-actions"' in html
     assert "#delete-reports-btn {" not in html
     assert ".explorer-scroll { margin-top: 20px; }" in html
+    assert ".explorer-status:empty { display: none; }" in html
+    assert ".navbar h1, .panel-section h2 { font-size: 18px; }" in html
     assert "opacity: 1;" in html
     assert "function clearReportSelection()" in html
     assert "function compareMostRecentReports()" in html
@@ -451,6 +486,11 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "applyCheckDetailsPreference();" in html
     assert "showChecksExplorer(false);" in html
     assert "Loading report…" in html
+    assert "formatReportFinishedAt(report.finished_at)" in html
+    assert "const finishedAt = new Date(value);" in html
+    assert "finishedAt.getFullYear()" in html
+    assert "finishedAt.getHours()" in html
+    assert "`${match[1]} at ${match[2]}`" not in html
     assert "window.location.assign" not in html
     panel_footer_start = html.index(".panel-footer {")
     panel_footer_css = html[panel_footer_start : html.index("}", panel_footer_start)]
@@ -461,12 +501,11 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
 def test_html_renderer_exposes_report_specific_fragments_without_the_permanent_shell():
     fragments = render_validated_html_report_fragments(load_results(_fixture("partial")))
 
-    assert set(fragments) == {"run_title", "banners", "overview", "checks"}
+    assert set(fragments) == {"run_title", "overview", "checks"}
     assert fragments["run_title"].startswith('<div id="report-run-title"')
-    assert '<div id="report-banners">' in fragments["banners"]
     assert '<section id="report-overview"' in fragments["overview"]
     assert '<section id="checks-panel"' in fragments["checks"]
-    assert "Run: <code>run_01HXATZ</code>" in fragments["run_title"]
-    assert "<strong>Partial Run.</strong>" in fragments["banners"]
+    assert "run_01HXATZ" not in fragments["run_title"]
+    assert "<strong>Partial Run.</strong>" in fragments["run_title"]
     assert 'id="report-explorer"' not in "".join(fragments.values())
     assert 'id="theme-toggle"' not in "".join(fragments.values())
