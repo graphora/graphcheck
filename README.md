@@ -236,26 +236,8 @@ generate:
   temperature: 0
 ```
 
-```yaml
-generate:
-  provider: gemini
-  model: gemini-3.5-flash
-  api_key_env: GEMINI_API_KEY
-  temperature: 0
-```
-
-```yaml
-generate:
-  provider: openrouter
-  model: openrouter/free
-  api_key_env: OPENROUTER_API_KEY
-  temperature: 0
-```
-
-Anthropic, Gemini, OpenAI, and OpenRouter require a populated environment variable named by
-`api_key_env`. Gemini and OpenRouter default to their official OpenAI-compatible endpoints, and an
-explicit `base_url` overrides that default. Ollama requires an explicit `base_url` and may omit the
-key. Then run:
+Anthropic and OpenAI require a populated environment variable named by `api_key_env`. Ollama
+requires an explicit `base_url` and may omit the key. Then run:
 
 ```console
 graphcheck generate

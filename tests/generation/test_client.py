@@ -21,13 +21,11 @@ class FakeInstructor:
 
 
 @pytest.mark.parametrize(
-    ("provider", "base_url", "api_key", "expected_adapter", "expected_mode"),
+    ("provider", "base_url", "api_key", "expected_mode"),
     [
-        ("anthropic", None, "key", "anthropic", "TOOLS"),
-        ("gemini", None, "key", "openai", "JSON_SCHEMA"),
-        ("openai", None, "key", "openai", None),
-        ("openrouter", None, "key", "openai", "JSON_SCHEMA"),
-        ("ollama", "http://localhost:11434/v1", None, "ollama", "JSON"),
+        ("anthropic", None, "key", "TOOLS"),
+        ("openai", None, "key", None),
+        ("ollama", "http://localhost:11434/v1", None, "JSON"),
     ],
 )
 def test_adapter_constructs_each_provider_without_network(
@@ -35,7 +33,6 @@ def test_adapter_constructs_each_provider_without_network(
     provider: str,
     base_url: str | None,
     api_key: str | None,
-    expected_adapter: str,
     expected_mode: str | None,
 ) -> None:
     created: dict[str, object] = {}
@@ -62,7 +59,7 @@ def test_adapter_constructs_each_provider_without_network(
         )
     )
 
-    assert created["model"] == f"{expected_adapter}/model"
+    assert created["model"] == f"{provider}/model"
     if provider == "openai":
         assert created["max_retries"] == 0
     else:
@@ -79,14 +76,6 @@ def test_adapter_constructs_each_provider_without_network(
         assert "mode" not in created
     else:
         assert created["mode"].name == expected_mode
-    expected_base_url = {
-        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "openrouter": "https://openrouter.ai/api/v1",
-    }.get(provider, base_url)
-    if expected_base_url is None:
-        assert "base_url" not in created
-    else:
-        assert created["base_url"] == expected_base_url
 
 
 def test_adapter_maps_errors_without_leaking_exception_text(
@@ -137,9 +126,7 @@ def test_ollama_optional_key_is_restored_directly_to_sdk(
     ("provider", "base_url", "api_key"),
     [
         ("anthropic", None, "key"),
-        ("gemini", None, "key"),
         ("openai", None, "key"),
-        ("openrouter", None, "key"),
         ("ollama", "http://localhost:11434/v1", None),
     ],
 )
