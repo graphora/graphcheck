@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - run: uv sync --group dev --reinstall-package typer
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install uv and select the matrix Python
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           # Sets UV_PYTHON, which overrides the committed .python-version so uv
           # runs on the matrix interpreter (not the pinned 3.12).
@@ -47,6 +47,6 @@ jobs:
       GRAPHCHECK_NEO4J_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - run: uv sync --group dev --reinstall-package typer
       - run: uv run pytest tests/integration -v
