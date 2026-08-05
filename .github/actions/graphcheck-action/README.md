@@ -6,11 +6,18 @@ a pass/fail summary posted straight to the PR's checks tab.
 This is a thin wrapper around the GraphCheck CLI (graphcheck run) - it
 adds no new checking behaviour of its own.
 
+Not yet published to the GitHub Marketplace. Use the in-repo path shown
+below; switch to graphora/graphcheck-action@v1 once it is extracted and
+tagged.
+
 ## Usage
 
-    - uses: graphora/graphcheck-action@v1
+    - uses: ./.github/actions/graphcheck-action
       with:
         profile: ci
+        uri: bolt://localhost:7687
+        user: neo4j
+        database: neo4j
         fail-fast: false
         version: 0.1.0
       env:
@@ -20,23 +27,32 @@ adds no new checking behaviour of its own.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| profile | yes | - | Connection profile name, as defined in profiles.yml |
+| profile | no | ci | Profile name to generate and use, if profiles.yml does not already exist |
+| uri | yes | - | Neo4j Bolt URI |
+| user | yes | - | Neo4j username |
+| database | no | neo4j | Neo4j database name |
 | fail-fast | no | false | Stop after the first error-severity failure |
 | version | no | 0.1.0 | Exact GraphCheck version to install from PyPI |
 
 ## What it does
 
 1. Installs the pinned GraphCheck version from PyPI.
-2. Runs graphcheck run using the given profile. The Neo4j password is
-   read from the environment variable named in the profile's
-   password_env - set it via a repo secret, never a plaintext input.
-3. Captures the run's exit code. The job's final status matches this
+2. Resolves the artifacts directory from graphcheck.yml (defaults to
+   .graphcheck if not configured or the file is absent).
+3. If profiles.yml does not already exist, generates one using the
+   uri/user/database inputs. Only password_env: NEO4J_PASSWORD is
+   written - the real password is never in the generated file.
+4. Runs graphcheck run using the given profile. The Neo4j password is
+   read from the NEO4J_PASSWORD environment variable at runtime - set
+   it via a repo secret, never a plaintext input.
+5. Removes the generated profiles.yml (only if this Action created it).
+6. Captures the run's exit code. The job's final status matches this
    exit code exactly (0 green; 1/2/3 red) - this is preserved even
    though later steps always run.
-4. Uploads results.json and the HTML report as build artifacts,
-   whenever they were produced. If an early failure produced no
-   artifacts, the summary says so explicitly.
-5. Writes a pass/fail/errored/warn breakdown, read directly from
+7. Uploads results.json and the HTML report as build artifacts, from
+   the resolved artifacts directory, whenever they were produced. If
+   an early failure produced none, the summary says so explicitly.
+8. Writes a pass/fail/errored/warn breakdown, read directly from
    results.json (not inferred from the exit code), to the GitHub
    Step Summary, including one evidence line per failing check.
 
@@ -54,5 +70,5 @@ adds no new checking behaviour of its own.
 - This Action requires a graph reachable from the CI runner. Spinning
   up a disposable Neo4j service for self-contained demo runs is not
   yet supported.
-- Not yet published to the GitHub Marketplace. Pin to a commit SHA or
-  branch until a tagged v1 release exists.
+- Not yet released: graphcheck itself is not published to PyPI, so the
+  install step will fail until [Release] ships it.

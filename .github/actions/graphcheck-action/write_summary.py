@@ -5,7 +5,6 @@ unreadable, it writes a clear "no results" message instead.
 """
 import json
 import os
-import sys
 
 ARTIFACTS_DIR = os.environ.get("GRAPHCHECK_ARTIFACTS_DIR", ".graphcheck")
 RESULTS_PATH = f"{ARTIFACTS_DIR}/runs/latest/results.json"
@@ -29,7 +28,7 @@ def main():
         return
 
     try:
-        with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+        with open(RESULTS_PATH, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as exc:
         lines.append("## GraphCheck results\n")
