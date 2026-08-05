@@ -10,13 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install --no-cache-dir -e . --group dev
-      - run: python -m ruff check .
-      - run: python -m ruff format --check .
+      - run: uv sync --locked --no-cache --group dev
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
 
   test:
     runs-on: ubuntu-latest
@@ -26,20 +25,18 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - name: Select the matrix Python
-        uses: actions/setup-python@v5
+      - name: Install uv and select the matrix Python
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install --no-cache-dir -e . --group dev
-      - run: python --version
-      - run: python -c "import click._textwrap, typer._click.decorators, typer.rich_utils; print('Typer and Click package integrity OK')"
-      - run: python -c "import importlib.metadata as m; print('Typer:', m.version('typer')); print('Click:', m.version('click')); print('MCP:', m.version('mcp'))"
+      - run: uv sync --locked --no-cache --group dev
+      - run: uv run --no-sync python -c "import click._textwrap, typer._click.decorators, typer.rich_utils; print('Typer and Click package integrity OK')"
+      - run: uv run --no-sync python -c "import importlib.metadata as m; print('Typer:', m.version('typer')); print('Click:', m.version('click')); print('MCP:', m.version('mcp'))"
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)
         env:
           WANT: ${{ matrix.python-version }}
-        run: python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
-      - run: python -m pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+        run: uv run --no-sync python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
+      - run: uv run --no-sync pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 
   integration:
     runs-on: ubuntu-latest
@@ -48,9 +45,6 @@ jobs:
       GRAPHCHECK_NEO4J_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install --no-cache-dir -e . --group dev
-      - run: python -m pytest tests/integration -v
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --no-cache --group dev
+      - run: uv run --no-sync pytest tests/integration -v
