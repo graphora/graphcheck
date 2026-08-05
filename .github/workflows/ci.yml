@@ -11,11 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: false
-      - run: uv sync --group dev --no-cache
-      - run: uv run --no-sync ruff check .
-      - run: uv run --no-sync ruff format --check .
+      - run: uv sync --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
 
   test:
     runs-on: ubuntu-latest
@@ -28,20 +26,19 @@ jobs:
       - name: Install uv and select the matrix Python
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          enable-cache: false
           # Sets UV_PYTHON, which overrides the committed .python-version so uv
           # runs on the matrix interpreter (not the pinned 3.12).
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev --no-cache
-      - run: uv run --no-sync python --version
-      - run: uv run --no-sync python -c "import typer, typer._click.decorators as decorators; print('Typer:', typer.__version__, decorators.__file__)"
-      - run: uv run --no-sync python -c "import importlib.metadata as m; print('Click:', m.version('click'))"
-      - run: uv run --no-sync python -c "import importlib.metadata as m; print('MCP:', m.version('mcp'))"
+      - run: uv sync --group dev
+      - run: uv run python --version
+      - run: uv run python -c "import typer; print('Typer:', typer.__version__)"
+      - run: uv run python -c "import importlib.metadata as m; print('Click:', m.version('click'))"
+      - run: uv run python -c "import importlib.metadata as m; print('MCP:', m.version('mcp'))"
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)
         env:
           WANT: ${{ matrix.python-version }}
-        run: uv run --no-sync python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
-      - run: uv run --no-sync pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+        run: uv run python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
+      - run: uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 
   integration:
     runs-on: ubuntu-latest
@@ -51,7 +48,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: false
-      - run: uv sync --group dev --no-cache
-      - run: uv run --no-sync pytest tests/integration -v
+      - run: uv sync --group dev
+      - run: uv run pytest tests/integration -v
