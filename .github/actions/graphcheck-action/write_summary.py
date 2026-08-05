@@ -3,11 +3,13 @@
 to the GitHub Step Summary. Never raises: if results.json is missing or
 unreadable, it writes a clear "no results" message instead.
 """
+
 import json
 import os
 
 ARTIFACTS_DIR = os.environ.get("GRAPHCHECK_ARTIFACTS_DIR", ".graphcheck")
 RESULTS_PATH = f"{ARTIFACTS_DIR}/runs/latest/results.json"
+
 
 def main():
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
