@@ -8,8 +8,8 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 @pytest.mark.anyio
 async def test_mcp_agent_surface():
     server = StdioServerParameters(
-        command="uv",
-        args=["run", "graphcheck", "mcp", "serve"],
+        command="graphcheck",
+        args=["mcp", "serve"],
     )
 
     async with (
