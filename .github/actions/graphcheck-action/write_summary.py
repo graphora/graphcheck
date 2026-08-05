@@ -7,8 +7,8 @@ import json
 import os
 import sys
 
-RESULTS_PATH = ".graphcheck/runs/latest/results.json"
-
+ARTIFACTS_DIR = os.environ.get("GRAPHCHECK_ARTIFACTS_DIR", ".graphcheck")
+RESULTS_PATH = f"{ARTIFACTS_DIR}/runs/latest/results.json"
 
 def main():
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")

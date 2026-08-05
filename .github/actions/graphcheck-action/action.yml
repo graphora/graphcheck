@@ -34,6 +34,16 @@ runs:
         GC_VERSION: ${{ inputs.version }}
       run: pip install "graphcheck==$GC_VERSION"
 
+    - name: Resolve artifacts directory
+      shell: bash
+      run: |
+        if [ -f graphcheck.yml ]; then
+          dir=$(python -c "import yaml,sys; d=yaml.safe_load(open('graphcheck.yml')); print(d.get('artifacts','.graphcheck'))" 2>/dev/null || echo ".graphcheck")
+        else
+          dir=".graphcheck"
+        fi
+        echo "GRAPHCHECK_ARTIFACTS_DIR=$dir" >> "$GITHUB_ENV"
+
     - name: Generate profiles.yml
       shell: bash
       env:
@@ -88,14 +98,16 @@ runs:
       with:
         name: graphcheck-results
         path: |
-          .graphcheck/runs/latest/results.json
-          .graphcheck/runs/latest/report.html
+          ${{ env.GRAPHCHECK_ARTIFACTS_DIR }}/runs/latest/results.json
+          ${{ env.GRAPHCHECK_ARTIFACTS_DIR }}/runs/latest/report.html
         if-no-files-found: ignore
 
     - name: Write summary
       if: always()
       shell: bash
       run: python "${{ github.action_path }}/write_summary.py"
+      env:
+        GRAPHCHECK_ARTIFACTS_DIR: ${{ env.GRAPHCHECK_ARTIFACTS_DIR }}
 
     - name: Set final job status
       if: always()
