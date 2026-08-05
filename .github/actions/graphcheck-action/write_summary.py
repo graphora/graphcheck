@@ -41,7 +41,7 @@ def main():
     suites = data.get("suites", [])
     checks = data.get("checks", [])
     run = data.get("run", {})
-    score = data.get("score", {})
+    score = data.get("score") or {}
 
     lines.append("## GraphCheck results\n")
     lines.append(

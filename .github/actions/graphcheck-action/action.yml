@@ -30,35 +30,45 @@ runs:
   steps:
     - name: Install GraphCheck
       shell: bash
-      run: pip install graphcheck==${{ inputs.version }}
+      env:
+        GC_VERSION: ${{ inputs.version }}
+      run: pip install "graphcheck==$GC_VERSION"
 
     - name: Generate profiles.yml
       shell: bash
+      env:
+        GC_PROFILE: ${{ inputs.profile }}
+        GC_URI: ${{ inputs.uri }}
+        GC_USER: ${{ inputs.user }}
+        GC_DATABASE: ${{ inputs.database }}
       run: |
         if [ -f profiles.yml ]; then
           echo "profiles.yml already exists, using it as-is."
         else
           echo "generated_profiles=true" >> "$GITHUB_ENV"
           {
-            echo "default: ${{ inputs.profile }}"
+            echo "default: $GC_PROFILE"
             echo "profiles:"
-            echo "  ${{ inputs.profile }}:"
-            echo "    uri: ${{ inputs.uri }}"
-            echo "    user: ${{ inputs.user }}"
+            echo "  $GC_PROFILE:"
+            echo "    uri: $GC_URI"
+            echo "    user: $GC_USER"
             echo "    password: null"
             echo "    password_env: NEO4J_PASSWORD"
-            echo "    database: ${{ inputs.database }}"
+            echo "    database: $GC_DATABASE"
           } > profiles.yml
         fi
 
     - name: Run GraphCheck
       shell: bash
-      id: graphcheck_run         
+      id: graphcheck_run
+      env:
+        GC_PROFILE: ${{ inputs.profile }}
+        GC_FAIL_FAST: ${{ inputs.fail-fast }}
       run: |
         set +e
         graphcheck run \
-          --profile "${{ inputs.profile }}" \
-          $( [ "${{ inputs.fail-fast }}" = "true" ] && echo "--fail-fast" )
+          --profile "$GC_PROFILE" \
+          $( [ "$GC_FAIL_FAST" = "true" ] && echo "--fail-fast" )
         code=$?
         echo "exit_code=$code" >> "$GITHUB_OUTPUT"
         exit 0
@@ -85,7 +95,7 @@ runs:
     - name: Write summary
       if: always()
       shell: bash
-      run: python .github/actions/graphcheck-action/write_summary.py
+      run: python "${{ github.action_path }}/write_summary.py"
 
     - name: Set final job status
       if: always()
