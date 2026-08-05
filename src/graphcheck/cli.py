@@ -33,6 +33,8 @@ from graphcheck.generation.service import (
     GenerationStage,
 )
 from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
+from graphcheck.observability.runner import run_monitor
+from graphcheck.observability.server import DEFAULT_HOST, DEFAULT_PORT
 from graphcheck.profiler import profile as build_profile
 from graphcheck.project import (
     ARTIFACTS_DIR,
@@ -535,6 +537,57 @@ def profile(
             baseline,
             path,
         )
+
+
+@app.command()
+def monitor(
+    profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
+    host: str = typer.Option(DEFAULT_HOST, "--host", help="Metrics server host."),
+    port: int = typer.Option(DEFAULT_PORT, "--port", min=1, max=65535, help="Metrics server port."),
+    interval: int = typer.Option(
+        15,
+        "--interval",
+        min=1,
+        help="Seconds between database health checks.",
+    ),
+) -> None:
+    """Expose connected-database health metrics until interrupted."""
+
+    client: Neo4jClient | None = None
+    try:
+        root = find_project_root()
+        profiles = load_profiles(root)
+        _, selected = select_profile(profiles, profile)
+        client = Neo4jClient(selected)
+        display_host = "localhost" if host == "0.0.0.0" else host
+
+        typer.echo("Starting GraphCheck monitoring...")
+        typer.echo(f"Metrics endpoint: http://{display_host}:{port}/metrics")
+        typer.echo(f"Health check interval: {interval} seconds")
+        typer.echo("Press Ctrl+C to stop monitoring.")
+
+        try:
+            run_monitor(
+                client=client,
+                interval_seconds=interval,
+                host=host,
+                port=port,
+            )
+        except OSError:
+            typer.echo("Unable to start GraphCheck monitoring.", err=True)
+            typer.echo(
+                f"Failed to start metrics server on {display_host}:{port}.",
+                err=True,
+            )
+            typer.echo("The port may already be in use.", err=True)
+            raise typer.Exit(1) from None
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        if client is not None:
+            client.close()
 
 
 @app.command()
