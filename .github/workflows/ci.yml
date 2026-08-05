@@ -31,7 +31,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run python --version
-      - run: uv run python -c "import typer; print('Typer:', typer.__version__)"
+      - run: uv run python -c "import importlib.util, typer; from packaging.version import Version; assert Version(typer.__version__) < Version('0.26'); assert importlib.util.find_spec('typer._click') is None; print('Typer:', typer.__version__)"
       - run: uv run python -c "import importlib.metadata as m; print('Click:', m.version('click'))"
       - run: uv run python -c "import importlib.metadata as m; print('MCP:', m.version('mcp'))"
       - name: Assert the interpreter matches the matrix (guards against a single pinned run)

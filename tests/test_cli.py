@@ -855,7 +855,8 @@ def test_report_run_option_has_been_replaced():
     result = runner.invoke(app, ["report", "--run", "run-one"], color=True)
 
     assert result.exit_code == 2
-    assert "No such option: --run" in _plain_terminal_text(result.stderr)
+    output = _plain_terminal_text(result.stderr)
+    assert "No such option" in output and "--run" in output
 
 
 def test_debug_reports_checks_blocked_by_missing_read_access(tmp_path, monkeypatch):
