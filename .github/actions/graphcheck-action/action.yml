@@ -3,8 +3,19 @@ description: 'Run GraphCheck checks against your graph and report results in the
 
 inputs:
   profile:
-    description: 'Connection profile name, as defined in profiles.yml'
+    description: 'Profile name to generate and use, if profiles.yml does not already exist'
+    required: false
+    default: 'ci'
+  uri:
+    description: 'Neo4j Bolt URI (e.g. bolt://localhost:7687)'
     required: true
+  user:
+    description: 'Neo4j username'
+    required: true
+  database:
+    description: 'Neo4j database name'
+    required: false
+    default: 'neo4j'
   fail-fast:
     description: 'Stop on the first failing check'
     required: false
@@ -21,9 +32,30 @@ runs:
       shell: bash
       run: pip install graphcheck==${{ inputs.version }}
 
+    - name: Generate profiles.yml
+      shell: bash
+      run: |
+        if [ -f profiles.yml ]; then
+          echo "profiles.yml already exists, using it as-is."
+        else
+          echo "generated_profiles=true" >> "$GITHUB_ENV"
+          cat > profiles.yml << EOF
+default: ${{ inputs.profile }}
+profiles:
+  ${{ inputs.profile }}:
+    uri: ${{ inputs.uri }}
+    user: ${{ inputs.user }}
+    password: null
+    password_env: NEO4J_PASSWORD
+    database: ${{ inputs.database }}
+EOF
+        fi
+
     - name: Run GraphCheck
       shell: bash
       id: graphcheck_run
+      env:
+        NEO4J_PASSWORD: ${{ env.NEO4J_PASSWORD }}
       run: |
         set +e
         graphcheck run \
@@ -32,7 +64,16 @@ runs:
         code=$?
         echo "exit_code=$code" >> "$GITHUB_OUTPUT"
         exit 0
-        
+
+    - name: Clean up generated profiles.yml
+      if: always()
+      shell: bash
+      run: |
+        if [ "$generated_profiles" = "true" ]; then
+          rm -f profiles.yml
+          echo "Removed generated profiles.yml"
+        fi
+
     - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
