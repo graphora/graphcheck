@@ -39,23 +39,21 @@ runs:
           echo "profiles.yml already exists, using it as-is."
         else
           echo "generated_profiles=true" >> "$GITHUB_ENV"
-          cat > profiles.yml << EOF
-default: ${{ inputs.profile }}
-profiles:
-  ${{ inputs.profile }}:
-    uri: ${{ inputs.uri }}
-    user: ${{ inputs.user }}
-    password: null
-    password_env: NEO4J_PASSWORD
-    database: ${{ inputs.database }}
-EOF
+          {
+            echo "default: ${{ inputs.profile }}"
+            echo "profiles:"
+            echo "  ${{ inputs.profile }}:"
+            echo "    uri: ${{ inputs.uri }}"
+            echo "    user: ${{ inputs.user }}"
+            echo "    password: null"
+            echo "    password_env: NEO4J_PASSWORD"
+            echo "    database: ${{ inputs.database }}"
+          } > profiles.yml
         fi
 
     - name: Run GraphCheck
       shell: bash
-      id: graphcheck_run
-      env:
-        NEO4J_PASSWORD: ${{ env.NEO4J_PASSWORD }}
+      id: graphcheck_run         
       run: |
         set +e
         graphcheck run \
