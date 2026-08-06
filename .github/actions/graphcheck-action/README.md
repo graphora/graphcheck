@@ -12,6 +12,8 @@ tagged.
 
 ## Usage
 
+### Within this repository
+
     - uses: ./.github/actions/graphcheck-action
       with:
         profile: ci
@@ -22,6 +24,23 @@ tagged.
         version: 0.1.0
       env:
         NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+
+### From another repository
+
+Not yet extracted to its own repo, so pin to a commit SHA on this one:
+
+    - uses: graphora/graphcheck/.github/actions/graphcheck-action@COMMIT_SHA
+      with:
+        profile: ci
+        uri: bolt://localhost:7687
+        user: neo4j
+        database: neo4j
+        fail-fast: false
+        version: 0.1.0
+      env:
+        NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+
+Switch to `graphora/graphcheck-action@v1` once this Action is extracted and tagged.
 
 ## Inputs
 

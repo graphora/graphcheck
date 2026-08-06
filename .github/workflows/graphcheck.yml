@@ -25,5 +25,6 @@ jobs:
           profile: ci
           uri: bolt://localhost:7687
           user: neo4j
+          suite: graphcheck-action-smoke
         env:
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}

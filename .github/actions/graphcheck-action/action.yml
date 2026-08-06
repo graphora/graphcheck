@@ -20,6 +20,10 @@ inputs:
     description: 'Stop on the first failing check'
     required: false
     default: 'false'
+  suite:
+    description: 'Run only this suite id (optional; runs all suites if not set)'
+    required: false
+    default: ''
   version:
     description: 'Exact GraphCheck version to install (e.g. 0.1.0)'
     required: false
@@ -51,22 +55,7 @@ runs:
         GC_URI: ${{ inputs.uri }}
         GC_USER: ${{ inputs.user }}
         GC_DATABASE: ${{ inputs.database }}
-      run: |
-        if [ -f profiles.yml ]; then
-          echo "profiles.yml already exists, using it as-is."
-        else
-          echo "generated_profiles=true" >> "$GITHUB_ENV"
-          {
-            echo "default: $GC_PROFILE"
-            echo "profiles:"
-            echo "  $GC_PROFILE:"
-            echo "    uri: $GC_URI"
-            echo "    user: $GC_USER"
-            echo "    password: null"
-            echo "    password_env: NEO4J_PASSWORD"
-            echo "    database: $GC_DATABASE"
-          } > profiles.yml
-        fi
+      run: python "${{ github.action_path }}/generate_profile.py"
 
     - name: Run GraphCheck
       shell: bash
@@ -74,10 +63,12 @@ runs:
       env:
         GC_PROFILE: ${{ inputs.profile }}
         GC_FAIL_FAST: ${{ inputs.fail-fast }}
+        GC_SUITE: ${{ inputs.suite }}
       run: |
         set +e
         graphcheck run \
           --profile "$GC_PROFILE" \
+          $( [ -n "$GC_SUITE" ] && echo "--suite $GC_SUITE" ) \
           $( [ "$GC_FAIL_FAST" = "true" ] && echo "--fail-fast" )
         code=$?
         echo "exit_code=$code" >> "$GITHUB_OUTPUT"
@@ -85,6 +76,7 @@ runs:
 
     - name: Clean up generated profiles.yml
       if: always()
+      continue-on-error: true
       shell: bash
       run: |
         if [ "$generated_profiles" = "true" ]; then
@@ -94,6 +86,7 @@ runs:
 
     - name: Upload results
       if: always()
+      continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
         name: graphcheck-results
@@ -104,6 +97,7 @@ runs:
 
     - name: Write summary
       if: always()
+      continue-on-error: true
       shell: bash
       run: python "${{ github.action_path }}/write_summary.py"
       env:
@@ -112,4 +106,4 @@ runs:
     - name: Set final job status
       if: always()
       shell: bash
-      run: exit ${{ steps.graphcheck_run.outputs.exit_code }}
+      run: exit ${{ steps.graphcheck_run.outputs.exit_code || 3 }}
