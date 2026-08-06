@@ -20,11 +20,14 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - name: Install GraphCheck from source
+        run: pip install .
       - uses: ./.github/actions/graphcheck-action
         with:
           profile: ci
           uri: bolt://localhost:7687
           user: neo4j
+          version: ''        # skip PyPI install; use the source build above
           suite: graphcheck-action-smoke
         env:
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}

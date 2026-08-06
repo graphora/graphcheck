@@ -36,7 +36,12 @@ runs:
       shell: bash
       env:
         GC_VERSION: ${{ inputs.version }}
-      run: pip install "graphcheck==$GC_VERSION"
+      run: |
+        if [ -z "$GC_VERSION" ]; then
+          echo "version empty — using pre-installed graphcheck"
+        else
+          pip install "graphcheck==$GC_VERSION"
+        fi
 
     - name: Resolve artifacts directory
       shell: bash
