@@ -175,6 +175,7 @@
       },
       "fieldConfig": {
         "defaults": {
+          "noValue": "Never",
           "unit": "s"
         },
         "overrides": []
@@ -200,7 +201,7 @@
       },
       "targets": [
         {
-          "expr": "time() - graphcheck_last_healthcheck_timestamp_seconds",
+          "expr": "time() - (graphcheck_last_healthcheck_timestamp_seconds > 0)",
           "refId": "A"
         }
       ],

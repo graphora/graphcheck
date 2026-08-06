@@ -21,6 +21,9 @@ This starts:
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 
+The reference deployment intentionally binds both services to localhost only by default. If
+remote access is required, explicitly modify the port bindings in `docker-compose.yml`.
+
 ## Start GraphCheck monitoring
 
 From the GraphCheck project root, run:
