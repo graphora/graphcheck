@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 
 # Lightweight connectivity check.
@@ -28,7 +29,21 @@ def check_database_health(client: Neo4jClient) -> HealthResult:
     try:
         rows = client.run_read(HEALTH_QUERY, timeout_s=HEALTHCHECK_TIMEOUT_SECONDS)
         if rows != [{"healthy": 1}]:
-            raise ValueError("The database health query returned an unexpected result.")
+            return HealthResult(
+                database_up=False,
+                connector_connected=True,
+                duration_seconds=max(0.0, time.monotonic() - started),
+                timestamp=time.time(),
+                error="The database health query returned an unexpected result.",
+            )
+    except GraphCheckError as exc:
+        return HealthResult(
+            database_up=False,
+            connector_connected=exc.error.code != "neo4j.unreachable",
+            duration_seconds=max(0.0, time.monotonic() - started),
+            timestamp=time.time(),
+            error=str(exc),
+        )
     except Exception as exc:
         return HealthResult(
             database_up=False,

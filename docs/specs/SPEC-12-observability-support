@@ -161,6 +161,8 @@ HTTP behavior, scheduling, or CLI behavior.
 Performs one health check through `Neo4jClient.run_read`. It measures elapsed time with a monotonic
 clock and records the completion time as a Unix timestamp. It returns an immutable structured
 result containing database state, connector state, duration, timestamp, and an optional error.
+Connector reachability and database health are intentionally reported independently so that
+transport or connectivity failures can be distinguished from database-specific or query failures.
 
 Expected connector and query failures are returned as failed health results rather than propagated
 to the monitoring loop. The module does not import or update Prometheus metrics.
@@ -208,7 +210,7 @@ The implementation exports exactly these GraphCheck-owned metric families:
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `graphcheck_database_up` | Gauge | Whether the configured database health query succeeded (`1`) or failed (`0`). |
-| `graphcheck_connector_connected` | Gauge | Whether the connector is considered connected by the latest health check. |
+| `graphcheck_connector_connected` | Gauge | Whether GraphCheck successfully communicated with the configured Neo4j instance during the latest health check (`1`) or encountered a transport/connectivity failure (`0`). This may remain `1` when the health query fails because of a database-specific condition, such as permission denied, the configured database not being found, or a query failure. |
 | `graphcheck_healthcheck_duration_seconds` | Histogram | Total elapsed time spent performing database health checks. |
 | `graphcheck_healthcheck_failures_total` | Counter | Number of failed database health checks since process start. |
 | `graphcheck_last_healthcheck_timestamp_seconds` | Gauge | Unix timestamp of the last successful database health check. |
@@ -247,6 +249,11 @@ The implemented dashboard displays:
 -   95th-percentile health-check duration over five minutes;
 -   cumulative health-check failures; and
 -   seconds since the last successful health check.
+
+The last-success timestamp is updated only after a successful health check. Before the first
+successful check it remains uninitialized, and the "Seconds Since Last Successful Health Check"
+panel displays `Never` (or its configured no-data state) instead of interpreting the uninitialized
+timestamp as elapsed time.
 
 Grafana reads only from Prometheus. It does not connect to GraphCheck or Neo4j.
 
@@ -337,8 +344,10 @@ prints a concise error without a Python traceback and exits non-zero. The displa
 ## Health checks
 
 Connector, authentication, Bolt, timeout, query, and unexpected-result failures produce a failed
-`HealthResult`. The collector sets the database and connector gauges to `0`, observes the attempt's
-duration, and increments the failure counter. It does not replace the last-success timestamp.
+`HealthResult`. The collector sets the database gauge to `0`; it sets the connector gauge according
+to whether GraphCheck communicated with Neo4j, allowing transport/connectivity failures to be
+distinguished from database-specific or query failures. It observes the attempt's duration and
+increments the failure counter. It does not replace the last-success timestamp.
 
 After a later successful check, the gauges return to `1` and the last-success timestamp advances.
 

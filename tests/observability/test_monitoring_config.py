@@ -25,6 +25,37 @@ def test_compose_maps_the_host_gateway_for_prometheus():
     assert "host.docker.internal:host-gateway" in config["services"]["prometheus"]["extra_hosts"]
 
 
+def test_compose_binds_monitoring_ports_to_localhost_only():
+    config = yaml.safe_load((MONITORING / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    assert config["services"]["prometheus"]["ports"] == ["127.0.0.1:9090:9090"]
+    assert config["services"]["grafana"]["ports"] == ["127.0.0.1:3000:3000"]
+
+
+def test_dashboards_use_the_provisioned_prometheus_datasource_uid():
+    datasource_path = (
+        MONITORING
+        / "grafana"
+        / "provisioning"
+        / "datasources"
+        / "prometheus-datasource.yml"
+    )
+    provisioning = yaml.safe_load(datasource_path.read_text(encoding="utf-8"))
+    datasource_uid = provisioning["datasources"][0].get("uid")
+
+    assert datasource_uid
+
+    for dashboard_path in (MONITORING / "grafana" / "dashboards").glob("*.json"):
+        dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
+        panels = list(dashboard["panels"])
+
+        while panels:
+            panel = panels.pop()
+            panels.extend(panel.get("panels", []))
+            if "datasource" in panel:
+                assert panel["datasource"]["uid"] == datasource_uid
+
+
 def test_dashboard_queries_graphcheck_metrics():
     dashboard_path = next((MONITORING / "grafana" / "dashboards").glob("*.json"))
     dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
@@ -45,3 +76,18 @@ def test_dashboard_queries_graphcheck_metrics():
     )
     assert "up" not in expressions
     assert dashboard["time"] == {"from": "now-6h", "to": "now"}
+
+
+def test_last_successful_health_check_panel_handles_uninitialized_timestamp():
+    dashboard_path = next((MONITORING / "grafana" / "dashboards").glob("*.json"))
+    dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
+    panel = next(
+        panel
+        for panel in dashboard["panels"]
+        if panel["title"] == "Seconds Since Last Successful Health Check"
+    )
+
+    assert panel["targets"][0]["expr"] == (
+        "time() - (graphcheck_last_healthcheck_timestamp_seconds > 0)"
+    )
+    assert panel["fieldConfig"]["defaults"]["noValue"] == "Never"

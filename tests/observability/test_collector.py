@@ -6,6 +6,58 @@ from graphcheck.observability import collector
 from graphcheck.observability.health import HealthResult
 
 
+@pytest.mark.parametrize(
+    ("outcome", "database_up", "connector_connected"),
+    [
+        ("success", True, True),
+        ("neo4j.unreachable", False, False),
+        ("neo4j.permission_denied", False, True),
+        ("neo4j.database_not_found", False, True),
+        ("neo4j.query_failed", False, True),
+    ],
+)
+def test_collector_publishes_distinct_health_metric_semantics(
+    monkeypatch, outcome, database_up, connector_connected
+):
+    gauge_values = {"database_up": [], "connector_connected": []}
+
+    monkeypatch.setattr(
+        collector,
+        "DATABASE_UP",
+        SimpleNamespace(set=gauge_values["database_up"].append),
+    )
+    monkeypatch.setattr(
+        collector,
+        "CONNECTOR_CONNECTED",
+        SimpleNamespace(set=gauge_values["connector_connected"].append),
+    )
+    monkeypatch.setattr(
+        collector, "HEALTHCHECK_DURATION_SECONDS", SimpleNamespace(observe=lambda value: None)
+    )
+    monkeypatch.setattr(collector, "HEALTHCHECK_FAILURES_TOTAL", SimpleNamespace(inc=lambda: None))
+    monkeypatch.setattr(
+        collector, "LAST_HEALTHCHECK_TIMESTAMP_SECONDS", SimpleNamespace(set=lambda value: None)
+    )
+    monkeypatch.setattr(
+        collector,
+        "check_database_health",
+        lambda client: HealthResult(
+            database_up=database_up,
+            connector_connected=connector_connected,
+            duration_seconds=0.1,
+            timestamp=100.0,
+            error=None if outcome == "success" else outcome,
+        ),
+    )
+
+    collector.collect_database_health(object())
+
+    assert gauge_values == {
+        "database_up": [1.0 if database_up else 0.0],
+        "connector_connected": [1.0 if connector_connected else 0.0],
+    }
+
+
 def test_collector_updates_success_metrics(monkeypatch):
     db_up = SimpleNamespace(set=lambda value: None)
     connector = SimpleNamespace(set=lambda value: None)
