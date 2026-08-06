@@ -34,11 +34,7 @@ def test_compose_binds_monitoring_ports_to_localhost_only():
 
 def test_dashboards_use_the_provisioned_prometheus_datasource_uid():
     datasource_path = (
-        MONITORING
-        / "grafana"
-        / "provisioning"
-        / "datasources"
-        / "prometheus-datasource.yml"
+        MONITORING / "grafana" / "provisioning" / "datasources" / "prometheus-datasource.yml"
     )
     provisioning = yaml.safe_load(datasource_path.read_text(encoding="utf-8"))
     datasource_uid = provisioning["datasources"][0].get("uid")

@@ -109,7 +109,9 @@ modules do not depend on the telemetry package.
 
 GraphCheck runs on the host machine in the reference deployment. Prometheus and Grafana run in
 Docker containers. Prometheus reaches the host through `host.docker.internal`, which Docker
-Compose maps to the host gateway.
+Compose maps to the host gateway. The metrics endpoint binds to `127.0.0.1` by default. The
+reference Docker deployment therefore requires the user to explicitly opt in to a host-accessible
+bind address with `graphcheck monitor --host 0.0.0.0`.
 
 ------------------------------------------------------------------------
 
@@ -176,7 +178,8 @@ after successful checks. It returns the health result to its caller.
 ## `server.py`
 
 Starts the Prometheus client's HTTP server for the existing registry. The default bind address is
-`0.0.0.0` and the default port is `9100`. It does not perform health checks or schedule collection.
+`127.0.0.1` and the default port is `9100`. It does not perform health checks or schedule
+collection.
 
 ## `runner.py`
 
@@ -195,9 +198,13 @@ Acts as a thin entry point. It:
 5.  delegates to `run_monitor`; and
 6.  closes the Neo4j client when monitoring ends.
 
-The command supports `--profile`, `--host`, `--port`, and `--interval`. The server still binds to
-`0.0.0.0` by default, but the CLI displays that address as `localhost` for a usable local endpoint.
-Explicitly supplied hosts are displayed unchanged.
+The command supports `--profile`, `--host`, `--port`, and `--interval`. By default, the server binds
+to `127.0.0.1` and the CLI displays `http://127.0.0.1:9100/metrics`. Docker or remote scraping
+requires an explicit `--host 0.0.0.0`; the CLI displays that all-interface bind address as
+`localhost` when presenting a usable local endpoint.
+
+The metrics endpoint is unauthenticated. Binding it to all interfaces is therefore an intentional
+opt-in, and operators are responsible for restricting access with appropriate network controls.
 
 The CLI does not execute health queries, update metrics, serve HTTP, or implement a monitoring loop.
 
@@ -232,6 +239,15 @@ host.docker.internal:9100
 The default Prometheus scrape interval is 15 seconds. The metrics path is the Prometheus default,
 `/metrics`.
 
+Because Prometheus runs in Docker in the reference deployment, GraphCheck must be started with an
+explicit host-accessible bind address:
+
+```bash
+graphcheck monitor --host 0.0.0.0
+```
+
+The default `127.0.0.1` bind address is intended for local, non-containerized scraping only.
+
 Prometheus performs read-only HTTP scrapes of GraphCheck. It does not connect to Neo4j and does not
 execute Cypher.
 
@@ -265,7 +281,7 @@ The reference Docker Compose project starts only Prometheus and Grafana:
 
 ```text
 Host machine
-  graphcheck monitor
+  graphcheck monitor --host 0.0.0.0  (explicit opt-in)
     0.0.0.0:9100
           ^
           | host.docker.internal:9100
@@ -275,7 +291,10 @@ Docker Compose network
 ```
 
 The Compose configuration maps `host.docker.internal` to Docker's host gateway for Prometheus.
-GraphCheck and Neo4j are not launched, configured, or modified by this Compose project.
+GraphCheck and Neo4j are not launched, configured, or modified by this Compose project. The
+all-interface bind is required for this container-to-host scrape path and must be explicitly
+selected because the metrics endpoint is unauthenticated. Without `--host 0.0.0.0`, GraphCheck
+remains bound to `127.0.0.1` and is available only on the host machine.
 
 Repository layout:
 
@@ -296,10 +315,12 @@ monitoring/
 
 # Runtime Sequence
 
-1.  The user starts `graphcheck monitor` from a GraphCheck project.
+1.  The user starts `graphcheck monitor` from a GraphCheck project. For the reference Docker
+    deployment or remote scraping, the user explicitly runs `graphcheck monitor --host 0.0.0.0`.
 2.  The CLI resolves the requested or default Neo4j connection profile.
 3.  The CLI creates `Neo4jClient` and calls `run_monitor`.
-4.  The runner starts the metrics HTTP server.
+4.  The runner starts the metrics HTTP server on `127.0.0.1:9100` by default, or on the explicitly
+    configured host and port.
 5.  The runner invokes the collector immediately.
 6.  The health component executes `RETURN 1 AS healthy` with a five-second connector timeout.
 7.  The collector updates gauges, the histogram, and either the last-success timestamp or failure
@@ -339,7 +360,8 @@ non-zero status and closes an initialized client during cleanup.
 
 If the metrics server cannot bind, including when the selected port is already in use, the CLI
 prints a concise error without a Python traceback and exits non-zero. The displayed address uses
-`localhost` for the default `0.0.0.0` bind address and otherwise preserves the supplied host.
+`127.0.0.1` for the default bind address. When `0.0.0.0` is explicitly supplied, the CLI presents
+it as `localhost` for a usable local endpoint.
 
 ## Health checks
 

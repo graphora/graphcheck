@@ -1,7 +1,7 @@
 from typer.testing import CliRunner
 
 from graphcheck.cli import app
-from graphcheck.observability.server import DEFAULT_HOST, DEFAULT_PORT
+from graphcheck.observability.server import DEFAULT_PORT
 
 runner = CliRunner()
 
@@ -51,12 +51,12 @@ def test_monitor_constructs_existing_client_and_delegates(monkeypatch, tmp_path)
         {
             "client": created[0],
             "interval_seconds": 15,
-            "host": DEFAULT_HOST,
+            "host": "127.0.0.1",
             "port": DEFAULT_PORT,
         }
     ]
     assert created[0].closed is True
-    assert f"Metrics endpoint: http://localhost:{DEFAULT_PORT}/metrics" in result.stdout
+    assert f"Metrics endpoint: http://127.0.0.1:{DEFAULT_PORT}/metrics" in result.stdout
 
 
 def test_monitor_forwards_host_port_interval_and_profile(monkeypatch, tmp_path):
@@ -74,7 +74,7 @@ def test_monitor_forwards_host_port_interval_and_profile(monkeypatch, tmp_path):
             "--profile",
             "staging",
             "--host",
-            "127.0.0.1",
+            "0.0.0.0",
             "--port",
             "9200",
             "--interval",
@@ -88,11 +88,11 @@ def test_monitor_forwards_host_port_interval_and_profile(monkeypatch, tmp_path):
         {
             "client": created[0],
             "interval_seconds": 7,
-            "host": "127.0.0.1",
+            "host": "0.0.0.0",
             "port": 9200,
         }
     ]
-    assert "Metrics endpoint: http://127.0.0.1:9200/metrics" in result.stdout
+    assert "Metrics endpoint: http://localhost:9200/metrics" in result.stdout
     assert "Health check interval: 7 seconds" in result.stdout
 
 
@@ -108,7 +108,7 @@ def test_monitor_reports_metrics_server_startup_failure(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "Unable to start GraphCheck monitoring." in result.stderr
-    assert f"Failed to start metrics server on localhost:{DEFAULT_PORT}." in result.stderr
+    assert f"Failed to start metrics server on 127.0.0.1:{DEFAULT_PORT}." in result.stderr
     assert "The port may already be in use." in result.stderr
     assert "Traceback" not in result.stderr
     assert created[0].closed is True

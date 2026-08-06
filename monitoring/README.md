@@ -35,8 +35,18 @@ uv run graphcheck monitor
 By default, GraphCheck:
 
 - performs a lightweight health check every 15 seconds;
-- exposes Prometheus metrics at `http://localhost:9100/metrics`; and
+- exposes Prometheus metrics only on the local machine at `http://127.0.0.1:9100/metrics`; and
 - continues monitoring until interrupted with `Ctrl+C`.
+
+The metrics endpoint is unauthenticated, so wider exposure requires an explicit opt-in. For the
+Docker Compose stack (whose Prometheus container scrapes the host) or for remote scraping, run:
+
+```bash
+uv run graphcheck monitor --host 0.0.0.0
+```
+
+This binds the metrics endpoint on all network interfaces. Restrict access with appropriate
+firewall or network controls.
 
 ## Dashboard
 
