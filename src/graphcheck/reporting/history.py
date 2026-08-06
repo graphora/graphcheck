@@ -133,7 +133,7 @@ def report_name(results: Results) -> str:
     """Return the filesystem-safe target and basic-ISO report identifier."""
     database = results.run.target.database if results.run.target is not None else "unknown"
     target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
-    timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{target}_{timestamp}"
 
 

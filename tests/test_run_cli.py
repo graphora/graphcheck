@@ -76,8 +76,8 @@ def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path)
     _write_run_artifacts(first, runs_dir)
     latest_results, latest_report = _write_run_artifacts(second, runs_dir)
 
-    first_name = "neo4j_20260706T090241Z"
-    second_name = "neo4j_20260706T090341Z"
+    first_name = "neo4j_20260706T090241000000Z"
+    second_name = "neo4j_20260706T090341000000Z"
     assert (runs_dir / first_name / "results.json").is_file()
     assert (runs_dir / first_name / "report.html").is_file()
     assert (runs_dir / second_name / "results.json").is_file()
@@ -88,6 +88,22 @@ def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path)
     assert latest_results.read_bytes() == (runs_dir / second_name / "results.json").read_bytes()
     assert latest_report.read_bytes() == (runs_dir / second_name / "report.html").read_bytes()
     assert {record.id for record in discover_report_runs(runs_dir)} == {first_name, second_name}
+
+
+def test_artifact_writer_preserves_runs_completed_within_the_same_second(tmp_path):
+    first = load_results(FIXTURES / "results.complete.json")
+    second = load_results(FIXTURES / "results.complete.json")
+    first.run.finished_at = "2026-07-06T09:03:41.100000Z"
+    second.run.finished_at = "2026-07-06T09:03:41.900000Z"
+    runs_dir = tmp_path / "runs"
+
+    _write_run_artifacts(first, runs_dir)
+    _write_run_artifacts(second, runs_dir)
+
+    assert {record.id for record in discover_report_runs(runs_dir)} == {
+        "neo4j_20260706T090341100000Z",
+        "neo4j_20260706T090341900000Z",
+    }
 
 
 def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path, monkeypatch):
@@ -112,7 +128,7 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
 
     assert latest_results.read_bytes() == previous_results
     assert latest_report.read_bytes() == previous_report
-    assert (runs_dir / "neo4j_20260706T090341Z" / "results.json").is_file()
+    assert (runs_dir / "neo4j_20260706T090341000000Z" / "results.json").is_file()
     assert not list(runs_dir.glob(".*.staging-*"))
     assert not list(runs_dir.glob(".*.backup-*"))
 
