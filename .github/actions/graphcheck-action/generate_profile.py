@@ -4,6 +4,7 @@ rather than hand-built shell text. Only writes if profiles.yml does not
 already exist; the real password is never written, only the name of the
 environment variable to read it from.
 """
+
 import os
 import sys
 
