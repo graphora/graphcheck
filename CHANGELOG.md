@@ -93,6 +93,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - CI lanes for the minimum and latest supported Python-driver lines, Neo4j 5.26/Cypher 5 and
   2026.06/Cypher 5/25 integration targets, performance gates, and an isolated installed-wheel
   smoke test that verifies CLI startup and packaged check resources.
+- Added GraphCheck observability support.
+- Added `graphcheck monitor` CLI command.
+- Added Prometheus metrics exporter.
+- Added reference Prometheus/Grafana monitoring stack.
+- Added Grafana dashboard for database health.
 
 ### Changed
 
