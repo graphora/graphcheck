@@ -108,6 +108,10 @@ def open_report_explorer(*args, **kwargs):
     return _call("graphcheck.reporting.explorer", "launch_report_explorer", *args, **kwargs)
 
 
+def run_monitor(*args, **kwargs):
+    return _call("graphcheck.observability.runner", "run_monitor", *args, **kwargs)
+
+
 def render_run_artifacts(results: "Results") -> tuple[bytes, bytes, bytes]:
     model, rendered_json = _call("graphcheck.reporting.writer", "validated_results_json", results)
     rendered_html = _call("graphcheck.reporting.html", "render_validated_html_report", model)
@@ -651,8 +655,8 @@ def profile(
 @app.command()
 def monitor(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
-    host: str = typer.Option(DEFAULT_HOST, "--host", help="Metrics server host."),
-    port: int = typer.Option(DEFAULT_PORT, "--port", min=1, max=65535, help="Metrics server port."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Metrics server host."),
+    port: int = typer.Option(9100, "--port", min=1, max=65535, help="Metrics server port."),
     interval: int = typer.Option(
         15,
         "--interval",
@@ -661,6 +665,7 @@ def monitor(
     ),
 ) -> None:
     """Expose connected-database health metrics until interrupted."""
+    from graphcheck.errors import GraphCheckError
 
     client: Neo4jClient | None = None
     try:

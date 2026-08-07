@@ -19,6 +19,8 @@ _COMMAND_MODULES = {
     "graphcheck.generation.client",
     "graphcheck.generation.service",
     "graphcheck.neo4j_adapter",
+    "graphcheck.observability.runner",
+    "graphcheck.observability.server",
     "graphcheck.profiler",
     "graphcheck.project",
     "graphcheck.reporting",
