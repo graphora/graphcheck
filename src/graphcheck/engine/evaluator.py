@@ -19,6 +19,7 @@ from graphcheck.engine.baseline import BaselineValue
 from graphcheck.engine.compiler import CompiledCheck
 from graphcheck.engine.sampling import wilson_estimate
 from graphcheck.errors import GraphCheckError
+from graphcheck.neo4j_adapter import ResultPolicy
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,82 @@ class Evaluation:
             raise TypeError("evaluation.passed must be boolean")
 
 
+class CompetencyConsumption:
+    """Incremental assertion state used to stop a competency query once decisive."""
+
+    def __init__(self, compiled: CompiledCheck, max_rows: int) -> None:
+        spec = compiled.check.spec
+        if not isinstance(spec, CompetencyCheck):
+            raise TypeError("competency consumption requires a competency check")
+        self.expected = spec.expect
+        self.policy = ResultPolicy(max_rows=max_rows, require_complete=True)
+        self.decisive = False
+        self.row_count = 0
+        self._columns: list[str] | None = None
+        self._seen_rows: set[object] | None = set() if self.expected.unique is not None else None
+        self._duplicate_found = False
+        self._contains_remaining = (
+            [_freeze(value) for value in self.expected.contains]
+            if self.expected.contains is not None
+            else None
+        )
+
+    def stop_when(self, row: dict[str, Any]) -> bool:
+        self.row_count += 1
+        self._columns = self._columns or list(row)
+        failed = self._row_bound_failed() or (self.expected.empty is True and self.row_count > 0)
+        if self.expected.columns is not None and self._columns != self.expected.columns:
+            failed = True
+        if self._seen_rows is not None:
+            frozen = _freeze(row)
+            self._duplicate_found = self._duplicate_found or frozen in self._seen_rows
+            self._seen_rows.add(frozen)
+            if self.expected.unique is True and self._duplicate_found:
+                failed = True
+        if self._contains_remaining is not None:
+            actual = _freeze(_regression_value(row, self._columns))
+            self._contains_remaining = [
+                expected for expected in self._contains_remaining if expected != actual
+            ]
+        self.decisive = failed or self._all_assertions_pass_early()
+        return self.decisive
+
+    def _row_bound_failed(self) -> bool:
+        bounds = self.expected.rows
+        return bool(
+            bounds is not None
+            and (
+                (bounds.max is not None and self.row_count > bounds.max)
+                or (bounds.exactly is not None and self.row_count > bounds.exactly)
+            )
+        )
+
+    def _all_assertions_pass_early(self) -> bool:
+        bounds = self.expected.rows
+        rows_pass = bounds is None or (
+            bounds.exactly is None
+            and bounds.max is None
+            and bounds.min is not None
+            and self.row_count >= bounds.min
+        )
+        columns_pass = self.expected.columns is None or self._columns == self.expected.columns
+        unique_pass = self.expected.unique is None or (
+            self.expected.unique is False and self._duplicate_found
+        )
+        empty_pass = self.expected.empty is None or (
+            self.expected.empty is False and self.row_count > 0
+        )
+        contains_pass = self._contains_remaining is None or not self._contains_remaining
+        return (
+            rows_pass
+            and columns_pass
+            and unique_pass
+            and empty_pass
+            and contains_pass
+            and self.expected.equals is None
+        )
+
+
 class VerdictEvaluator:
     """Pure verdict evaluation over already-executed query results."""
 
@@ -43,12 +120,20 @@ class VerdictEvaluator:
         *,
         columns: Sequence[str] | None = None,
         baseline: BaselineValue | None = None,
+        complete: bool = True,
+        observed_rows: int | None = None,
     ) -> Evaluation:
         pattern = compiled.check.pattern
         if pattern is Pattern.CONFORMANCE:
             return self._conformance(compiled, rows)
         if pattern in (Pattern.COMPETENCY_SHAPE, Pattern.COMPETENCY_REGRESSION):
-            return self._competency(compiled, rows, columns)
+            return self._competency(
+                compiled,
+                rows,
+                columns,
+                complete=complete,
+                observed_rows=observed_rows,
+            )
         if pattern is Pattern.DRIFT:
             return self._drift(compiled, rows, baseline)
         raise GraphCheckError(
@@ -232,6 +317,9 @@ class VerdictEvaluator:
         compiled: CompiledCheck,
         rows: Sequence[Mapping[str, Any]],
         columns: Sequence[str] | None,
+        *,
+        complete: bool,
+        observed_rows: int | None,
     ) -> Evaluation:
         spec = compiled.check.spec
         if not isinstance(spec, CompetencyCheck):
@@ -239,57 +327,65 @@ class VerdictEvaluator:
         expected = spec.expect
         actual_columns = list(columns) if columns is not None else _columns_from_rows(rows)
         row_count = len(rows)
-        frozen_rows = [_freeze(row) for row in rows]
-        frequencies = Counter(frozen_rows)
-        duplicate_rows = [
-            row for row, frozen in zip(rows, frozen_rows, strict=True) if frequencies[frozen] > 1
-        ]
-        is_unique = not duplicate_rows
+        is_unique: bool | None = None
+        if expected.unique is not None:
+            seen_rows: set[object] = set()
+            is_unique = True
+            for row in rows:
+                frozen = _freeze(row)
+                if frozen in seen_rows:
+                    is_unique = False
+                    break
+                seen_rows.add(frozen)
 
         measured: dict[str, object] = {
-            "rows": row_count,
             "columns": actual_columns,
-            "unique": is_unique,
             "empty": row_count == 0,
         }
+        if complete:
+            measured["rows"] = row_count
+        else:
+            measured["observed_rows_at_least"] = max(row_count, observed_rows or 0)
+        uniqueness_known = is_unique is not None and (complete or is_unique is False)
+        if uniqueness_known:
+            measured["unique"] = is_unique
         failures: list[str] = []
-        evidence_rows: list[Mapping[str, Any]] = []
 
         bounds = expected.rows
         if bounds is not None:
-            if bounds.min is not None and row_count < bounds.min:
+            if complete and bounds.min is not None and row_count < bounds.min:
                 failures.append(f"rows {row_count} is below min {bounds.min}")
             if bounds.max is not None and row_count > bounds.max:
                 failures.append(f"rows {row_count} exceeds max {bounds.max}")
-                evidence_rows.extend(rows[bounds.max :])
-            if bounds.exactly is not None and row_count != bounds.exactly:
+            if bounds.exactly is not None and (
+                row_count > bounds.exactly or (complete and row_count != bounds.exactly)
+            ):
                 failures.append(f"rows {row_count} does not equal {bounds.exactly}")
-                evidence_rows.extend(rows)
 
         if expected.columns is not None and actual_columns != expected.columns:
             failures.append(
                 f"columns {actual_columns!r} do not equal expected {expected.columns!r}"
             )
-            evidence_rows.extend(rows)
-        if expected.unique is not None and is_unique is not expected.unique:
+        if uniqueness_known and is_unique is not expected.unique:
             if expected.unique:
                 failures.append("rows are not unique")
-                evidence_rows.extend(duplicate_rows)
             else:
                 failures.append("rows are unique")
-                evidence_rows.extend(rows)
         if expected.empty is not None and (row_count == 0) is not expected.empty:
             failures.append(f"empty is not {expected.empty}")
-            evidence_rows.extend(rows)
 
-        actual_values = _regression_values(rows, actual_columns)
+        actual_values = (
+            _regression_values(rows, actual_columns)
+            if expected.contains is not None or (expected.equals is not None and complete)
+            else []
+        )
         if expected.contains is not None:
             contains_ok = all(_contains(actual_values, value) for value in expected.contains)
-            measured["contains"] = contains_ok
-            if not contains_ok:
+            if complete or contains_ok:
+                measured["contains"] = contains_ok
+            if complete and not contains_ok:
                 failures.append("result does not contain every pinned value")
-                evidence_rows.extend(rows)
-        if expected.equals is not None:
+        if expected.equals is not None and complete:
             # Neo4j does not guarantee row order without ORDER BY. `equals` therefore compares
             # the complete result as a duplicate-preserving bag, avoiding graph-stable verdicts
             # that change only because the server returned rows in another order.
@@ -297,7 +393,6 @@ class VerdictEvaluator:
             measured["equals"] = equals_ok
             if not equals_ok:
                 failures.append("result does not equal the pinned values")
-                evidence_rows.extend(rows)
 
         if not failures:
             return Evaluation(True, measured)
@@ -305,9 +400,9 @@ class VerdictEvaluator:
         evidence = _build_evidence(
             message,
             compiled,
-            rows=evidence_rows or rows,
+            rows=rows,
             params=compiled.params,
-            total_count=max(1, len(evidence_rows or rows)),
+            total_count=max(1, len(rows)),
         )
         return Evaluation(False, measured, evidence=evidence)
 
@@ -371,8 +466,17 @@ def evaluate_check(
     *,
     columns: Sequence[str] | None = None,
     baseline: BaselineValue | None = None,
+    complete: bool = True,
+    observed_rows: int | None = None,
 ) -> Evaluation:
-    return VerdictEvaluator().evaluate(compiled, rows, columns=columns, baseline=baseline)
+    return VerdictEvaluator().evaluate(
+        compiled,
+        rows,
+        columns=columns,
+        baseline=baseline,
+        complete=complete,
+        observed_rows=observed_rows,
+    )
 
 
 _SUMMARY_INTERNAL_FIELDS = {
@@ -635,6 +739,10 @@ def _regression_values(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]
     return [{key: row.get(key) for key in columns} for row in rows]
 
 
+def _regression_value(row: Mapping[str, Any], columns: Sequence[str]) -> object:
+    return row.get(columns[0]) if len(columns) == 1 else {key: row.get(key) for key in columns}
+
+
 def _contains(values: Sequence[object], expected: object) -> bool:
     frozen_expected = _freeze(expected)
     return any(_freeze(value) == frozen_expected for value in values)
@@ -654,28 +762,32 @@ def _build_evidence(
     total_count: int,
     allow_aggregate: bool = False,
 ) -> Evidence:
-    pointers: list[EvidenceElement] = []
-    for value in explicit:
-        pointer = _pointer_from_value(value)
-        if pointer is not None:
-            pointers.append(pointer)
-    for row in rows:
-        pointers.extend(_pointers_from_row(row))
-    if params:
-        pointers.extend(_pointers_from_ids(params))
-    if not allow_aggregate:
-        pointers = [pointer for pointer in pointers if pointer.kind != "aggregate"]
     unique: list[EvidenceElement] = []
     seen: set[tuple[str, str]] = set()
     unique_count = 0
-    for pointer in pointers:
+
+    def retain(pointer: EvidenceElement | None) -> None:
+        nonlocal unique_count
+        if pointer is None or (not allow_aggregate and pointer.kind == "aggregate"):
+            return
         identity = (pointer.kind, pointer.id)
         if identity in seen:
-            continue
-        seen.add(identity)
-        unique_count += 1
+            return
         if len(unique) < compiled.evidence_cap:
+            unique_count += 1
+            seen.add(identity)
             unique.append(pointer)
+        else:
+            unique_count = max(unique_count, compiled.evidence_cap + 1)
+
+    for value in explicit:
+        retain(_pointer_from_value(value))
+    for row in rows:
+        for pointer in _pointers_from_row(row):
+            retain(pointer)
+    if params:
+        for pointer in _pointers_from_ids(params):
+            retain(pointer)
     if not unique:
         raise GraphCheckError(
             "engine.evidence_missing",

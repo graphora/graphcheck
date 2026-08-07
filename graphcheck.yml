@@ -1,3 +1,4 @@
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
+concurrency: 1

@@ -21,6 +21,10 @@ public ingestion identifier; builds without that key store consent but do not se
 `graphcheck_run_completed` has two reviewed field shapes: one for a normal terminal event and one
 for a faulted terminal event. Every event also receives the common properties listed below.
 
+`graphcheck_command_completed` includes coarse compatibility metadata: `os_family`, `os_version`
+(major/minor only, or `unknown`), and `python_minor`. GraphCheck does not send an exact OS build,
+Linux distribution, kernel suffix, architecture, or Python patch/build string.
+
 The block below is both the human-readable field inventory and the CI contract. Field lists are
 event-specific; `common_properties` are added to every outgoing event. CI fails if an event name or
 field in the code allowlist differs from this document.
@@ -92,6 +96,7 @@ field in the code allowlist differs from this document.
         "graphcheck_version",
         "interactive",
         "os_family",
+        "os_version",
         "output_mode",
         "probe_duration_ms",
         "probe_outcome",
@@ -230,6 +235,8 @@ No telemetry payload contains:
   artifact run IDs;
 - command-line arguments, environment-variable names or values, hostnames, usernames, emails, IP
   addresses, hardware identifiers, or stable machine-derived identifiers;
+- exact OS builds, Linux distributions, kernel suffixes, architectures, or Python patch/build
+  versions;
 - free-form errors, driver notifications, stack traces, exception representations, or local
   variables;
 - check verdicts or raw CLI exit codes.

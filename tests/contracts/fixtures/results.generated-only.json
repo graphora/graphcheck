@@ -28,7 +28,9 @@
       "capabilities": {
         "apoc": true,
         "count_store": true
-      }
+      },
+      "nodes": 1250,
+      "relationships": 3480
     },
     "error": null
   },

@@ -8,6 +8,7 @@ from graphcheck.engine.compiler import (
     CompiledCheck,
     ConformancePlan,
     CypherCompiler,
+    EvidenceCondition,
     compile_check,
     register_conformance_compiler,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "DirectoryBaselineProvider",
     "Engine",
     "EngineConfig",
+    "EvidenceCondition",
     "Evaluation",
     "ExecutionResult",
     "Executor",

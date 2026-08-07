@@ -9,7 +9,10 @@ from pydantic import ValidationError
 
 from graphcheck.contracts.results import Results, Verdict
 from graphcheck.contracts.schemas import results_schema
-from graphcheck.reporting.html import render_html_report
+from graphcheck.reporting.html import (
+    render_html_report,
+    render_validated_html_report_fragments,
+)
 from graphcheck.reporting.writer import load_results, results_json, write_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
@@ -39,6 +42,12 @@ def test_writer_upgrades_schema_1_0_input_to_current_output():
     output = json.loads(results_json(raw))
 
     assert output["schema_version"] == "1.1"
+
+
+def test_writer_output_bytes_match_regression_fixture():
+    expected = (FIXTURES / "results.complete.rendered.json").read_text(encoding="utf-8")
+
+    assert results_json(_fixture("complete")) == expected
 
 
 def test_writer_rejects_invalid_results():
@@ -72,7 +81,8 @@ def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     assert "https://" not in report
     assert ' src="' not in report
     assert ' href="' not in report
-    assert "fetch(" not in report
+    assert 'meta name="graphcheck-explorer-token"' not in report
+    assert "graphcheck report --open" in report
     assert "XMLHttpRequest" not in report
     assert "WebSocket(" not in report
     assert "EventSource(" not in report
@@ -94,11 +104,18 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
     assert "<h2>Graph Health Overview</h2>" in html
-    assert '<span class="meta-label">RUN COMPLETE</span>' in html
-    assert '<span class="exit-1">2 issues found</span> on 06-07-2026' in html
-    assert "on 06-07-2026 at 09:00:00 (in 161 seconds)" in html
-    assert "ran in" not in html
+    assert "CHECKED ON" not in html
+    assert '<span class="status-pill status-pill-warning">COMPLETE</span>' in html
+    assert "<strong>Run Complete.</strong>" in html
+    assert '<span class="header-status-message">1 failure, 1 warning.</span>' in html
+    assert 'aria-controls="summary-table-container">See issues.</button>' in html
+    assert "localStorage.setItem(" in html
+    assert "restoreCheckFilters();" in html
     assert "<strong>neo4j</strong> (Neo4j version: 5.18.0, community)" in html
+    assert '<span class="meta-label">Nodes</span>' in html
+    assert '<span class="meta-label">Relationships</span>' in html
+    assert "1,250" in html
+    assert "3,480" in html
     assert "<code>customer-360</code>" in html
     assert '<span class="suite-check-stats">3/3 checks run</span>' in html
     assert '<span class="badge badge-fail">1 FAILED</span>' in html
@@ -120,17 +137,24 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
 def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
-    assert "<strong>Partial run:</strong>" in html
+    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="header-status-message">No issues found.</span>' in html
+    assert 'aria-controls="summary-table-container">See more.</button>' in html
+    assert "run-summary-toggle')?.addEventListener('click', showIssueSummary)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
     assert '<span class="badge badge-skipped">1 SKIPPED</span>' in html
     assert 'class="status-box status-box-skipped"' in html
     assert 'class="status-box status-box-pass"' in html
-    assert '<span class="meta-label">RUN PARTIAL</span>' in html
-    assert "1 check skipped on 06-07-2026" in html
+    assert "CHECKED ON" not in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
     assert "No issues found in the checks that were evaluated." in html
+    assert "No checks failed." in html
+    assert "No checks with warnings." in html
+    assert "No checks with errors." in html
+    assert "No checks passed." in html
+    assert "No checks skipped." in html
 
 
 def test_html_renderer_reports_all_checks_skipped():
@@ -143,8 +167,8 @@ def test_html_renderer_reports_all_checks_skipped():
         '<span class="badge badge-score">SCORE: N/A</span></div>'
     ) in html
     assert '<span class="badge badge-score">SCORE: N/A</span>' in html
-    assert '<span class="meta-label">RUN COMPLETE</span>' in html
-    assert "1 check skipped on 06-07-2026" in html
+    assert "CHECKED ON" not in html
+    assert "No issues found (1 check skipped)" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
     assert "Check did not pass" not in html
@@ -170,7 +194,7 @@ def test_html_renderer_does_not_call_an_empty_selection_all_clear():
 
     html = render_html_report(raw)
 
-    assert '<span class="exit-2">No checks evaluated</span>' in html
+    assert "No checks evaluated" in html
     assert "No checks were evaluated." in html
     assert "All clear! No issues found." not in html
 
@@ -191,7 +215,7 @@ def test_html_renderer_does_not_count_intentional_skips_as_issues():
 
     html = render_html_report(raw)
 
-    assert "2 checks skipped on 06-07-2026" in html
+    assert "No issues found (2 checks skipped)" in html
     assert '<span class="exit-0">2 checks skipped</span>' not in html
     assert '<span class="suite-check-stats">1/3 checks run</span>' in html
     assert '<span class="badge badge-skipped">2 SKIPPED</span>' in html
@@ -214,7 +238,10 @@ def test_html_renderer_appends_skips_to_issue_status_text():
 
     html = render_html_report(raw)
 
-    assert ('<span class="exit-1">2 issues found</span>, 2 checks skipped on 06-07-2026') in html
+    assert (
+        '<span class="header-status-message">1 failure, 1 warning (2 checks skipped).</span>'
+        in html
+    )
 
 
 def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
@@ -235,7 +262,7 @@ def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
 
     html = render_html_report(raw)
 
-    assert '<span class="exit-2">1 issue found</span> on 06-07-2026' in html
+    assert '<span class="header-status-message">1 warning.</span>' in html
     assert "Run interrupted" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-warn">1 WARNING</span>'
@@ -272,6 +299,9 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     html = render_html_report(raw)
 
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="header-status-message">1 warning, 3 errors.</span>' in html
     assert (
         '<div class="suite-badges-row">'
         '<span class="badge badge-errored">3 ERRORED</span>'
@@ -305,6 +335,7 @@ def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
 def test_html_renderer_exposes_cypher_and_evidence_ids():
     html = render_html_report(_fixture("complete"))
 
+    assert "Severity:" not in html
     assert "MATCH (c:Customer" in html
     assert "4:abc:12" in html
     assert "4:abc:88" in html
@@ -329,13 +360,41 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
-    assert '<span class="meta-label">RUN FAILED</span>' in html
-    assert '<span class="exit-3">Please check configured connections</span>' in html
-    assert "connection.auth" in html
+    assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
+    assert 'id="checks-empty-message"' in html
+    assert "No checks to explore." in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert "<strong>Partial Run.</strong>" in html
+    assert 'aria-controls="run-error-fix">See fix.</button>' in html
+    assert '<span id="run-error-fix" class="header-status-fix hidden-status-fix">' in html
+    assert (
+        html.index('aria-controls="run-error-fix">See fix.</button>')
+        < html.index('<span id="run-error-fix"')
+        < html.index("</h1>", html.index('<span id="run-error-fix"'))
+    )
+    assert "run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix)" in html
+    assert "CHECKED ON" not in html
+    assert "connection.auth" not in html
     assert "Neo4j rejected the credentials" in html
     assert "Target unavailable" in html
-    assert "Run failed before checks could be evaluated." in html
+    assert "Run failed before any checks could be evaluated." in html
     assert "All clear! No issues found." not in html
+
+
+def test_html_renderer_displays_unreachable_neo4j_as_failed():
+    raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
+    raw["run"]["error"] = {
+        "code": "neo4j.unreachable",
+        "message": "Neo4j is unreachable at the configured Bolt URI.",
+        "fix": "Start Neo4j and verify the configured URI.",
+    }
+
+    html = render_html_report(raw)
+
+    assert '<span class="status-pill status-pill-error">FAILED</span>' in html
+    assert "<strong>Run Failed.</strong>" in html
+    assert "Neo4j is unreachable at the configured Bolt URI." in html
+    assert "Start Neo4j and verify the configured URI." in html
 
 
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
@@ -359,3 +418,103 @@ def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "No matching issues" in html
     assert "No checks executed" not in html
+
+
+def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
+    html = render_html_report(_fixture("complete"))
+
+    assert html.count('id="report-run-title"') == 1
+    assert 'id="report-banners"' not in html
+    assert html.count('id="report-overview"') == 1
+    assert html.count('id="checks-panel"') == 1
+    assert 'id="report-explorer"' in html
+    assert "<h2>Report History</h2>" in html
+    assert '<span class="eyebrow explorer-eyebrow">' not in html
+    assert "Latest report" in html
+    assert "Last 5 reports" in html
+    assert ">Older</h3>" in html
+    assert "Open a run, or select reports to compare or delete." not in html
+    assert 'id="report-search-input"' in html
+    assert '<details id="latest-report-group" class="report-group" open>' in html
+    assert '<details id="last-five-report-group" class="report-group" open>' in html
+    assert '<details id="older-report-group" class="report-group">' in html
+    assert 'class="latest-pill"' not in html
+    assert "font-size: 18px; line-height: 1;" in html
+    assert html.count("justify-content: flex-start;") >= 2
+    assert 'id="clear-report-selection-btn"' in html
+    assert 'id="compare-most-recent-btn"' in html
+    assert html.index('id="report-search-input"') < html.index('id="clear-report-selection-btn"')
+    explorer_scroll_position = html.index('class="scrollable-content explorer-scroll"')
+    assert html.index('id="delete-reports-btn"') < explorer_scroll_position
+    assert explorer_scroll_position < html.index('id="compare-most-recent-btn"')
+    assert html.index('id="compare-reports-btn"') < html.index('id="compare-most-recent-btn"')
+    assert 'id="compare-most-recent-btn" class="btn-primary"' in html
+    assert ">Compare Selected</button>" in html
+    assert 'class="explorer-selection-actions"' in html
+    assert 'class="explorer-comparison-actions"' in html
+    assert "#delete-reports-btn {" not in html
+    assert ".explorer-scroll { margin-top: 20px; }" in html
+    assert ".explorer-status:empty { display: none; }" in html
+    comparison_dialog_start = html.index(".comparison-dialog {")
+    comparison_dialog_css = html[comparison_dialog_start : html.index("}", comparison_dialog_start)]
+    assert "overflow: hidden;" in comparison_dialog_css
+    assert ".navbar h1, .panel-section h2 { font-size: 18px; }" in html
+    assert "opacity: 1;" in html
+    assert "function clearReportSelection()" in html
+    assert "function compareMostRecentReports()" in html
+    assert "function renderComparisonMessage(content, message)" in html
+    assert "comparison-status-${value}" in html
+    assert "comparison-delta-positive" in html
+    assert "comparison-delta-negative" in html
+    assert "content.replaceChildren();" in html
+    assert "content.innerHTML" not in html
+    assert "reportHistory.slice(0, 2)" in html
+    assert "reportHistory.slice(1, 6)" in html
+    assert "reportHistory.slice(6)" in html
+    assert html.index('id="report-explorer"') < html.index("Graph Health Overview")
+    assert "compare-reports-btn" in html
+    assert "delete-reports-btn" in html
+    assert "<h2>Are you sure?</h2>" in html
+    assert "window.confirm" not in html
+    assert "graphcheck.checksExplorerOpen" in html
+    assert "restoreChecksExplorerState();" in html
+    assert "graphcheck.theme" in html
+    assert "restoreTheme();" in html
+    assert "graphcheck.reportExplorerNavigation" in html
+    assert "restoreReportExplorerNavigation()" in html
+    assert "handleReportLinkClick" in html
+    assert "fetch(path" in html
+    assert "/api/report?id=" in html
+    assert "history.pushState" in html
+    assert "history.replaceState" in html
+    assert "window.addEventListener('popstate'" in html
+    assert "new AbortController()" in html
+    assert "requestSequence !== reportNavigationSequence" in html
+    assert "setSummaryTableExpanded(issueSummaryExpanded);" in html
+    assert "checkDetailsOpenPreference = Array.from(details).some" in html
+    assert "applyCheckDetailsPreference();" in html
+    assert "showChecksExplorer(false);" in html
+    assert "Loading report…" in html
+    assert "formatReportFinishedAt(report.finished_at)" in html
+    assert "const finishedAt = new Date(value);" in html
+    assert "finishedAt.getFullYear()" in html
+    assert "finishedAt.getHours()" in html
+    assert "`${match[1]} at ${match[2]}`" not in html
+    assert "window.location.assign" not in html
+    panel_footer_start = html.index(".panel-footer {")
+    panel_footer_css = html[panel_footer_start : html.index("}", panel_footer_start)]
+    assert "border-top" not in panel_footer_css
+    assert "::-webkit-scrollbar-button { display: none; width: 0; height: 0; }" in html
+
+
+def test_html_renderer_exposes_report_specific_fragments_without_the_permanent_shell():
+    fragments = render_validated_html_report_fragments(load_results(_fixture("partial")))
+
+    assert set(fragments) == {"run_title", "overview", "checks"}
+    assert fragments["run_title"].startswith('<div id="report-run-title"')
+    assert '<section id="report-overview"' in fragments["overview"]
+    assert '<section id="checks-panel"' in fragments["checks"]
+    assert "run_01HXATZ" not in fragments["run_title"]
+    assert "<strong>Partial Run.</strong>" in fragments["run_title"]
+    assert 'id="report-explorer"' not in "".join(fragments.values())
+    assert 'id="theme-toggle"' not in "".join(fragments.values())

@@ -5,6 +5,14 @@ from typer.testing import CliRunner
 
 from graphcheck.cli import app
 from graphcheck.project import write_default_project
+from graphcheck.reporting import history as history_module
+from graphcheck.reporting.history import (
+    discover_report_runs,
+    find_report_run,
+    format_report_comparison,
+    format_report_history,
+    report_summary_json,
+)
 from graphcheck.reporting.writer import load_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
@@ -89,7 +97,7 @@ def test_report_list_displays_newest_first_with_metadata(tmp_path, monkeypatch):
     result = runner.invoke(app, ["report", "--list"])
 
     assert result.exit_code == 0
-    assert "RUN ID" in result.stdout
+    assert "REPORT NAME" in result.stdout
     assert "FINISHED AT" in result.stdout
     assert "SUITE SCORES" in result.stdout
     assert "run-new" in result.stdout
@@ -138,15 +146,26 @@ def test_report_list_deduplicates_latest_alias(tmp_path, monkeypatch):
 
 def test_report_open_id_opens_selected_historical_report(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    selected = _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
+    _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
     _write_run(tmp_path, "run-new", "2026-07-02T10:00:00Z")
     opened = []
-    monkeypatch.setattr("graphcheck.cli.webbrowser.open", lambda url: opened.append(url) or True)
+
+    def open_in_current_terminal(runs_dir, run_id, opener, on_open):
+        opened.append((runs_dir, run_id, opener))
+        on_open("url")
+        return "url"
+
+    monkeypatch.setattr("graphcheck.cli.open_report_explorer", open_in_current_terminal)
 
     result = runner.invoke(app, ["report", "--open", "run-old"])
 
     assert result.exit_code == 0
-    assert opened == [(selected / "report.html").resolve().as_uri()]
+    assert len(opened) == 1
+    assert opened[0][0] == tmp_path / ".graphcheck" / "runs"
+    assert opened[0][1] == "run-old"
+    assert opened[0][2] is not None
+    assert "Opened report explorer for run-old" in result.stdout
+    assert "Keep this terminal open; press Ctrl+C to stop." in result.stdout
 
 
 def test_report_compare_highlights_regressions_between_results(tmp_path, monkeypatch):
@@ -303,3 +322,72 @@ def test_report_history_reads_schema_1_0_artifacts(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "legacy-run" in result.stdout
     assert json.loads(results_path.read_text(encoding="utf-8"))["schema_version"] == "1.0"
+
+
+def test_report_history_uses_summaries_and_loads_only_compared_runs(tmp_path, monkeypatch):
+    runs_dir = tmp_path / "runs"
+    for run_id, finished_at in (
+        ("run-one", "2026-07-01T10:00:00Z"),
+        ("run-two", "2026-07-02T10:00:00Z"),
+        ("run-three", "2026-07-03T10:00:00Z"),
+    ):
+        directory = runs_dir / run_id
+        directory.mkdir(parents=True)
+        payload = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+        payload["run"]["id"] = run_id
+        payload["run"]["started_at"] = finished_at
+        payload["run"]["finished_at"] = finished_at
+        results_path = directory / "results.json"
+        results_path.write_text(json.dumps(payload), encoding="utf-8")
+        (directory / "summary.json").write_text(
+            report_summary_json(load_results(results_path)), encoding="utf-8"
+        )
+        (directory / "report.html").write_text("report", encoding="utf-8")
+
+    real_load = history_module.load_results
+    loaded: list[Path] = []
+
+    def count_loads(path):
+        loaded.append(path)
+        return real_load(path)
+
+    monkeypatch.setattr(history_module, "load_results", count_loads)
+    records = discover_report_runs(runs_dir)
+
+    assert "run-three" in format_report_history(records)
+    assert loaded == []
+
+    first = find_report_run(records, "run-one")
+    second = find_report_run(records, "run-two")
+    assert "Comparing run-one -> run-two" in format_report_comparison(first, second)
+    assert loaded == [first.results_path, second.results_path]
+
+
+def test_report_summary_maps_errored_checks_to_partial():
+    raw = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+    raw["checks"][0].update(
+        verdict="errored",
+        measured=None,
+        evidence=None,
+        error={
+            "code": "query.execution",
+            "message": "Query execution failed",
+            "fix": "Check the generated Cypher",
+        },
+    )
+    raw["totals"].update(fail=0, errored=1)
+    raw["suites"][0]["totals"].update(fail=0, errored=1)
+
+    summary = json.loads(report_summary_json(load_results(raw)))
+
+    assert summary["schema_version"] == "1.0"
+    assert summary["status"] == "partial"
+
+
+def test_report_summary_maps_unreachable_neo4j_to_failed():
+    raw = json.loads((FIXTURES / "results.failed.json").read_text(encoding="utf-8"))
+    raw["run"]["error"]["code"] = "neo4j.unreachable"
+
+    summary = json.loads(report_summary_json(load_results(raw)))
+
+    assert summary["status"] == "failed"

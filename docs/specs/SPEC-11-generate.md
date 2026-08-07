@@ -13,14 +13,15 @@ input to the deterministic engine.
 
 Implement `graphcheck generate` with:
 
-- `instructor[anthropic]==1.15.4` as the structured-output/provider adapter;
+- `instructor[anthropic,google-genai]==1.15.4` as the structured-output/provider adapter;
 - a small GraphCheck-owned `StructuredOutputClient` protocol in front of Instructor;
 - direct, final validation through the existing `load_suite` SPEC-02 loader;
 - a dedicated allow-list transmission model built from `BaselineProfile`, never
   `BaselineProfile.model_dump()` with exclusions;
-- Anthropic, OpenAI, and Ollama support in v0;
+- Anthropic, Google Gemini/Gemma, OpenAI, and Ollama support in v0;
 - a nullable `api_key_env` only for Ollama;
-- one GraphCheck-owned correction request, followed by candidate-level dropping;
+- one GraphCheck-owned correction request when needed, except that Google publishes a non-empty
+  valid first batch without a latency-multiplying correction;
 - file-level and per-check `generated: true` markers injected by GraphCheck, never supplied by the
   model; and
 - no network calls in the ordinary unit, CLI, or integration test suites.
@@ -40,7 +41,8 @@ writes a partially validated file.
 - Ask for approximately `--count` candidate checks.
 - Accept conformance, competency, and drift shapes supported by SPEC-02.
 - Validate each proposal against the existing Pydantic/pack loader boundary.
-- Retry invalid or missing proposals once in a single correction request.
+- Retry invalid or missing proposals once in a single correction request; for Google, retry only
+  when the first batch retains no valid proposal.
 - Drop anything still invalid, with a machine-readable and logged reason.
 - Write a loadable, inert YAML suite using an exclusive, atomic writer.
 - Support stable human and `--json` output.
@@ -61,8 +63,8 @@ writes a partially validated file.
   and prompt experimentation infrastructure.
 - Reading directories or URLs through `--docs`; every input must be an explicitly named file.
 - Provider-specific tuning beyond the common fields in `graphcheck.yml`.
-- Providers other than Anthropic, OpenAI, and Ollama. The protocol permits later adapters without
-  changing the service.
+- Providers other than Anthropic, Google, OpenAI, and Ollama. The protocol permits later adapters
+  without changing the service.
 - Streaming output.
 
 ## 3. Why Instructor, and where its responsibility ends
@@ -72,30 +74,32 @@ Pin this core dependency:
 ```toml
 dependencies = [
     # existing dependencies...
-    "instructor[anthropic]==1.15.4",
+    "instructor[anthropic,google-genai]==1.15.4",
 ]
 ```
 
 Regenerate and commit `uv.lock` in the same change.
 
 Instructor is a focused Pydantic structured-output layer. Its OpenAI support is included by
-default, the `anthropic` extra supplies the Anthropic SDK, and Ollama uses its OpenAI-compatible
-endpoint without adding an Ollama SDK. It avoids the dependency and abstraction footprint of a
-general orchestration framework. The pinned version and wheel are recorded on
-[PyPI](https://pypi.org/project/instructor/), while the provider-extra behavior is documented in
+default, the `anthropic` extra supplies the Anthropic SDK, the `google-genai` extra supplies
+Google's Gen AI SDK, and Ollama uses its OpenAI-compatible endpoint without adding an Ollama SDK.
+It avoids the dependency and abstraction footprint of a general orchestration framework. The
+pinned version and wheel are recorded on [PyPI](https://pypi.org/project/instructor/), while the
+provider-extra behavior is documented in
 [Instructor's installation guide](https://python.useinstructor.com/getting-started/).
 
 Instructor supports `response_model` validation and configurable retries. GraphCheck MUST set
-Instructor's validation `max_retries=0` and each provider SDK's transport `max_retries=0`, because
-the product contract is exactly one visible, GraphCheck-owned correction request. Otherwise a
-library retry could create undisclosed extra calls, retry a whole batch when only one candidate is
-bad, and make tests/cost behavior provider-dependent.
+Instructor's validation `max_retries=0` and each provider SDK's transport `max_retries=0`.
+GraphCheck performs one explicit Google retry only for HTTP 500, 502, or 503; timeouts are never
+retried. This prevents hidden SDK retries from multiplying the documented request timeout.
 
 Provider modes are explicit:
 
 | Provider | Instructor construction | Mode |
 |---|---|---|
 | Anthropic | `from_provider("anthropic/<model>", ...)` | `Mode.TOOLS` |
+| Google Gemma/other | `from_provider("google/<model>", ...)` | `Mode.TOOLS` |
+| Google Gemini (`gemini-*`) | `from_provider("google/<model>", ...)` | `Mode.JSON` |
 | OpenAI | `from_provider("openai/<model>", ...)` | provider default structured mode |
 | Ollama | `from_provider("ollama/<model>", base_url=..., ...)` | `Mode.JSON` |
 
@@ -129,7 +133,7 @@ The Pydantic model is:
 
 ```python
 class GenerateConfig(StrictModel):
-    provider: Literal["anthropic", "openai", "ollama"]
+    provider: Literal["anthropic", "google", "openai", "ollama"]
     model: str
     api_key_env: str | None = None
     base_url: AnyHttpUrl | None = None
@@ -140,16 +144,36 @@ Additional validation:
 
 1. `model` must be non-blank after trimming.
 2. `api_key_env` must be a non-blank environment-variable name when present.
-3. Anthropic and OpenAI require `api_key_env`.
+3. Anthropic, Google, and OpenAI require `api_key_env`.
 4. Ollama permits `api_key_env: null`. If it is present, it is resolved and passed to the client.
 5. Ollama requires an explicit `base_url`; the fix should recommend
    `http://localhost:11434/v1`. Requiring the destination makes disclosure and air-gap review
    unambiguous.
-6. Anthropic and OpenAI permit `base_url: null` for their provider default or a URL for an
+6. Anthropic, Google, and OpenAI permit `base_url: null` for their provider default or a URL for an
    explicitly configured compatible/self-hosted endpoint.
 7. Unknown keys are rejected.
 
 Examples:
+
+```yaml
+# Google Gemini with native structured output
+generate:
+  provider: google
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY
+  base_url: null
+  temperature: 0
+```
+
+```yaml
+# Google-hosted Gemma on the Gemini API free tier
+generate:
+  provider: google
+  model: gemma-4-26b-a4b-it
+  api_key_env: GEMINI_API_KEY
+  base_url: null
+  temperature: 0
+```
 
 ```yaml
 # OpenAI
@@ -202,8 +226,7 @@ def generate(
     docs: Annotated[list[Path] | None, typer.Option("--docs")] = None,
     count: Annotated[int, typer.Option(min=1, max=20)] = 5,
     json_output: Annotated[bool, typer.Option("--json")] = False,
-) -> None:
-    ...
+) -> None: ...
 ```
 
 Rules:
@@ -544,15 +567,33 @@ The Instructor adapter:
 1. is created only after config, credential, baseline, docs, request, and disclosure are ready;
 2. receives the resolved API key directly;
 3. passes `temperature` and provider-appropriate token bounds;
-4. uses `RawProposalBatch` as `response_model`;
-5. sets Instructor validation retries and provider SDK transport retries to zero;
+4. uses `RawProposalBatch` as `response_model`, except for Google's private wire DTOs described below;
+5. sets Instructor validation retries to zero and provider SDK transport retries to zero, except
+   for one bounded Google retry on HTTP 500, 502, or 503;
 6. maps provider exceptions to GraphCheck errors without response bodies or secrets; and
 7. exposes no provider SDK type outside `generation/client.py`.
 
 Tests inject a fake implementation and never patch deep Instructor internals for service behavior.
-Separate adapter tests patch `instructor.from_provider` to assert construction for all three
+Separate adapter tests patch `instructor.from_provider` to assert construction for all four
 providers, then pin-level regressions construct the real Instructor wrappers and replace only their
 final transport callable so retry/default merging is exercised without network access.
+
+Google models whose names start with `gemini-` use `Mode.JSON` native structured output and a
+private `_GeminiProposalBatch` containing the full discriminated `ProposedCheck` union. The adapter
+normalizes that typed batch into the shared raw envelope; Gemini retains the standard system prompt,
+8,192-token output cap, and ordinary correction workflow.
+
+Gemma's function-calling schema drops free-form, union, and complex nested object properties, so
+the Gemma branch uses a private `_GoogleRawProposalBatch` wire model with separate
+`conformance`, `competency`, and `drift` arrays and flat, kind-specific required fields. The v0
+Gemma wire contract supports completeness/uniqueness conformance arguments, column-based
+competency expectations, and labeled node-count drift with maximum-change tolerance. The adapter
+normalizes these flat arguments into the shared nested `{kind, spec}` envelope and adds a
+Gemma-only instruction limiting the total items to the request count. It removes the redundant
+generic proposal/pack schemas from Gemma's system prompt and limits Gemma output to 2,048 tokens.
+Both Google branches check generated label/property references against the transmitted profile.
+Anthropic, OpenAI, and Ollama continue to receive the original response model and system prompt
+unchanged.
 
 V0 runtime bounds are constants rather than new configuration surface:
 
@@ -560,6 +601,7 @@ V0 runtime bounds are constants rather than new configuration surface:
 MAX_PROVIDER_CALLS = 2
 PROVIDER_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_TOKENS = 8192
+GEMMA_MAX_OUTPUT_TOKENS = 2048
 MAX_CANDIDATES = 20
 ```
 
@@ -694,7 +736,7 @@ attempt 1:
     reject duplicate ids after the first retained occurrence
 
 needed = requested_count - retained_count
-if needed > 0:
+if needed > 0 and not (google_tool_transport and retained_count > 0):
     attempt 2:
         send correction prompt containing:
           - needed count
@@ -726,6 +768,11 @@ remain fatal and never silently degrade to partial success.
 An SDK/network/rate-limit/authentication failure is not a validation failure and is not automatically
 re-asked by this algorithm. Map it immediately to a fix-bearing provider error. Users can decide
 whether to retry a billable call.
+
+Google's free hosted models are the latency exception: if attempt 1 retains any valid candidates,
+publish that partial result without a correction request. If none survive, the ordinary one-time
+correction remains available. Google conformance and drift identifiers must exactly match the
+transmitted baseline profile before SPEC-02 validation.
 
 If an initial batch returns fewer than requested, the missing slots are included in the one
 correction request. More than requested is impossible at the raw schema's maximum of 20, but a batch
@@ -831,7 +878,7 @@ Every controlled error is a `GraphCheckError` with a non-empty, actionable fix.
 | `generate.config_missing` | No `generate` block | Add a `generate:` block to `graphcheck.yml` with provider, model, and credential environment-variable name. |
 | `generate.config_invalid` | Invalid provider/model/key/base URL/temperature or unknown key | Correct the named `graphcheck.yml` field. |
 | `generate.api_key_missing` | Required env var absent/blank | Exactly `set $<NAME>`. |
-| `generate.provider_unsupported` | Provider not implemented | Set `generate.provider` to `anthropic`, `openai`, or `ollama`. |
+| `generate.provider_unsupported` | Provider not implemented | Set `generate.provider` to `anthropic`, `google`, `openai`, or `ollama`. |
 | `generate.baseline_missing` | Default baseline directory has no baseline | Run `graphcheck profile`, or pass `--from <baseline.json>`. |
 | `generate.baseline_not_found` | `--from` does not resolve to a file | Pass an existing baseline JSON path. |
 | `generate.baseline_invalid` | JSON/Pydantic/fingerprint validation fails | Regenerate it with `graphcheck profile`, or pass a valid C4 baseline. |
@@ -842,9 +889,10 @@ Every controlled error is a `GraphCheckError` with a non-empty, actionable fix.
 | `generate.provider_unreachable` | Connection refused/DNS/Ollama not serving | Start the local service or verify `generate.base_url` and network access. |
 | `generate.provider_rate_limited` | Provider rate limit | Retry later or reduce `--count`. |
 | `generate.provider_timeout` | Request exceeds the fixed v0 timeout | Retry, reduce docs/count, or verify the local service. |
+| `generate.provider_unavailable` | Provider still returns HTTP 5xx after its bounded retry | Retry later, reduce document size, or check the provider status page. |
 | `generate.provider_failed` | Other safe-mapped provider failure | Verify provider/model/base URL and retry; use local Ollama if egress is unavailable. |
 | `generate.output_invalid` | Both raw response envelopes fail | Choose a model with structured-output support or reduce docs/count. |
-| `generate.no_valid_candidates` | No candidate survives validation | Review the logged reasons and retry with clearer domain docs or another model. |
+| `generate.no_valid_candidates` | No candidate survives validation | Review the warnings above and retry; structural errors may require another model. |
 | `generate.write_failed` | Directory/temp/fsync/rename failure | Check configured checks path and filesystem permissions, then retry. |
 | `generate.write_invalid` | Post-write loader assertion fails | Report a GraphCheck bug and retry after upgrading; the invalid destination is removed. |
 
@@ -904,8 +952,8 @@ contract.
 
 `tests/generation/test_config.py`
 
-- accepts Anthropic and OpenAI with a named, populated environment variable;
-- rejects Anthropic/OpenAI with null, blank, missing, or blank-valued `api_key_env`;
+- accepts Anthropic, Google, and OpenAI with a named, populated environment variable;
+- rejects Anthropic/Google/OpenAI with null, blank, missing, or blank-valued `api_key_env`;
 - asserts missing key fix is exactly `set $ANTHROPIC_API_KEY`;
 - accepts Ollama with `api_key_env: null`;
 - accepts Ollama with an optional populated key;
@@ -998,6 +1046,10 @@ Patch `instructor.from_provider`; do not make network calls.
 
 - Anthropic uses `anthropic/<model>`, direct API key, `Mode.TOOLS`, configured temperature, raw
   response model, and zero validation/transport retries;
+- Google Gemma uses `google/<model>`, a direct API key, `Mode.TOOLS`, its private flat tool DTO,
+  no SDK retries, and one explicit bounded adapter retry for HTTP 500, 502, or 503 only;
+- Google Gemini uses `google/gemini-*`, `Mode.JSON`, the full typed proposal union, native
+  `application/json` response schema, no tool declaration, and the standard correction workflow;
 - OpenAI uses `openai/<model>`, direct API key, optional base URL, and zero validation/transport
   retries;
 - Ollama uses `ollama/<model>`, explicit base URL, `Mode.JSON`, no key argument when null, and
@@ -1010,7 +1062,7 @@ Patch `instructor.from_provider`; do not make network calls.
 - error messages/logs never contain a seeded secret, prompt canary, document canary, or raw response
   body; and
 - Instructor's validation retry facility and each provider SDK's transport retry facility are
-  disabled.
+  disabled; the explicit Google 5xx retry does not retry timeouts.
 
 ### 16.7 Service orchestration unit tests
 
@@ -1032,6 +1084,9 @@ errors.
 - excess candidates are ignored after `count` and recorded;
 - no third call occurs under any validation outcome;
 - partial success exits successfully and reports written/dropped counts;
+- a non-empty Gemma first batch publishes partial success without a correction call;
+- a non-empty Gemini first batch retains the standard correction call;
+- Google rejects conformance/drift profile identifiers absent from the baseline;
 - zero valid candidates raises `generate.no_valid_candidates` and writes nothing;
 - two invalid raw envelopes raise `generate.output_invalid` and write nothing;
 - provider failures are not silently retried;
@@ -1200,9 +1255,9 @@ the disclosure and transmission-boundary tests exist.
 | Every check satisfies SPEC-02 | Per-item one-check `load_suite` plus final whole-file `load_suite`. |
 | Invalid re-asked once, then dropped | GraphCheck-owned two-call algorithm and service call-count/drop tests. |
 | Never writes half-valid YAML | Final validation before atomic writer; writer failure tests. |
-| Provider/model/key from config/env | Strict config and three-provider adapter tests. |
+| Provider/model/key from config/env | Strict config and four-provider adapter tests. |
 | Missing key has a clear fix | Locked `set $<NAME>` error and CLI assertion. |
-| Anthropic, OpenAI, local Ollama | Provider factory tests; Ollama nullable-key path; optional live smoke. |
+| Anthropic, Google Gemini/Gemma, OpenAI, local Ollama | Provider factory tests; separate Gemini/Gemma wire tests; Ollama nullable-key path; optional live smoke. |
 | Minimal egress | Dedicated allow-list model, negative/canary/property tests, exact disclosure. |
 | Disclosure before data is sent | Ordered disclosure/client spy test in service and CLI integration. |
 | Never judges | LLM DTO excludes judgment fields; prompt and rejection tests. |

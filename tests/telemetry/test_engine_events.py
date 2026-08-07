@@ -1,10 +1,11 @@
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
 
 from graphcheck.contracts.results import Capabilities, RunTarget
-from graphcheck.engine.runner import Engine, SuiteInput
+from graphcheck.engine.runner import Engine, EngineConfig, SuiteInput
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.telemetry.collector import TelemetryCollector
@@ -75,6 +76,72 @@ def test_engine_emits_ordered_reconciled_events_without_content():
     ):
         assert secret not in payload_text
     assert "verdict" not in payload_text
+
+
+def test_query_event_records_read_guard_cache_timing_without_query_text():
+    class GuardClient:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            return QueryResult(
+                [{"value": params["secret"]}],
+                ("value",),
+                (),
+                read_guard_ms=3,
+                read_guard_cache_hit=True,
+            )
+
+    collector = TelemetryCollector()
+    Engine(GuardClient(), event_sink=collector).run(
+        [SuiteInput.from_yaml(SUITE)],
+        target=TARGET,
+    )
+
+    query = next(event for event in collector.events if isinstance(event, QueryFinished))
+    assert (query.read_guard_ms, query.read_guard_cache_hit) == (3, True)
+    assert "RETURN $secret" not in repr(query)
+
+
+def test_concurrent_checks_keep_query_telemetry_attributed_and_reconciled():
+    barrier = threading.Barrier(2)
+    suite = """\
+suite: concurrent-private-suite
+competency:
+  - id: first-private-check
+    question: Does the first private value exist?
+    query: RETURN $secret AS value
+    params: {secret: first-private-value}
+    expect: {rows: {exactly: 1}}
+  - id: second-private-check
+    question: Does the second private value exist?
+    query: RETURN $secret AS value
+    params: {secret: second-private-value}
+    expect: {rows: {exactly: 1}}
+"""
+
+    class ConcurrentClient:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            barrier.wait(timeout=2)
+            return QueryResult([{"value": params["secret"]}], ("value",), ())
+
+    collector = TelemetryCollector()
+    results = Engine(
+        ConcurrentClient(),
+        config=EngineConfig(max_concurrency=2),
+        event_sink=collector,
+    ).run([SuiteInput.from_yaml(suite)], target=TARGET)
+
+    queries = [event for event in collector.events if isinstance(event, QueryFinished)]
+    checks = [event for event in collector.events if isinstance(event, CheckProcessed)]
+    terminal = next(event for event in collector.events if isinstance(event, RunFinished))
+    assert [result.id for result in results.checks] == [
+        "first-private-check",
+        "second-private-check",
+    ]
+    assert {event.check_sequence for event in queries} == {1, 2}
+    assert {event.check_sequence: event.query_count for event in checks} == {1: 1, 2: 1}
+    assert terminal.query_count == 2
+    assert [event.sequence for event in collector.events] == list(
+        range(1, len(collector.events) + 1)
+    )
 
 
 def test_broken_sink_cannot_change_engine_results():

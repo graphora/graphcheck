@@ -13,7 +13,7 @@ class GenerateConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    provider: Literal["anthropic", "openai", "ollama"]
+    provider: Literal["anthropic", "google", "openai", "ollama"]
     model: str
     api_key_env: str | None = None
     base_url: AnyHttpUrl | None = None
@@ -39,7 +39,7 @@ class GenerateConfig(BaseModel):
 
     @model_validator(mode="after")
     def provider_requirements(self) -> GenerateConfig:
-        if self.provider in {"anthropic", "openai"} and self.api_key_env is None:
+        if self.provider in {"anthropic", "google", "openai"} and self.api_key_env is None:
             raise ValueError(f"{self.provider} requires api_key_env")
         if self.provider == "ollama" and self.base_url is None:
             raise ValueError(
@@ -62,6 +62,16 @@ class GenerateConfig(BaseModel):
     @property
     def normalized_base_url(self) -> str | None:
         return None if self.base_url is None else str(self.base_url)
+
+    @property
+    def uses_google_native_structured_output(self) -> bool:
+        return self.provider == "google" and self.model.casefold().rsplit("/", 1)[-1].startswith(
+            "gemini-"
+        )
+
+    @property
+    def uses_google_tool_transport(self) -> bool:
+        return self.provider == "google" and not self.uses_google_native_structured_output
 
     @property
     def destination(self) -> str:

@@ -48,6 +48,11 @@ def test_preview_never_persists_or_sends(tmp_path):
         "graphcheck_command_completed",
         "graphcheck_profile_completed",
     }
+    command = next(
+        event for event in payload["events"] if event["event"] == "graphcheck_command_completed"
+    )
+    assert command["properties"]["telemetry_schema_version"] == "1.1"
+    assert command["properties"]["os_version"] == "6.8"
     assert not config.exists()
 
 

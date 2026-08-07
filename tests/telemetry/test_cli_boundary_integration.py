@@ -18,7 +18,7 @@ from graphcheck.generation.service import GenerationService
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.writer import load_results
-from graphcheck.telemetry.policy import enable_telemetry
+from graphcheck.telemetry.policy import enable_telemetry, os_family, os_version, python_minor
 from graphcheck.telemetry.posthog import PostHogAdapter
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
@@ -147,6 +147,9 @@ def test_parse_time_error_emits_user_error_at_true_cli_boundary(
     assert command["process_outcome"] == "user_error"
     assert command["failure_stage"] == "config_load"
     assert command["telemetry_run_id"] is None
+    assert command["os_family"] == os_family().value
+    assert command["os_version"] == os_version()
+    assert command["python_minor"] == python_minor()
     assert "not-a-real-option" not in repr(command)
 
 
@@ -678,6 +681,13 @@ def test_profile_setup_failure_still_emits_dedicated_completion(
     recording_transport,
 ):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "find_project_root",
+        lambda: (_ for _ in ()).throw(
+            GraphCheckError("project.missing", "No graphcheck.yml found.", "Run graphcheck init.")
+        ),
+    )
 
     exit_code = _invoke_entrypoint(monkeypatch, "profile")
 
