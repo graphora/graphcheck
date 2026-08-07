@@ -55,6 +55,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
   diagnostics; a complete public event/field inventory in `docs/telemetry.md`; CI enforcement
   against allowlist drift; property-based anonymization coverage; explicit network-failure tests;
   and a fresh-install command matrix proving zero events before opt-in.
+- Added GraphCheck observability support.
+- Added `graphcheck monitor` CLI command.
+- Added Prometheus metrics exporter.
+- Added reference Prometheus/Grafana monitoring stack.
+- Added Grafana dashboard for database health.
 
 ### Changed
 
