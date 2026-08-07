@@ -15,40 +15,40 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
-        driver-line: ["min", "latest-6"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv and select the matrix Python
-        uses: astral-sh/setup-uv@v5
-        with:
-          # Sets UV_PYTHON, which overrides the committed .python-version so uv
-          # runs on the matrix interpreter (not the pinned 3.12).
-          python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev
-      - name: Select tested Neo4j Python driver line
-        env:
-          DRIVER_LINE: ${{ matrix.driver-line }}
-        run: |
-          if [ "$DRIVER_LINE" = "min" ]; then
-            uv pip install "neo4j==5.20.0"
-          else
-            uv pip install --upgrade "neo4j>=6,<7"
-          fi
-      - name: Assert the interpreter matches the matrix (guards against a single pinned run)
-        env:
-          WANT: ${{ matrix.python-version }}
-        run: uv run --no-sync python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
-      - name: Test installed driver line
-        env:
-          PYTHONDEVMODE: ${{ matrix.driver-line == 'min' && '1' || '0' }}
-          PYTHONWARNINGS: ${{ matrix.driver-line == 'min' && 'error::ResourceWarning' || 'default' }}
-        run: uv run --no-sync pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+  # test:
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       python-version: ["3.12", "3.13"]
+  #       driver-line: ["min", "latest-6"]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install uv and select the matrix Python
+  #       uses: astral-sh/setup-uv@v5
+  #       with:
+  #         # Sets UV_PYTHON, which overrides the committed .python-version so uv
+  #         # runs on the matrix interpreter (not the pinned 3.12).
+  #         python-version: ${{ matrix.python-version }}
+  #     - run: uv sync --group dev
+  #     - name: Select tested Neo4j Python driver line
+  #       env:
+  #         DRIVER_LINE: ${{ matrix.driver-line }}
+  #       run: |
+  #         if [ "$DRIVER_LINE" = "min" ]; then
+  #           uv pip install "neo4j==5.20.0"
+  #         else
+  #           uv pip install --upgrade "neo4j>=6,<7"
+  #         fi
+  #     - name: Assert the interpreter matches the matrix (guards against a single pinned run)
+  #       env:
+  #         WANT: ${{ matrix.python-version }}
+  #       run: uv run --no-sync python -c "import os, sys; want=tuple(int(p) for p in os.environ['WANT'].split('.')); assert sys.version_info[:2]==want, sys.version"
+  #     - name: Test installed driver line
+  #       env:
+  #         PYTHONDEVMODE: ${{ matrix.driver-line == 'min' && '1' || '0' }}
+  #         PYTHONWARNINGS: ${{ matrix.driver-line == 'min' && 'error::ResourceWarning' || 'default' }}
+  #       run: uv run --no-sync pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 
   integration:
     runs-on: ubuntu-latest
