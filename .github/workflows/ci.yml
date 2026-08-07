@@ -50,6 +50,20 @@ jobs:
   #         PYTHONWARNINGS: ${{ matrix.driver-line == 'min' && 'error::ResourceWarning' || 'default' }}
   #       run: uv run --no-sync pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev
+      - run: uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
