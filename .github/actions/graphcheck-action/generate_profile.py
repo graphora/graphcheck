@@ -41,9 +41,9 @@ def main():
     with open("profiles.yml", "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 
-    github_env = os.environ.get("GITHUB_ENV")
-    if github_env:
-        with open(github_env, "a", encoding="utf-8") as f:
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as f:
             f.write("generated_profiles=true\n")
 
     print("Generated profiles.yml")

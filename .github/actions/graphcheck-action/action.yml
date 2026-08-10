@@ -32,6 +32,11 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
     - name: Install GraphCheck
       shell: bash
       env:
@@ -51,9 +56,14 @@ runs:
         else
           dir=".graphcheck"
         fi
+        if [[ "$dir" == *$'\n'* || "$dir" == *$'\r'* ]]; then
+          echo "::error::artifacts directory value from graphcheck.yml contains a line break; refusing to export it"
+          exit 1
+        fi
         echo "GRAPHCHECK_ARTIFACTS_DIR=$dir" >> "$GITHUB_ENV"
 
     - name: Generate profiles.yml
+      id: generate_profile
       shell: bash
       env:
         GC_PROFILE: ${{ inputs.profile }}
@@ -83,8 +93,10 @@ runs:
       if: always()
       continue-on-error: true
       shell: bash
+      env:
+        GENERATED_PROFILES: ${{ steps.generate_profile.outputs.generated_profiles }}
       run: |
-        if [ "$generated_profiles" = "true" ]; then
+        if [ "$GENERATED_PROFILES" = "true" ]; then
           rm -f profiles.yml
           echo "Removed generated profiles.yml"
         fi
