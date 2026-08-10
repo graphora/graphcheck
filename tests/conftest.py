@@ -14,7 +14,6 @@ gate any module that uses them with::
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,22 +59,6 @@ def _configure_cypher(container, target: Neo4jTestTarget):
     return container
 
 
-def _wait_for_database(container, database: str = "neo4j", timeout_s: float = 30.0) -> None:
-    """Wait past Bolt readiness until the requested database accepts queries."""
-
-    deadline = time.monotonic() + timeout_s
-    with container.get_driver() as driver:
-        while True:
-            try:
-                with driver.session(database=database) as session:
-                    session.run("RETURN 1").consume()
-                return
-            except Exception:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.25)
-
-
 @pytest.fixture(autouse=True)
 def isolated_telemetry_config(tmp_path: Path, monkeypatch) -> Path:
     """Keep consent, identity, and delivery configuration inside each test."""
@@ -104,7 +87,6 @@ def neo4j_profile(neo4j_test_target):
         neo4j_test_target,
     )
     with container:
-        _wait_for_database(container)
         yield ConnectionProfile(
             uri=container.get_connection_url(),
             user="neo4j",
@@ -124,7 +106,6 @@ def neo4j_apoc_profile(neo4j_test_target):
     container.with_env("NEO4J_PLUGINS", '["apoc"]')
     container.with_env("NEO4JLABS_PLUGINS", '["apoc"]')
     with container:
-        _wait_for_database(container)
         yield ConnectionProfile(
             uri=container.get_connection_url(),
             user="neo4j",
@@ -145,7 +126,6 @@ def neo4j_enterprise_profiles(neo4j_test_target):
     )
     container.with_env("NEO4J_ACCEPT_LICENSE_AGREEMENT", "yes")
     with container:
-        _wait_for_database(container)
         driver = GraphDatabase.driver(
             container.get_connection_url(), auth=("neo4j", _NEO4J_PASSWORD)
         )

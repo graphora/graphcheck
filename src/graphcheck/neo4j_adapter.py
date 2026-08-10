@@ -1391,7 +1391,9 @@ def map_neo4j_error(exc: Exception, profile: ConnectionProfile | None = None) ->
         token in neo4j_code for token in ("notfound", "unavailable")
     )
     if database_code_error or (
-        "database" in lowered and ("not found" in lowered or "does not exist" in lowered)
+        not neo4j_code
+        and "database" in lowered
+        and ("not found" in lowered or "does not exist" in lowered)
     ):
         database = profile.database if profile is not None else "configured"
         return GraphCheckError(

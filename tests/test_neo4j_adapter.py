@@ -1142,6 +1142,20 @@ def test_wrong_database_diagnostic_names_selected_database():
     assert "database" in mapped.error.fix
 
 
+def test_procedure_not_found_is_not_misclassified_as_database_not_found():
+    failure = type(
+        "ClientError",
+        (Exception,),
+        {"code": "Neo.ClientError.Procedure.ProcedureNotFound"},
+    )("There is no procedure with the name `apoc.version` registered for this database instance.")
+    failure.__cause__ = Exception("The procedure apoc.version() was not found.")
+
+    mapped = map_neo4j_error(failure)
+
+    assert mapped.error.code == "neo4j.query_failed"
+    assert _is_apoc_absent_error(mapped)
+
+
 def test_database_unavailable_driver_code_maps_to_wrong_database():
     failure = type(
         "TransientError",
