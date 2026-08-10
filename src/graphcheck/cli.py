@@ -1619,6 +1619,7 @@ def run_command(
         _, selected_profile = select_profile(profiles, profile)
         max_concurrency = concurrency or int(config.concurrency)
         client = _new_neo4j_client(selected_profile, max_concurrency)
+        _verify_cli_audit_credential(client)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
@@ -1789,6 +1790,15 @@ def _new_neo4j_client(profile, max_concurrency: int):
         if accepts_setting
         else Neo4jClient(profile)
     )
+
+
+def _verify_cli_audit_credential(client: object) -> None:
+    verify = getattr(client, "verify_read_only_credential", None)
+    probe = getattr(client, "probe", None)
+    if callable(verify):
+        if callable(probe):
+            probe()
+        verify()
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:

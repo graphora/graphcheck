@@ -31,7 +31,7 @@ def test_profiles_default_to_local(tmp_path: Path):
     assert profile.uri == "bolt://localhost:7687"
     assert profile.password == "graphora"
     help_text = (tmp_path / "profiles.yml").read_text(encoding="utf-8")
-    assert "server-enforced read-only" in help_text
+    assert "dedicated read-only" in help_text
     assert "neo4j+s://" in help_text
 
 

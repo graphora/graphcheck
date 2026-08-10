@@ -7,7 +7,6 @@ from graphcheck.connection_profiles import ConnectionProfile
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import (
-    WRITE_PRIVILEGE_PROBE,
     Counts,
     DebugTrace,
     Neo4jClient,
@@ -79,59 +78,53 @@ def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
     assert captured["max_transaction_retry_time"] == 0.0
 
 
-class _CredentialProbeDriver:
-    def __init__(self, error=None):
-        self.error = error
-        self.query = None
-        self.access_mode = None
-
-    def session(self, *, database, default_access_mode):
-        self.access_mode = default_access_mode
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def run(self, query):
-        self.query = str(getattr(query, "text", query))
-        if self.error is not None:
-            raise self.error
-        return type("Result", (), {"consume": lambda self: object()})()
-
-
-def _credential_probe_client(driver):
+def _credential_probe_client(rows):
     client = object.__new__(Neo4jClient)
     client._profile = ConnectionProfile(
         uri="bolt://localhost:7687", user="auditor", password="pw", database="neo4j"
     )
-    client._driver = driver
+    client.run_read = lambda query: rows
     return client
 
 
-def test_read_only_credential_probe_accepts_server_permission_denial():
-    forbidden = type("Forbidden", (Exception,), {"code": "Neo.ClientError.Security.Forbidden"})(
-        "permission denied"
-    )
-    driver = _CredentialProbeDriver(forbidden)
-
-    _credential_probe_client(driver)._assert_read_only_credential()
-
-    assert driver.query == WRITE_PRIVILEGE_PROBE
-    assert driver.access_mode == "WRITE"
+def test_read_only_credential_probe_accepts_access_and_match_only():
+    _credential_probe_client(
+        [
+            {"access": "GRANTED", "action": "ACCESS", "graph": "neo4j"},
+            {"access": "GRANTED", "action": "MATCH", "graph": "neo4j"},
+        ]
+    ).verify_read_only_credential()
 
 
-def test_read_only_credential_probe_rejects_write_capable_account_without_executing_write():
-    driver = _CredentialProbeDriver()
+@pytest.mark.parametrize("action", ["CREATE", "WRITE", "ALL_GRAPH_PRIVILEGES"])
+def test_read_only_credential_probe_rejects_granted_write_privilege(action):
+    client = _credential_probe_client([{"access": "GRANTED", "action": action, "graph": "neo4j"}])
 
     with pytest.raises(GraphCheckError) as caught:
-        _credential_probe_client(driver)._assert_read_only_credential()
+        client.verify_read_only_credential()
 
     assert caught.value.error.code == "neo4j.credential_not_read_only"
     assert "dedicated Neo4j user" in caught.value.error.fix
-    assert driver.query == "EXPLAIN CREATE ()"
+
+
+def test_read_only_credential_probe_rejects_write_capable_builtin_role():
+    client = _credential_probe_client(
+        [{"access": "GRANTED", "action": "ACCESS", "graph": "*", "role": "admin"}]
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert "ROLE ADMIN" in caught.value.error.message
+
+
+def test_read_only_credential_probe_fails_closed_without_privilege_evidence():
+    with pytest.raises(GraphCheckError) as caught:
+        _credential_probe_client([]).verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_read_only_unverified"
+    assert "inspect its own privileges" in caught.value.error.fix
 
 
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
@@ -739,7 +732,6 @@ def test_probe_handles_permission_denied_apoc_probe():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
-    client._assert_read_only_credential = lambda: None
     client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._schema_tokens = lambda: (("Customer",), ("OWNS",))
@@ -765,7 +757,6 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
-    client._assert_read_only_credential = lambda: None
     client._can_read = lambda edition: True
     client._counts = lambda: Counts(nodes=1, relationships=2)
     client._schema_tokens = lambda: (("Customer",), ("OWNS",))
@@ -794,7 +785,6 @@ def test_probe_skips_counts_when_read_privilege_is_missing():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
-    client._assert_read_only_credential = lambda: None
     client._apoc_usable = lambda: False
     client._can_read = lambda edition: False
     client._counts = lambda: pytest.fail("counts must not run without read visibility")
@@ -816,7 +806,6 @@ def test_probe_handles_permission_denied_while_loading_counts():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
-    client._assert_read_only_credential = lambda: None
     client._apoc_usable = lambda: False
     client._can_read = lambda edition: True
     client._count_store_usable = lambda: pytest.fail(
@@ -842,7 +831,6 @@ def test_probe_reraises_unexpected_apoc_probe_error():
     )
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
-    client._assert_read_only_credential = lambda: None
 
     def broken_apoc_probe():
         raise GraphCheckError("neo4j.query_failed", "Neo4j query failed: broken query", "fix")
@@ -862,7 +850,6 @@ def test_completed_probe_is_cached_for_one_client():
     )
     calls = []
     client._server_info = lambda: calls.append("server") or ("5.26.0", "community")
-    client._assert_read_only_credential = lambda: calls.append("credential")
     client._apoc_usable = lambda: calls.append("apoc") is None
     client._can_read = lambda edition: calls.append("read") is None
     client._counts = lambda: calls.append("counts") or Counts(1, 2)
@@ -875,7 +862,6 @@ def test_completed_probe_is_cached_for_one_client():
     assert second is first
     assert calls == [
         "server",
-        "credential",
         "apoc",
         "read",
         "counts",
@@ -902,7 +888,6 @@ def test_concurrent_probe_callers_share_one_live_probe():
         return "5.26.0", "community"
 
     client._server_info = server_info
-    client._assert_read_only_credential = lambda: None
     client._apoc_usable = lambda: False
     client._can_read = lambda edition: True
     client._counts = lambda: Counts(1, 2)
@@ -932,7 +917,6 @@ def test_separate_clients_observe_changed_graph_counts():
             uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
         )
         client._server_info = lambda: ("5.26.0", "community")
-        client._assert_read_only_credential = lambda: None
         client._apoc_usable = lambda: False
         client._can_read = lambda edition: True
         client._counts = lambda: Counts(graph["nodes"], 0)
@@ -967,7 +951,6 @@ def test_probe_metrics_measure_each_live_request():
         pytest.fail(f"unexpected query: {query}")
 
     client.run_read = run_read
-    client._assert_read_only_credential = lambda: None
     client.explain_read = lambda query, **kwargs: Plan("NodeCountFromCountStore")
 
     client.probe()
@@ -1028,6 +1011,51 @@ def test_debug_trace_closes_client(monkeypatch):
 
     assert trace.profile == "local"
     assert trace.target.capabilities.apoc is True
+    assert closed is True
+
+
+def test_debug_trace_rejects_write_capable_credential_and_closes_client(monkeypatch):
+    closed = False
+
+    class FakeClient:
+        def __init__(self, profile):
+            pass
+
+        def probe(self):
+            return (
+                RunTarget(
+                    database="neo4j",
+                    server_version="5.26.0",
+                    edition="enterprise",
+                    fingerprint="fp",
+                    capabilities=Capabilities(apoc=False, count_store=True),
+                ),
+                Visibility(True, True, True),
+                Counts(0, 0),
+            )
+
+        def verify_read_only_credential(self):
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "Credential has WRITE.",
+                "Use a read-only credential.",
+            )
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("graphcheck.neo4j_adapter.Neo4jClient", FakeClient)
+
+    with pytest.raises(GraphCheckError) as caught:
+        debug_trace(
+            "local",
+            ConnectionProfile(
+                uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+            ),
+        )
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
     assert closed is True
 
 

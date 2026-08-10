@@ -20,7 +20,19 @@ from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
-WRITE_PRIVILEGE_PROBE = "EXPLAIN CREATE ()"
+WRITE_PRIVILEGE_ACTIONS = frozenset(
+    {
+        "ALL GRAPH PRIVILEGES",
+        "CREATE",
+        "DELETE",
+        "MERGE",
+        "REMOVE LABEL",
+        "SET LABEL",
+        "SET PROPERTY",
+        "WRITE",
+    }
+)
+WRITE_CAPABLE_BUILTIN_ROLES = frozenset({"ADMIN", "ARCHITECT", "EDITOR", "PUBLISHER"})
 
 
 @dataclass(frozen=True)
@@ -568,7 +580,6 @@ class Neo4jClient:
         # verify_connectivity() here would add an unbounded Bolt round trip outside this deadline.
         version, edition = _call_with_timeout(self._server_info, deadline)
         _ensure_supported_server(version)
-        _call_with_timeout(self._assert_read_only_credential, deadline)
         self._probe_cypher_version = _call_with_timeout(
             lambda **kwargs: self._cypher_version(version, **kwargs), deadline
         )
@@ -622,38 +633,56 @@ class Neo4jClient:
         _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts
 
-    def _assert_read_only_credential(self, *, timeout_s: float | None = None) -> None:
-        """Prove that Neo4j itself denies a harmless, EXPLAIN-only write plan."""
-
-        def probe() -> object:
-            with self._driver.session(
-                database=self._profile.database,
-                default_access_mode=neo4j.WRITE_ACCESS,
-            ) as session:
-                query = (
-                    neo4j.Query(WRITE_PRIVILEGE_PROBE, timeout=timeout_s)
-                    if timeout_s is not None
-                    else WRITE_PRIVILEGE_PROBE
-                )
-                result = session.run(query)
-                consume = getattr(result, "consume", None)
-                return consume() if callable(consume) else None
+    def verify_read_only_credential(self, *, timeout_s: float | None = None) -> None:
+        """Fail when Neo4j reports any granted graph-write privilege for this user."""
 
         try:
-            _timed_probe_request(self, probe)
-        except Exception as exc:
-            mapped = map_neo4j_error(exc, self._profile)
-            if mapped.error.code == "neo4j.permission_denied":
-                return
-            raise mapped from exc
-        raise GraphCheckError(
-            "neo4j.credential_not_read_only",
-            "The configured Neo4j credential can plan a write query and is not "
-            "server-enforced read-only.",
-            "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE) on "
-            "the configured database, update `user` and its password in profiles.yml, then "
-            "run `graphcheck debug` again.",
+            rows = _run_read_with_timeout(
+                self,
+                "SHOW USER PRIVILEGES YIELD access, action, graph, role "
+                "RETURN access, action, graph, role",
+                timeout_s,
+            )
+        except GraphCheckError as exc:
+            raise GraphCheckError(
+                "neo4j.credential_read_only_unverified",
+                "Neo4j could not return the configured user's reported privileges.",
+                "Use Neo4j Enterprise with a native user that can inspect its own privileges and "
+                "has only ACCESS and MATCH, then run `graphcheck debug` again.",
+            ) from exc
+        if not rows:
+            raise GraphCheckError(
+                "neo4j.credential_read_only_unverified",
+                "Neo4j did not return the configured user's reported privileges.",
+                "Allow the user to inspect its own privileges, or use a native Neo4j user with "
+                "only ACCESS and MATCH, then run `graphcheck debug` again.",
+            )
+        granted_writes = sorted(
+            {
+                str(row.get("action", "")).replace("_", " ").upper()
+                for row in rows
+                if str(row.get("access", "")).upper() == "GRANTED"
+                and str(row.get("action", "")).replace("_", " ").upper() in WRITE_PRIVILEGE_ACTIONS
+            }
         )
+        write_roles = sorted(
+            {
+                str(row.get("role", "")).upper()
+                for row in rows
+                if str(row.get("role", "")).upper() in WRITE_CAPABLE_BUILTIN_ROLES
+            }
+        )
+        if granted_writes or write_roles:
+            details = [*granted_writes, *(f"ROLE {role}" for role in write_roles)]
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "The configured Neo4j credential has granted write-capable or administrative "
+                "privileges "
+                f"({', '.join(details)}) and is not server-enforced read-only.",
+                "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE), "
+                "update `user` and its password in profiles.yml, then run `graphcheck debug` "
+                "again.",
+            )
 
     def _server_info(self, *, timeout_s: float | None = None) -> tuple[str, str]:
         rows = _run_read_with_timeout(
@@ -1003,6 +1032,7 @@ def init_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:
         target, visibility, counts = client.probe()
+        _verify_audit_credential(client)
         return DebugTrace(
             profile=profile_name,
             target=target,
@@ -1019,6 +1049,7 @@ def debug_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:
         target, visibility, counts = client.probe()
+        _verify_audit_credential(client)
         return DebugTrace(
             profile=profile_name,
             target=target,
@@ -1029,6 +1060,12 @@ def debug_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
         )
     finally:
         client.close()
+
+
+def _verify_audit_credential(client: object) -> None:
+    verify = getattr(client, "verify_read_only_credential", None)
+    if callable(verify):
+        verify()
 
 
 def error_json(profile_name: str, error: CheckError) -> dict[str, object]:

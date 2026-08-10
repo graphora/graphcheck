@@ -113,11 +113,13 @@ setup, edit the generated inline `password` value. For CI or shared environments
 value, keep `password_env`, and export that variable in the process that runs GraphCheck.
 
 The account must be a dedicated, server-enforced read-only audit credential. Driver read routing is
-not an authorization boundary. During `init`, `debug`, and the run preflight, GraphCheck safely asks
-Neo4j to plan `EXPLAIN CREATE ()`: a correctly restricted credential is denied permission, while a
-credential able to plan the write is rejected as `neo4j.credential_not_read_only`. `EXPLAIN` does
-not execute or modify the graph. Every customer-authored query is separately planned with
-`EXPLAIN`, and only Neo4j query type `r` is executed.
+not an authorization boundary. During `init`, `debug`, and the CLI run preflight, GraphCheck reads
+the current user's reported Neo4j privileges and rejects graph-write grants or write-capable
+built-in roles as `neo4j.credential_not_read_only`. If Neo4j cannot return the reported
+privileges, GraphCheck fails closed as `neo4j.credential_read_only_unverified`. Every
+customer-authored query is separately
+planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`, so a write-capable query is
+rejected without modifying the graph.
 
 On Neo4j Enterprise, an administrator can provision the audit role for database `neo4j` with:
 
@@ -307,8 +309,8 @@ thresholds, and cost before removing both applicable markers to activate a check
 ## Reliability and safety
 
 - Neo4j execution is read-only and fails closed unless the planner classifies a statement as read.
-- The connection preflight also fails unless Neo4j denies the audit credential an EXPLAIN-only
-  write probe, proving that read-only access is enforced by the server.
+- The connection preflight fails if Neo4j reports a graph-write grant or write-capable built-in
+  role for the audit credential, or if GraphCheck cannot inspect the user's reported privileges.
 - Built-in Cypher keeps labels, relationship types, property names, regexes, thresholds, and values
   in parameters rather than interpolating user data into query text.
 - One broken query or evaluator error is isolated to its check unless fail-fast or the run deadline

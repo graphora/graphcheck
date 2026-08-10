@@ -155,7 +155,7 @@ def neo4j_enterprise_profiles(neo4j_test_target):
         finally:
             driver.close()
 
-        yield {
+        profiles = {
             user: ConnectionProfile(
                 uri=container.get_connection_url(),
                 user=user,
@@ -168,6 +168,13 @@ def neo4j_enterprise_profiles(neo4j_test_target):
                 "graphcheck_home_denied",
             )
         }
+        profiles["neo4j_admin"] = ConnectionProfile(
+            uri=container.get_connection_url(),
+            user="neo4j",
+            password=_NEO4J_PASSWORD,
+            database="neo4j",
+        )
+        yield profiles
 
 
 @pytest.fixture(scope="module")

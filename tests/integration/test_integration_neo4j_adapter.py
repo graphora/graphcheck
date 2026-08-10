@@ -100,6 +100,27 @@ def test_restricted_user_real_probe_reports_blocked_read_check(
     )
 
 
+def test_debug_rejects_real_write_capable_admin_credential(
+    neo4j_enterprise_profiles, tmp_path, monkeypatch
+):
+    write_default_project(tmp_path)
+    write_example_suite(tmp_path)
+    admin = neo4j_enterprise_profiles["neo4j_admin"]
+    profiles = ProfilesFile(default="admin", profiles={"admin": admin})
+    (tmp_path / PROFILES_FILE).write_text(
+        yaml.safe_dump(profiles.model_dump(), sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "neo4j.credential_not_read_only"
+    assert payload["error"]["fix"]
+
+
 def test_home_graph_grant_and_scoped_denial_use_resolved_home_database(
     neo4j_enterprise_profiles,
 ):
