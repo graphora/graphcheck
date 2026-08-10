@@ -51,6 +51,7 @@ Switch to `graphora/graphcheck-action@v1` once this Action is extracted and tagg
 | user | yes | - | Neo4j username |
 | database | no | neo4j | Neo4j database name |
 | fail-fast | no | false | Stop after the first error-severity failure |
+| suite | no | - | Suite name to run via --suite; skipped if empty |
 | version | no | 0.1.0 | Exact GraphCheck version to install from PyPI |
 
 ## What it does

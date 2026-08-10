@@ -71,10 +71,10 @@ runs:
         GC_SUITE: ${{ inputs.suite }}
       run: |
         set +e
-        graphcheck run \
-          --profile "$GC_PROFILE" \
-          $( [ -n "$GC_SUITE" ] && echo "--suite $GC_SUITE" ) \
-          $( [ "$GC_FAIL_FAST" = "true" ] && echo "--fail-fast" )
+        args=(--profile "$GC_PROFILE")
+        [ -n "$GC_SUITE" ] && args+=(--suite "$GC_SUITE")
+        [ "$GC_FAIL_FAST" = "true" ] && args+=(--fail-fast)
+        graphcheck run "${args[@]}"
         code=$?
         echo "exit_code=$code" >> "$GITHUB_OUTPUT"
         exit 0
