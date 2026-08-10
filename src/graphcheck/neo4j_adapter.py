@@ -15,11 +15,12 @@ import neo4j
 from neo4j import GraphDatabase
 
 from graphcheck import __version__
-from graphcheck.connection_profiles import ConnectionProfile
+from graphcheck.connection_profiles import ConnectionProfile, validate_profile_uri
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
+WRITE_PRIVILEGE_PROBE = "EXPLAIN CREATE ()"
 
 
 @dataclass(frozen=True)
@@ -253,6 +254,7 @@ class Neo4jClient:
         max_concurrency: int = 1,
         read_guard_cache_capacity: int = READ_GUARD_CACHE_CAPACITY,
     ) -> None:
+        validate_profile_uri(profile.uri)
         if (
             isinstance(max_concurrency, bool)
             or not isinstance(max_concurrency, int)
@@ -273,15 +275,18 @@ class Neo4jClient:
         self._probe_request_durations_ms: list[int] | None = None
         self._last_probe_metrics: ProbeMetrics | None = None
         self._probe_cypher_version: str | None = None
-        self._driver = GraphDatabase.driver(
-            profile.uri,
-            auth=(profile.user, profile.password),
-            max_connection_pool_size=max_concurrency,
-            connection_timeout=10.0,
-            connection_acquisition_timeout=10.0,
-            fetch_size=1000,
-            max_transaction_retry_time=0.0,
-        )
+        try:
+            self._driver = GraphDatabase.driver(
+                profile.uri,
+                auth=(profile.user, profile.password),
+                max_connection_pool_size=max_concurrency,
+                connection_timeout=10.0,
+                connection_acquisition_timeout=10.0,
+                fetch_size=1000,
+                max_transaction_retry_time=0.0,
+            )
+        except Exception as exc:
+            raise map_neo4j_error(exc, profile) from exc
 
     def close(self) -> None:
         self._read_classifications.close()
@@ -327,13 +332,13 @@ class Neo4jClient:
         except GraphCheckError:
             raise
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def verify(self) -> None:
         try:
             self._driver.verify_connectivity()
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def run_read(
         self,
@@ -486,7 +491,7 @@ class Neo4jClient:
         except GraphCheckError:
             raise
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def explain_read(
         self,
@@ -506,7 +511,7 @@ class Neo4jClient:
                 result = session.run(driver_query, params or {})
                 return result.consume().plan
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, Visibility, Counts]:
         deadline = _timeout_deadline(timeout_s)
@@ -563,6 +568,7 @@ class Neo4jClient:
         # verify_connectivity() here would add an unbounded Bolt round trip outside this deadline.
         version, edition = _call_with_timeout(self._server_info, deadline)
         _ensure_supported_server(version)
+        _call_with_timeout(self._assert_read_only_credential, deadline)
         self._probe_cypher_version = _call_with_timeout(
             lambda **kwargs: self._cypher_version(version, **kwargs), deadline
         )
@@ -615,6 +621,39 @@ class Neo4jClient:
         )
         _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts
+
+    def _assert_read_only_credential(self, *, timeout_s: float | None = None) -> None:
+        """Prove that Neo4j itself denies a harmless, EXPLAIN-only write plan."""
+
+        def probe() -> object:
+            with self._driver.session(
+                database=self._profile.database,
+                default_access_mode=neo4j.WRITE_ACCESS,
+            ) as session:
+                query = (
+                    neo4j.Query(WRITE_PRIVILEGE_PROBE, timeout=timeout_s)
+                    if timeout_s is not None
+                    else WRITE_PRIVILEGE_PROBE
+                )
+                result = session.run(query)
+                consume = getattr(result, "consume", None)
+                return consume() if callable(consume) else None
+
+        try:
+            _timed_probe_request(self, probe)
+        except Exception as exc:
+            mapped = map_neo4j_error(exc, self._profile)
+            if mapped.error.code == "neo4j.permission_denied":
+                return
+            raise mapped from exc
+        raise GraphCheckError(
+            "neo4j.credential_not_read_only",
+            "The configured Neo4j credential can plan a write query and is not "
+            "server-enforced read-only.",
+            "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE) on "
+            "the configured database, update `user` and its password in profiles.yml, then "
+            "run `graphcheck debug` again.",
+        )
 
     def _server_info(self, *, timeout_s: float | None = None) -> tuple[str, str]:
         rows = _run_read_with_timeout(
@@ -1273,10 +1312,17 @@ def _is_apoc_absent_error(exc: GraphCheckError) -> bool:
     )
 
 
-def map_neo4j_error(exc: Exception) -> GraphCheckError:
+def map_neo4j_error(exc: Exception, profile: ConnectionProfile | None = None) -> GraphCheckError:
     name = exc.__class__.__name__
+    causes: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        causes.extend((current.__class__.__name__, str(current)))
+        current = current.__cause__ or current.__context__
     message = str(exc)
-    lowered = message.lower()
+    lowered = " ".join(causes).lower()
     neo4j_code = str(getattr(exc, "code", "")).lower()
     if "transactiontimedout" in neo4j_code or ("transaction" in lowered and "timed out" in lowered):
         return GraphCheckTimeoutError(
@@ -1284,29 +1330,48 @@ def map_neo4j_error(exc: Exception) -> GraphCheckError:
             "Neo4j timed out the read-only query before it completed.",
             "Narrow the check, enable sampling, or increase the run time budget.",
         )
-    if name in {"AuthError", "TokenExpired"}:
+    if name in {"AuthError", "TokenExpired"} or "security.unauthorized" in neo4j_code:
         return GraphCheckError(
             "neo4j.auth_failed",
             "Neo4j rejected the configured credentials.",
-            "Edit profiles.yml with the password from Neo4j Desktop, then run `graphcheck debug`.",
+            "Update `user` and `password`/`password_env` in profiles.yml, then run "
+            "`graphcheck debug` again.",
+        )
+    tls_tokens = ("ssl", "tls", "certificate", "encrypted connection", "handshake")
+    connection_error = name in {"ServiceUnavailable", "SessionExpired"} or any(
+        token in lowered for token in ("sslerror", "sslcertverificationerror", "boltsecurityerror")
+    )
+    if profile is not None and connection_error and any(token in lowered for token in tls_tokens):
+        return GraphCheckError(
+            "neo4j.tls_mismatch",
+            "The Neo4j endpoint's TLS mode or certificate does not match the configured URI.",
+            "Use `bolt://` for a direct non-TLS local server, `neo4j+s://` for CA-signed TLS, "
+            "or `neo4j+ssc://` for an explicitly trusted self-signed endpoint; then run "
+            "`graphcheck debug` again.",
+        )
+    if "database.databasenotfound" in neo4j_code or (
+        "database" in lowered
+        and ("not found" in lowered or "does not exist" in lowered or "unavailable" in lowered)
+    ):
+        database = profile.database if profile is not None else "configured"
+        return GraphCheckError(
+            "neo4j.database_not_found",
+            f"Neo4j database {database!r} was not found or is unavailable.",
+            "Set `database` in profiles.yml to an existing online database (often `neo4j`), "
+            "or create/start that database, then run `graphcheck debug` again.",
         )
     if name in {"ServiceUnavailable", "SessionExpired"}:
         return GraphCheckError(
             "neo4j.unreachable",
             "Neo4j is unreachable at the configured Bolt URI.",
-            "Start Neo4j Desktop, check the Bolt URI in profiles.yml, then run `graphcheck debug`.",
-        )
-    if "database" in lowered and ("not found" in lowered or "does not exist" in lowered):
-        return GraphCheckError(
-            "neo4j.database_not_found",
-            "The configured Neo4j database was not found.",
-            "Update the database in profiles.yml, or create/start that database in Neo4j.",
+            "Start Neo4j, verify the host and port in `uri`, then run `graphcheck debug` again.",
         )
     if "security.forbidden" in neo4j_code or "permission" in lowered or "forbidden" in lowered:
         return GraphCheckError(
             "neo4j.permission_denied",
             "Neo4j denied a read or probe query for the configured user.",
-            "Grant read/procedure access to the user, then run `graphcheck debug`.",
+            "Grant the dedicated user ACCESS plus MATCH (or READ/TRAVERSE) on the configured "
+            "database, then run `graphcheck debug` again.",
         )
     return GraphCheckError(
         "neo4j.query_failed",

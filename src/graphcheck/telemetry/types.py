@@ -146,6 +146,8 @@ class SafeErrorCode(StrEnum):
     NEO4J_AUTH_FAILED = "neo4j.auth_failed"
     NEO4J_PERMISSION_DENIED = "neo4j.permission_denied"
     NEO4J_DATABASE_NOT_FOUND = "neo4j.database_not_found"
+    NEO4J_TLS_MISMATCH = "neo4j.tls_mismatch"
+    NEO4J_CREDENTIAL_NOT_READ_ONLY = "neo4j.credential_not_read_only"
     NEO4J_QUERY_FAILED = "neo4j.query_failed"
     PROJECT_MISSING = "project.missing"
     CONFIG_INVALID = "config.invalid"

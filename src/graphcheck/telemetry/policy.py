@@ -258,6 +258,7 @@ _ERROR_CODE_MAP.update(
     {
         "profile.not_found": SafeErrorCode.PROFILE_INVALID,
         "profile.password_missing": SafeErrorCode.PROFILE_INVALID,
+        "profile.uri_invalid": SafeErrorCode.PROFILE_INVALID,
         "profile.counts_unavailable": SafeErrorCode.PROFILE_COLLECTION_FAILED,
         "baseline.not_found": SafeErrorCode.BASELINE_MISSING,
         "baseline.current_missing": SafeErrorCode.BASELINE_MISSING,
