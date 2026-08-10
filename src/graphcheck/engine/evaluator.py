@@ -512,7 +512,7 @@ def _require_schema(compiled: CompiledCheck, row: Mapping[str, Any]) -> None:
     detail = ", ".join(missing) or "an unknown graph schema token"
     raise GraphCheckError(
         "engine.schema_reference_missing",
-        f"Check {compiled.check.id!r} references {detail}.",
+        f"Check {compiled.check.id!r} has nothing to evaluate because it references {detail}.",
         "Correct the label/type in the suite or run it against the intended graph.",
     )
 

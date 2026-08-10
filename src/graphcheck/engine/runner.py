@@ -87,6 +87,22 @@ from graphcheck.telemetry.policy import (
 
 _ProgressCallback = Callable[[int, int, str], None]
 
+_CAPABILITY_FIXES = {
+    "apoc": "Install APOC for this Neo4j DBMS, restart Neo4j, then rerun GraphCheck.",
+    "count_store": "Enable count-store support for this check, then rerun GraphCheck.",
+    "store_consistency": (
+        "Run Neo4j's offline consistency checker or install a connector that exposes a "
+        "read-only relationship-store consistency probe."
+    ),
+}
+
+
+def _deadline_reason(seconds: float) -> str:
+    return (
+        f"the {seconds:g}-second run budget was exhausted. Fix: select fewer checks, narrow "
+        "expensive queries, or enable sampling, then rerun."
+    )
+
 
 @dataclass(frozen=True)
 class SuiteInput:
@@ -493,9 +509,19 @@ class Engine:
                     check.id,
                 )
                 rendered = ", ".join(missing_capabilities)
+                fixes = list(
+                    dict.fromkeys(
+                        _CAPABILITY_FIXES.get(
+                            capability,
+                            f"Enable the `{capability}` capability, then rerun GraphCheck.",
+                        )
+                        for capability in missing_capabilities
+                    )
+                )
                 _append_once(
                     partial_reasons,
-                    f"check {suite_id}/{check.id} requires missing capability: {rendered}",
+                    f"check {suite_id}/{check.id} requires missing capability: {rendered}. "
+                    f"Fix: {' '.join(fixes)}",
                 )
                 self._add_partial_code(PartialReasonCode.UNSUPPORTED_CHECK)
                 return False
@@ -508,7 +534,7 @@ class Engine:
                 )
                 _append_once(
                     partial_reasons,
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                 )
                 self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
                 return False
@@ -558,7 +584,7 @@ class Engine:
                 if self._monotonic() >= deadline:
                     _append_once(
                         partial_reasons,
-                        f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                        _deadline_reason(self.config.time_budget_s),
                     )
                     self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
         else:
@@ -614,7 +640,7 @@ class Engine:
             if runnable and self._monotonic() >= deadline:
                 _append_once(
                     partial_reasons,
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                 )
                 self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
 
@@ -844,7 +870,7 @@ class Engine:
             if self._monotonic() >= deadline:
                 return (
                     _skipped_result(check, suite_id, SkipReason.NOT_RUN),
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                     _CheckTimings(),
                 )
             return self._run_check(

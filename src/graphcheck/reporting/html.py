@@ -370,6 +370,7 @@ def _status_overview(
     details_body = (
         "".join(details_rows) if details_rows else _empty_issue_summary(results, filtered=filtered)
     )
+    diagnostics = _run_diagnostics(results)
 
     return (
         '<section id="report-overview" class="card panel-section">'
@@ -393,6 +394,7 @@ def _status_overview(
         "    </div>"
         "  </div>"
         '  <div class="scrollable-content">'
+        f"    {diagnostics}"
         f'    <div class="suite-status-list">{suite_body}</div>'
         '    <div class="summary-toggle-wrapper">'
         '      <button id="toggle-summary-btn" class="btn-summary-toggle">'
@@ -414,6 +416,37 @@ def _status_overview(
         '    <button id="explore-checks-btn" class="btn-primary">Explore Checks &rarr;</button>'
         "  </div>"
         "</section>"
+    )
+
+
+def _run_diagnostics(results: Results) -> str:
+    messages: list[tuple[str, str]] = []
+    if results.run.partial_reason is not None:
+        messages.append(("Partial reason", results.run.partial_reason))
+    if not any(check.executed for check in results.checks):
+        messages.append(
+            (
+                "Nothing to evaluate",
+                "No selected checks executed. Adjust the selection or resolve the reported "
+                "skip reasons, then rerun.",
+            )
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        messages.append(
+            (
+                "Empty graph",
+                "Checks were evaluated against zero nodes and relationships; load data if this "
+                "was unexpected.",
+            )
+        )
+    return "".join(
+        '<div class="callout callout-diagnostic">'
+        f"<strong>{_escape(title)}</strong><p>{_escape(message)}</p></div>"
+        for title, message in messages
     )
 
 
@@ -1215,6 +1248,7 @@ p.text-muted { margin-top: 0; }
 .text-center { text-align: center; }
 .meta-sub { font-size: 12px; color: var(--text-muted); }
 .callout { padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+.callout-diagnostic { background: var(--bg-subtle); border: 1px solid var(--border); }
 .callout-error { background: var(--fail-bg); border: 1px solid rgba(239, 68, 68, 0.3); }
 .kind-tag { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; font-size: 11px; }
 
