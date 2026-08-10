@@ -158,7 +158,7 @@ def _report_explorer(results: Results) -> str:
         "    </details>"
         "  </div>"
         '  <div class="panel-footer explorer-footer">'
-        '    <p id="report-explorer-status" class="explorer-status" aria-live="polite"></p>'
+        '    <div id="report-explorer-status" class="explorer-status" aria-live="polite"></div>'
         '    <div class="explorer-comparison-actions">'
         '      <button id="compare-reports-btn" class="btn-secondary" '
         'type="button" disabled>Compare Selected</button>'
@@ -173,6 +173,19 @@ def _report_explorer(results: Results) -> str:
         '    <button id="close-comparison-btn" class="dialog-close" type="button" aria-label="Close Comparison">×</button>'
         "  </div>"
         '  <pre id="report-comparison-content" tabindex="0"></pre>'
+        "</dialog>"
+        '<dialog id="report-missing-dialog" class="comparison-dialog report-missing-dialog">'
+        '  <div class="comparison-dialog-header">'
+        '    <div class="report-missing-title">'
+        "      <h2>Report Not Found</h2>"
+        '      <p id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span> could not be found or opened.</p>'
+        "    </div>"
+        '    <button id="close-report-missing-btn" class="dialog-close" type="button" '
+        'aria-label="Close Report Missing">×</button>'
+        "  </div>"
+        '  <div class="report-missing-content">'
+        "    <p><strong>Next step:</strong> Select another report from history or regenerate the missing report.</p>"
+        "  </div>"
         "</dialog>"
         '<dialog id="delete-confirmation-dialog" class="confirmation-dialog">'
         "  <h2>Are you sure?</h2>"
@@ -1068,9 +1081,11 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .report-meta { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; line-height: 1.35; }
 .report-status { text-transform: capitalize; }
 .explorer-footer { flex-direction: column; align-items: stretch; gap: 6px; margin-top: 5px; margin-bottom: 0; padding-top: 5px; padding-bottom: 0; border-bottom: 0; }
-.explorer-status { min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.explorer-status { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
 .explorer-status:empty { display: none; }
 .explorer-status.error { color: var(--fail-color); }
+.explorer-status-message { min-width: 0; flex: 1; }
+.explorer-status-dismiss { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
 .explorer-selection-actions { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .explorer-comparison-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .explorer-selection-actions button, .explorer-comparison-actions button { width: 100%; min-width: 0; }
@@ -1082,6 +1097,12 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .dialog-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 24px; line-height: 1; cursor: pointer; }
 .dialog-close:hover { background: var(--bg-subtle); color: var(--text-main); }
 #report-comparison-content { max-height: calc(100vh - 130px); margin: 0; padding: 18px; overflow: auto; background: var(--bg-card); color: var(--text-main); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.report-missing-dialog { width: min(520px, calc(100vw - 32px)); }
+.report-missing-title { min-width: 0; }
+.report-missing-title p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.report-missing-name { color: var(--fail-color); font-weight: 400; }
+.report-missing-content { padding: 18px; border-top: 1px solid var(--border); }
+.report-missing-content p { margin: 0; color: var(--text-main); font-size: 13px; line-height: 1.5; }
 .comparison-status-complete, .comparison-delta-positive { color: var(--pass-color); font-weight: 700; }
 .comparison-status-partial { color: var(--errored-color); font-weight: 700; }
 .comparison-status-failed, .comparison-delta-negative { color: var(--fail-color); font-weight: 700; }
@@ -1308,8 +1329,21 @@ const REPORT_EXPLORER_TOKEN = document.querySelector('meta[name="graphcheck-expl
 function setReportExplorerStatus(message, error = false) {
   const status = document.getElementById('report-explorer-status');
   if (!status) return;
-  status.textContent = message;
+  status.replaceChildren();
   status.classList.toggle('error', error);
+  if (!message) return;
+  const text = document.createElement('span');
+  text.className = 'explorer-status-message';
+  text.textContent = message;
+  status.appendChild(text);
+  if (!error) return;
+  const dismiss = document.createElement('button');
+  dismiss.className = 'explorer-status-dismiss';
+  dismiss.type = 'button';
+  dismiss.setAttribute('aria-label', 'Dismiss report error');
+  dismiss.textContent = '×';
+  dismiss.addEventListener('click', () => setReportExplorerStatus(''));
+  status.appendChild(dismiss);
 }
 
 function reportHref(runId) {
@@ -1366,6 +1400,7 @@ function applyReport(report, historyMode = 'push') {
   const explorer = document.getElementById('report-explorer');
   if (explorer) explorer.dataset.currentReport = report.id;
   updateCurrentReportRow(report.id);
+  closeReportMissingDialog();
   requestAnimationFrame(() => window.scrollTo(scrollPosition.x, scrollPosition.y));
 }
 
@@ -1385,7 +1420,7 @@ async function navigateReport(href, historyMode = 'push') {
     applyReport(payload.report, historyMode);
   } catch (error) {
     if (error.name !== 'AbortError' && requestSequence === reportNavigationSequence) {
-      setReportExplorerStatus(error.message, true);
+      openReportMissingDialog(runId);
     }
   } finally {
     if (requestSequence === reportNavigationSequence) setReportNavigationLoading(false);
@@ -1604,6 +1639,24 @@ function openComparisonDialog(message) {
   content.focus();
 }
 
+function openReportMissingDialog(reportName) {
+  const dialog = document.getElementById('report-missing-dialog');
+  const diagnostic = document.getElementById('report-missing-diagnostic');
+  if (!dialog || !diagnostic) return;
+  const name = document.createElement('span');
+  name.className = 'report-missing-name';
+  name.textContent = reportName || 'Selected report';
+  diagnostic.replaceChildren(name, ' could not be found or opened.');
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+function closeReportMissingDialog() {
+  const dialog = document.getElementById('report-missing-dialog');
+  if (typeof dialog?.close === 'function' && dialog.open) dialog.close();
+  else dialog?.removeAttribute('open');
+}
+
 function clearReportSelection() {
   selectedReportIds.clear();
   document.querySelectorAll('.report-select').forEach(checkbox => checkbox.checked = false);
@@ -1695,7 +1748,8 @@ async function initReportExplorer() {
     renderReportHistory(payload.reports || [], true);
     window.setInterval(() => reportExplorerRequest('/api/ping').catch(() => {}), 30000);
   } catch (error) {
-    setReportExplorerStatus(error.message, true);
+    const current = new URLSearchParams(window.location.search).get('id');
+    openReportMissingDialog(current || document.getElementById('report-explorer')?.dataset.currentReport);
   }
 }
 
@@ -1993,6 +2047,7 @@ function initInteractions() {
     if (typeof dialog?.close === 'function') dialog.close();
     else dialog?.removeAttribute('open');
   });
+  document.getElementById('close-report-missing-btn')?.addEventListener('click', closeReportMissingDialog);
 
   document.addEventListener('click', handleReportLinkClick);
   window.addEventListener('popstate', () => navigateReport(window.location.href, 'none'));

@@ -486,6 +486,26 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "#delete-reports-btn {" not in html
     assert ".explorer-scroll { margin-top: 20px; }" in html
     assert ".explorer-status:empty { display: none; }" in html
+    assert 'class="explorer-status" aria-live="polite"></div>' in html
+    assert ".explorer-status-dismiss {" in html
+    assert "status.replaceChildren();" in html
+    assert "dismiss.setAttribute('aria-label', 'Dismiss report error');" in html
+    assert "dismiss.addEventListener('click', () => setReportExplorerStatus(''));" in html
+    assert 'id="report-missing-dialog" class="comparison-dialog report-missing-dialog"' in html
+    assert "<h2>Report Not Found</h2>" in html
+    diagnostic = (
+        'id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span>'
+    )
+    assert f"{diagnostic} could not be found or opened." in html
+    assert ".report-missing-name { color: var(--fail-color); font-weight: 400; }" in html
+    assert "<strong>Next step:</strong> Select another report from history" in html
+    assert "name.textContent = reportName || 'Selected report';" in html
+    assert "name.className = 'report-missing-name';" in html
+    assert "diagnostic.replaceChildren(name, ' could not be found or opened.');" in html
+    assert "function closeReportMissingDialog()" in html
+    assert "closeReportMissingDialog();" in html
+    assert "openReportMissingDialog(runId);" in html
+    assert "close-report-missing-btn')?.addEventListener('click', closeReportMissingDialog)" in html
     comparison_dialog_start = html.index(".comparison-dialog {")
     comparison_dialog_css = html[comparison_dialog_start : html.index("}", comparison_dialog_start)]
     assert "overflow: hidden;" in comparison_dialog_css
