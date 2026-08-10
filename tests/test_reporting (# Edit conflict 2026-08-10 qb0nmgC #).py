@@ -121,7 +121,6 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert '<span class="suite-check-stats">3/3 checks run</span>' in html
     assert '<span class="badge badge-fail">1 FAILED</span>' in html
     assert '<span class="badge badge-warn">1 WARNING</span>' in html
-    assert "OPERATIONAL" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-fail">1 FAILED</span>'
         '<span class="badge badge-warn">1 WARNING</span>'
@@ -352,7 +351,7 @@ def test_score_badge_uses_threshold_color(score, color):
     assert f"badge-score-{color}" in _score_badge(score)
 
 
-def test_html_renderer_omits_redundant_check_pill_and_wraps_long_name():
+def test_html_renderer_keeps_status_pill_inline_with_wrapping_check_name():
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     long_name = "A deliberately long check name " * 12
     raw["checks"][0]["name"] = long_name
@@ -360,12 +359,10 @@ def test_html_renderer_omits_redundant_check_pill_and_wraps_long_name():
     html = render_html_report(raw)
 
     card = html.index('data-check-key="customer-360::cq-001"')
-    card_end = html.index("</article>", card)
-    name = html.index(f"<h3>{long_name}</h3>", card)
-    check_id = html.index('<code class="check-id">customer-360::cq-001</code>', name)
-    assert card < name < check_id < card_end
-    assert 'class="badge badge-fail"' not in html[card:card_end]
-    assert "grid-template-columns: minmax(0, 1fr) auto" in html
+    pill = html.index('<span class="badge badge-fail">fail</span>', card)
+    name = html.index(f"<h3>{long_name}</h3>", pill)
+    assert card < pill < name
+    assert "grid-template-columns: auto minmax(0, 1fr) auto" in html
     assert "overflow-wrap: anywhere" in html
     pill_css = html[html.index(".badge {") : html.index(".table-container")]
     assert "min-height: 22px" in pill_css

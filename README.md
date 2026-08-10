@@ -163,6 +163,7 @@ graphcheck run --profile staging
 graphcheck run --suite customer-health
 graphcheck run --select tag:production
 graphcheck run --suite customer-health --select tag:production --fail-fast
+graphcheck run --redacted
 ```
 
 `--suite` and `--select` are repeatable. Repeated tag selectors use OR semantics. `--fail-fast`
@@ -182,6 +183,24 @@ Every prepared run writes:
 interaction script and has no external assets or network calls, so it can be opened and shared
 offline. The run-id directory preserves history; `latest` is a consistently published convenience
 copy of the newest run.
+
+Use `graphcheck run --redacted` when the generated artifacts will be shared. Mask mode preserves
+verdicts, scores, run-level counts, keys, and container structure while replacing query text,
+parameter, expected, and measured literals, plus evidence messages/element values, with
+`[REDACTED]`. Every mask-mode JSON and HTML write is verified before export. To create a safe
+sidecar from an existing run:
+
+Redacted HTML reports omit all target metadata and graph counts. Check cards show the pattern under
+the check name and omit the details/evidence toggle and its Expected, Measured, and Compiled Cypher
+sections.
+
+```console
+graphcheck redact .graphcheck/runs/<run-id>/results.json
+graphcheck redact .graphcheck/runs/<run-id> --output export/results.json
+```
+
+Without `--output`, the command writes `results.redacted.json` beside the source and never
+overwrites the original.
 
 ## Exit codes
 

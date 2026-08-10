@@ -63,7 +63,13 @@ Every model forbids unknown keys (`extra="forbid"`).
 4. **Estimates are labeled** (`estimate:false` = exact, else `{sample_size, population, confidence, ci}`). `errored`/`skipped` are never estimates.
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
 6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. Rounding applies to the exact rational value using **half-to-even**, without an intermediate floating-point value. Weights are locked. The overall score is computed directly from all checks, never by averaging rounded suite scores. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
-7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry graph element IDs or aggregate measurement-scope IDs plus labels/types only; `compiled_query` keeps placeholders.
+7. **Redaction** enum `none | mask | hash` is frozen. Normal runs emit
+   `{policy:"none", applied:false}`. `graphcheck run --redacted` and `graphcheck redact` emit
+   `{policy:"mask", applied:true}` after replacing compiled query text, all `params`, `expected`,
+   and `measured` leaves, evidence messages, and evidence element IDs/labels/types with
+   `[REDACTED]`. Keys, containers, verdicts, scores, and run-level counts are preserved. The
+   canonical JSON and HTML writers verify every artifact declaring mask mode and refuse an export
+   containing an unmasked value on those literal surfaces. `hash` remains reserved.
 
 Evidence pointer `kind` is `node`, `rel`, or `aggregate`. An `aggregate` pointer identifies a
 canonical metric/target scope such as `node_count:label=Customer`; it is not a Neo4j element ID.
