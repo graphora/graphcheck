@@ -1142,6 +1142,23 @@ def test_wrong_database_diagnostic_names_selected_database():
     assert "database" in mapped.error.fix
 
 
+def test_database_unavailable_driver_code_maps_to_wrong_database():
+    failure = type(
+        "TransientError",
+        (Exception,),
+        {"code": "Neo.TransientError.General.DatabaseUnavailable"},
+    )("database unavailable")
+
+    assert map_neo4j_error(failure).error.code == "neo4j.database_not_found"
+
+
+def test_apoc_unavailable_wording_is_not_mapped_to_wrong_database():
+    mapped = map_neo4j_error(Exception("Procedure apoc.version is unavailable in this database"))
+
+    assert mapped.error.code == "neo4j.query_failed"
+    assert _is_apoc_absent_error(mapped) is True
+
+
 def test_transaction_timeout_error_has_an_actionable_timeout_fix():
     error_type = type(
         "ClientError",

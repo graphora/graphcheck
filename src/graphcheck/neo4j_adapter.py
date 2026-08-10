@@ -1346,6 +1346,7 @@ def _is_apoc_absent_error(exc: GraphCheckError) -> bool:
         or "procedure not found" in message
         or "unknown procedure" in message
         or "not registered" in message
+        or "unavailable" in message
     )
 
 
@@ -1386,9 +1387,11 @@ def map_neo4j_error(exc: Exception, profile: ConnectionProfile | None = None) ->
             "or `neo4j+ssc://` for an explicitly trusted self-signed endpoint; then run "
             "`graphcheck debug` again.",
         )
-    if "database.databasenotfound" in neo4j_code or (
-        "database" in lowered
-        and ("not found" in lowered or "does not exist" in lowered or "unavailable" in lowered)
+    database_code_error = "database" in neo4j_code and any(
+        token in neo4j_code for token in ("notfound", "unavailable")
+    )
+    if database_code_error or (
+        "database" in lowered and ("not found" in lowered or "does not exist" in lowered)
     ):
         database = profile.database if profile is not None else "configured"
         return GraphCheckError(
