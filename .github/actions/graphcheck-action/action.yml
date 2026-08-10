@@ -33,6 +33,7 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Python
+      if: inputs.version != ''
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
