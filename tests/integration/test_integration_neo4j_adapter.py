@@ -21,6 +21,13 @@ pytestmark = pytest.mark.skipif(
 runner = CliRunner()
 
 
+def _write_cli_profile(tmp_path, name, profile):
+    profiles = ProfilesFile(default=name, profiles={name: profile})
+    (tmp_path / PROFILES_FILE).write_text(
+        yaml.safe_dump(profiles.model_dump(), sort_keys=False), encoding="utf-8"
+    )
+
+
 def test_connect_and_probe(neo4j_profile, neo4j_test_target):
     client = Neo4jClient(neo4j_profile)
     try:
@@ -75,16 +82,40 @@ def test_read_classification_cache_key_does_not_include_parameters(neo4j_profile
     assert (info.hits, info.misses, info.size) == (1, 1, 1)
 
 
+def test_community_debug_and_run_succeed_end_to_end(neo4j_profile, tmp_path, monkeypatch):
+    write_default_project(tmp_path)
+    (tmp_path / "checks" / "community-smoke.yml").write_text(
+        """suite: community-smoke
+competency:
+  - id: connection-alive
+    question: Is the Community database queryable?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+        encoding="utf-8",
+    )
+    _write_cli_profile(tmp_path, "community", neo4j_profile)
+    monkeypatch.chdir(tmp_path)
+
+    debug_result = runner.invoke(app, ["debug", "--json"])
+    run_result = runner.invoke(app, ["run", "--suite", "community-smoke"])
+
+    assert debug_result.exit_code == 0, debug_result.output
+    assert json.loads(debug_result.stdout)["target"]["edition"] == "community"
+    assert run_result.exit_code == 0, run_result.output
+    payload = json.loads(
+        (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(encoding="utf-8")
+    )
+    assert payload["run"]["status"] == "complete"
+    assert payload["run"]["exit_code"] == 0
+
+
 def test_restricted_user_real_probe_reports_blocked_read_check(
     neo4j_restricted_profile, tmp_path, monkeypatch
 ):
     write_default_project(tmp_path)
     write_example_suite(tmp_path)
-    profiles = ProfilesFile(default="restricted", profiles={"restricted": neo4j_restricted_profile})
-    (tmp_path / PROFILES_FILE).write_text(
-        yaml.safe_dump(profiles.model_dump(), sort_keys=False),
-        encoding="utf-8",
-    )
+    _write_cli_profile(tmp_path, "restricted", neo4j_restricted_profile)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["debug", "--json"])
@@ -98,6 +129,40 @@ def test_restricted_user_real_probe_reports_blocked_read_check(
         blocked["check_id"] == "customer-name-present" and blocked["missing_capability"] == "read"
         for blocked in payload["blocked_checks"]
     )
+
+
+def test_debug_rejects_real_write_capable_admin_credential(
+    neo4j_enterprise_profiles, tmp_path, monkeypatch
+):
+    write_default_project(tmp_path)
+    write_example_suite(tmp_path)
+    admin = neo4j_enterprise_profiles["neo4j_admin"]
+    _write_cli_profile(tmp_path, "admin", admin)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "neo4j.credential_not_read_only"
+    assert payload["error"]["fix"]
+
+
+def test_debug_rejects_real_custom_boosted_and_administrative_role(
+    neo4j_enterprise_profiles, tmp_path, monkeypatch
+):
+    write_default_project(tmp_path)
+    write_example_suite(tmp_path)
+    boosted = neo4j_enterprise_profiles["graphcheck_boosted"]
+    _write_cli_profile(tmp_path, "boosted", boosted)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "neo4j.credential_not_read_only"
+    assert "BOOSTED" in payload["error"]["message"]
 
 
 def test_home_graph_grant_and_scoped_denial_use_resolved_home_database(

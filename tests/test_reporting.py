@@ -431,6 +431,33 @@ def test_html_renderer_displays_unreachable_neo4j_as_failed():
     assert "Start Neo4j and verify the configured URI." in html
 
 
+@pytest.mark.parametrize(
+    ("code", "message", "fix"),
+    [
+        ("neo4j.auth_failed", "Credentials rejected.", "Update the password."),
+        ("neo4j.database_not_found", "Database missing.", "Select an online database."),
+        ("profile.password_missing", "Password missing.", "Set password_env."),
+        ("profile.uri_invalid", "URI scheme invalid.", "Use bolt:// or neo4j+s://."),
+        ("neo4j.tls_mismatch", "TLS mode mismatch.", "Match the URI scheme to TLS."),
+        (
+            "neo4j.credential_not_read_only",
+            "Credential is write-capable.",
+            "Use a server-enforced read-only user.",
+        ),
+    ],
+)
+def test_html_renderer_shows_actionable_connection_diagnostic(code, message, fix):
+    raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
+    raw["run"]["error"] = {"code": code, "message": message, "fix": fix}
+
+    html = render_html_report(raw)
+
+    assert '<section class="callout callout-error run-diagnostic"' in html
+    assert "Action required" in html
+    assert message in html
+    assert f"<strong>Fix:</strong> {fix}" in html
+
+
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
     html = render_html_report(
         _fixture("complete"),

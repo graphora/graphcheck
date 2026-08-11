@@ -696,6 +696,45 @@ competency:
     assert client.closed is True
 
 
+def test_run_rejects_write_capable_credential_and_reports_visible_fix(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "suite.yml": """\
+suite: audit
+competency:
+  - id: readable
+    question: Is the graph readable?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class WriteCapableClient(FakeClient):
+        def verify_read_only_credential(self):
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "The credential has WRITE.",
+                "Use a dedicated read-only user.",
+            )
+
+    client = WriteCapableClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 3
+    assert _payload(tmp_path)["run"]["error"]["code"] == "neo4j.credential_not_read_only"
+    report = (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Action required" in report
+    assert "Use a dedicated read-only user." in report
+    assert client.read_calls == []
+
+
 def test_run_connection_failure_keeps_root_error_when_artifact_write_fails(tmp_path, monkeypatch):
     _project(tmp_path, {})
     client = FakeClient(

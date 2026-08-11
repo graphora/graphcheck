@@ -392,11 +392,13 @@ def init() -> None:
 
     typer.secho(f"Wrote {PROJECT_FILE}", fg=typer.colors.GREEN)
     typer.secho("Wrote profiles.yml", fg=typer.colors.GREEN)
+    typer.secho("Profile setup help is included in profiles.yml", fg=typer.colors.CYAN)
     typer.secho("Wrote checks/example.yml with 3 sample checks", fg=typer.colors.GREEN)
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
     probe_started = time.monotonic()
+    connected = False
     try:
         trace = init_trace(profile_name, profile)
     except GraphCheckError as exc:
@@ -408,7 +410,20 @@ def init() -> None:
         typer.secho(f"Neo4j was not detected: {exc.error.code}", fg=typer.colors.YELLOW)
         typer.secho(exc.error.message, fg=typer.colors.YELLOW)
         typer.secho(f"Fix: {exc.error.fix}", fg=typer.colors.CYAN)
+    except Exception as exc:
+        if (telemetry := _command_telemetry()) is not None:
+            telemetry.record_probe(started_perf=probe_started, outcome=EventOutcome.ERROR)
+        typer.secho("Neo4j was not detected: init.internal_error", fg=typer.colors.YELLOW)
+        typer.secho(
+            "GraphCheck could not complete the connection diagnostic.", fg=typer.colors.YELLOW
+        )
+        typer.secho(
+            "Fix: Run `graphcheck debug --json`; if the problem persists, report the JSON "
+            f"error and GraphCheck version. ({type(exc).__name__})",
+            fg=typer.colors.CYAN,
+        )
     else:
+        connected = True
         if (telemetry := _command_telemetry()) is not None:
             telemetry.record_probe(
                 started_perf=probe_started,
@@ -423,7 +438,14 @@ def init() -> None:
             f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}",
             fg=typer.colors.GREEN if trace.target.capabilities.apoc else typer.colors.YELLOW,
         )
-    typer.secho("Next: edit checks/example.yml, then run `graphcheck run`", fg=typer.colors.CYAN)
+    typer.secho(
+        (
+            "Next: edit checks/example.yml, then run `graphcheck run`"
+            if connected
+            else "Next: apply the fix above, then run `graphcheck debug`"
+        ),
+        fg=typer.colors.CYAN,
+    )
 
 
 @app.command()
@@ -432,7 +454,7 @@ def debug(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
     json_output: bool = typer.Option(False, "--json", help="Emit the stable debug JSON trace."),
 ) -> None:
-    """Diagnose the configured Neo4j connection."""
+    """Diagnose Neo4j connectivity and apply the edition-specific read-only policy."""
     from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
     from graphcheck.errors import GraphCheckError
     from graphcheck.neo4j_adapter import error_json
@@ -477,6 +499,22 @@ def debug(
         else:
             typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
             typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        from graphcheck.contracts.results import CheckError
+
+        error = CheckError(
+            code="debug.internal_error",
+            message="GraphCheck could not complete the connection diagnostic.",
+            fix="Run `graphcheck debug --json`; if the problem persists, report the JSON error "
+            "and GraphCheck version.",
+        )
+        payload = error_json(profile_name, error)
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            typer.echo(f"{error.code}: {error.message}", err=True)
+            typer.echo(f"Fix: {error.fix}", err=True)
         raise typer.Exit(1) from exc
 
     if json_output:
@@ -1591,6 +1629,7 @@ def run_command(
         _, selected_profile = select_profile(profiles, profile)
         max_concurrency = concurrency or int(config.concurrency)
         client = _new_neo4j_client(selected_profile, max_concurrency)
+        _verify_cli_audit_credential(client)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
@@ -1796,6 +1835,15 @@ def _new_neo4j_client(profile, max_concurrency: int):
         if accepts_setting
         else Neo4jClient(profile)
     )
+
+
+def _verify_cli_audit_credential(client: object) -> None:
+    verify = getattr(client, "verify_read_only_credential", None)
+    probe = getattr(client, "probe", None)
+    if callable(verify):
+        if callable(probe):
+            probe()
+        verify()
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
