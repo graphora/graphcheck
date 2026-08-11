@@ -112,14 +112,19 @@ is absent, GraphCheck falls back to `password` when one is configured. For the q
 setup, edit the generated inline `password` value. For CI or shared environments, remove the inline
 value, keep `password_env`, and export that variable in the process that runs GraphCheck.
 
-The account must be a dedicated, server-enforced read-only audit credential. Driver read routing is
-not an authorization boundary. During `init`, `debug`, and the CLI run preflight, GraphCheck reads
-the current user's reported Neo4j privileges and rejects graph-write grants or write-capable
-built-in roles as `neo4j.credential_not_read_only`. If Neo4j cannot return the reported
-privileges, GraphCheck fails closed as `neo4j.credential_read_only_unverified`. Every
-customer-authored query is separately
-planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`, so a write-capable query is
-rejected without modifying the graph.
+On Neo4j Enterprise, the account must be a dedicated, server-enforced read-only audit credential.
+During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
+privileges and permits only database access, graph reads, and non-boosted procedure/function
+execution. Graph writes, boosted execution, schema/database/DBMS administration, and elevated
+built-in roles are rejected as `neo4j.credential_not_read_only`. If Enterprise cannot return the
+reported privileges, GraphCheck fails closed as `neo4j.credential_read_only_unverified`.
+
+Neo4j Community has no roles and gives every user implied administrator privileges, so it cannot
+provide a server-enforced read-only credential. GraphCheck explicitly supports Community by
+skipping the unavailable Enterprise RBAC gate. In both editions, every customer-authored query is
+separately planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`, so a write-capable
+query is rejected without modifying the graph. Driver read routing alone is not an authorization
+boundary.
 
 On Neo4j Enterprise, an administrator can provision the audit role for database `neo4j` with:
 
@@ -131,8 +136,7 @@ GRANT ROLE graphcheck_auditor TO graphcheck_user;
 ```
 
 Create `graphcheck_user` separately with your organization’s password policy, and grant no write,
-schema, DBMS-admin, or broader inherited role. Neo4j Community does not provide the Enterprise RBAC
-needed to create this restricted audit credential.
+boosted execution, schema, database, DBMS-admin, or broader inherited role.
 
 Use `bolt://host:7687` for a direct non-TLS local server. Use `neo4j+s://host:7687` for routing with
 CA-validated TLS (including the URI supplied by Aura), or `neo4j+ssc://host:7687` only when the

@@ -20,19 +20,33 @@ from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
-WRITE_PRIVILEGE_ACTIONS = frozenset(
-    {
-        "ALL GRAPH PRIVILEGES",
-        "CREATE",
-        "DELETE",
-        "MERGE",
-        "REMOVE LABEL",
-        "SET LABEL",
-        "SET PROPERTY",
-        "WRITE",
-    }
-)
 WRITE_CAPABLE_BUILTIN_ROLES = frozenset({"ADMIN", "ARCHITECT", "EDITOR", "PUBLISHER"})
+READ_ONLY_GRAPH_PRIVILEGE_ACTIONS = frozenset({"MATCH", "READ", "TRAVERSE"})
+
+
+def _privilege_field(row: Mapping[str, object], name: str) -> str:
+    return str(row.get(name, "")).replace("_", " ").upper()
+
+
+def _is_allowed_read_only_privilege(row: Mapping[str, object]) -> bool:
+    action = _privilege_field(row, "action")
+    resource = _privilege_field(row, "resource")
+    segment = _privilege_field(row, "segment")
+    if action == "ACCESS":
+        return resource == "DATABASE" and segment == "DATABASE"
+    if action in READ_ONLY_GRAPH_PRIVILEGE_ACTIONS:
+        return resource in {"ALL PROPERTIES", "GRAPH", "PROPERTY"}
+    return (
+        action == "EXECUTE"
+        and resource == "DATABASE"
+        and segment.startswith(("FUNCTION(", "PROCEDURE("))
+    )
+
+
+def _privilege_description(row: Mapping[str, object]) -> str:
+    action = _privilege_field(row, "action") or "UNKNOWN"
+    segment = _privilege_field(row, "segment")
+    return f"{action} {segment}".strip()
 
 
 @dataclass(frozen=True)
@@ -287,6 +301,7 @@ class Neo4jClient:
         self._probe_request_durations_ms: list[int] | None = None
         self._last_probe_metrics: ProbeMetrics | None = None
         self._probe_cypher_version: str | None = None
+        self._probe_edition: str | None = None
         try:
             self._driver = GraphDatabase.driver(
                 profile.uri,
@@ -305,6 +320,7 @@ class Neo4jClient:
         with self._probe_lock:
             self._probe_result = None
             self._probe_cypher_version = None
+            self._probe_edition = None
             if self._probe_inflight is not None:
                 self._probe_inflight.set()
                 self._probe_inflight = None
@@ -573,6 +589,7 @@ class Neo4jClient:
             self._probe_request_durations_ms = None
             self._last_probe_metrics = None
             self._probe_cypher_version = None
+            self._probe_edition = None
         return self._probe_lock
 
     def _probe_live(self, deadline: float | None) -> tuple[RunTarget, Visibility, Counts]:
@@ -580,6 +597,7 @@ class Neo4jClient:
         # verify_connectivity() here would add an unbounded Bolt round trip outside this deadline.
         version, edition = _call_with_timeout(self._server_info, deadline)
         _ensure_supported_server(version)
+        self._probe_edition = edition
         self._probe_cypher_version = _call_with_timeout(
             lambda **kwargs: self._cypher_version(version, **kwargs), deadline
         )
@@ -634,13 +652,19 @@ class Neo4jClient:
         return target, Visibility(True, can_read, can_show_procedures), counts
 
     def verify_read_only_credential(self, *, timeout_s: float | None = None) -> None:
-        """Fail when Neo4j reports any granted graph-write privilege for this user."""
+        """Enforce Enterprise RBAC; Community relies on the per-query planner guard."""
+
+        edition = self._probe_edition
+        if edition is None:
+            _, edition = self._server_info(timeout_s=timeout_s)
+        if edition == "community":
+            return
 
         try:
             rows = _run_read_with_timeout(
                 self,
-                "SHOW USER PRIVILEGES YIELD access, action, graph, role "
-                "RETURN access, action, graph, role",
+                "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment, role "
+                "RETURN access, action, graph, resource, segment, role",
                 timeout_s,
             )
         except GraphCheckError as exc:
@@ -657,12 +681,12 @@ class Neo4jClient:
                 "Allow the user to inspect its own privileges, or use a native Neo4j user with "
                 "only ACCESS and MATCH, then run `graphcheck debug` again.",
             )
-        granted_writes = sorted(
+        disallowed_grants = sorted(
             {
-                str(row.get("action", "")).replace("_", " ").upper()
+                _privilege_description(row)
                 for row in rows
                 if str(row.get("access", "")).upper() == "GRANTED"
-                and str(row.get("action", "")).replace("_", " ").upper() in WRITE_PRIVILEGE_ACTIONS
+                and not _is_allowed_read_only_privilege(row)
             }
         )
         write_roles = sorted(
@@ -672,12 +696,12 @@ class Neo4jClient:
                 if str(row.get("role", "")).upper() in WRITE_CAPABLE_BUILTIN_ROLES
             }
         )
-        if granted_writes or write_roles:
-            details = [*granted_writes, *(f"ROLE {role}" for role in write_roles)]
+        if disallowed_grants or write_roles:
+            details = [*disallowed_grants, *(f"ROLE {role}" for role in write_roles)]
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The configured Neo4j credential has granted write-capable or administrative "
-                "privileges "
+                "The configured Neo4j credential has privileges outside the allowed read-only "
+                "model "
                 f"({', '.join(details)}) and is not server-enforced read-only.",
                 "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE), "
                 "update `user` and its password in profiles.yml, then run `graphcheck debug` "

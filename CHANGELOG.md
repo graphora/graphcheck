@@ -98,6 +98,16 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Added Prometheus metrics exporter.
 - Added reference Prometheus/Grafana monitoring stack.
 - Added Grafana dashboard for database health.
+- Guided `profiles.yml` scaffolding with an editable local password, environment-variable guidance,
+  supported Bolt/TLS URI examples, and edition-specific read-only setup notes so a fresh local
+  install has an actionable path from `graphcheck init` to `graphcheck debug`.
+- Stable connection-profile diagnostics for invalid URIs, TLS/certificate mismatches, unavailable
+  databases, credentials whose Enterprise read-only status cannot be verified, and credentials
+  with privileges outside GraphCheck's explicit read-only model. The new safe error codes are also
+  covered by telemetry policy and report rendering.
+- Live Neo4j integration coverage for Community Edition `debug` and `run`, Enterprise administrator
+  rejection, and custom boosted-procedure/schema-administration rejection across the supported
+  Neo4j/Cypher matrix.
 
 ### Changed
 
@@ -169,6 +179,21 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Recorded reference measurements reduced complete-result serialization median time from
   77.745 ms to 1.701 ms and cold `graphcheck --version` median time from 311.50 ms to 72.49 ms,
   while preserving artifact bytes and command behavior.
+- Profile selection now validates the URI before constructing a driver, treats blank passwords as
+  missing, lets a populated `password_env` override the inline password, and falls back to that
+  inline password when the named environment variable is absent.
+- `graphcheck init` and `graphcheck debug` now convert unexpected probe failures into stable,
+  actionable diagnostics. Init reports whether Neo4j was detected and directs unsuccessful setup
+  to `graphcheck debug`; debug preserves the same error shape in human and JSON output.
+- Init, debug, and run now share a credential preflight. Community Edition follows an explicit
+  planner-guarded policy because it has no RBAC, while Enterprise permits only database access,
+  graph reads, and non-boosted procedure/function execution and fails closed when privilege
+  evidence is unavailable.
+- Neo4j error mapping now considers driver error codes, nested causes, and the selected profile to
+  distinguish authentication, reachability, TLS, permission, query, and database failures and to
+  provide profile-specific remediation.
+- Failed run artifacts and offline HTML reports now retain the root connection or credential
+  diagnostic and show its remediation in an `Action required` callout.
 
 ### Fixed
 
@@ -224,3 +249,14 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Test configuration now isolates telemetry consent, installation identity, process overrides, and
   delivery keys per test, so persisted user configuration cannot construct a real telemetry client
   or change CLI/profile test behavior.
+- Restored the supported Community Edition path by skipping the unavailable Enterprise privilege
+  query after edition probing while retaining the per-query `EXPLAIN` read guard. This also fixes
+  the Community-backed GraphCheck CI smoke job failing setup with exit code 3.
+- Closed the custom-role privilege bypass by inspecting privilege action, resource, and segment and
+  rejecting boosted execution plus graph-write, schema, database, transaction-management, and
+  DBMS-administrative grants instead of relying on built-in role names alone.
+- Run preflight now rejects unsafe or unverifiable Enterprise credentials before any checks execute
+  and preserves the resulting error and fix in `results.json`, console output, and the HTML report.
+- Corrected Neo4j 5/Cypher 5 and current Neo4j/Cypher 25 diagnostics so missing or unavailable APOC
+  procedures remain optional-capability failures, while actual database-not-found/unavailable
+  driver codes continue to map to `neo4j.database_not_found`.

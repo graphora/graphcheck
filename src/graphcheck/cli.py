@@ -450,7 +450,7 @@ def debug(
     profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
     json_output: bool = typer.Option(False, "--json", help="Emit the stable debug JSON trace."),
 ) -> None:
-    """Diagnose Neo4j connectivity and verify the credential is server-enforced read-only."""
+    """Diagnose Neo4j connectivity and apply the edition-specific read-only policy."""
     from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
     from graphcheck.errors import GraphCheckError
     from graphcheck.neo4j_adapter import error_json

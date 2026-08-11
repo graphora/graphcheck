@@ -116,7 +116,7 @@ def neo4j_apoc_profile(neo4j_test_target):
 
 @pytest.fixture(scope="module")
 def neo4j_enterprise_profiles(neo4j_test_target):
-    """Enterprise users covering absent, HOME-granted, and HOME-denied graph access."""
+    """Enterprise users covering restricted, boosted, HOME-granted, and HOME-denied access."""
     from neo4j import GraphDatabase
     from testcontainers.neo4j import Neo4jContainer
 
@@ -135,6 +135,15 @@ def neo4j_enterprise_profiles(neo4j_test_target):
             with driver.session(database="system") as session:
                 statements = [
                     "CREATE USER graphcheck_restricted SET PASSWORD $password CHANGE NOT REQUIRED",
+                    "CREATE USER graphcheck_boosted "
+                    "SET PASSWORD $password CHANGE NOT REQUIRED SET HOME DATABASE neo4j",
+                    "CREATE ROLE graphcheck_boosted_role",
+                    "GRANT ACCESS ON DATABASE neo4j TO graphcheck_boosted_role",
+                    "GRANT MATCH {*} ON GRAPH neo4j ELEMENTS * TO graphcheck_boosted_role",
+                    "GRANT EXECUTE PROCEDURE * ON DBMS TO graphcheck_boosted_role",
+                    "GRANT EXECUTE BOOSTED PROCEDURE * ON DBMS TO graphcheck_boosted_role",
+                    "GRANT INDEX MANAGEMENT ON DATABASE neo4j TO graphcheck_boosted_role",
+                    "GRANT ROLE graphcheck_boosted_role TO graphcheck_boosted",
                     "CREATE USER graphcheck_home_reader "
                     "SET PASSWORD $password CHANGE NOT REQUIRED SET HOME DATABASE neo4j",
                     "CREATE ROLE graphcheck_home_reader_role",
@@ -164,6 +173,7 @@ def neo4j_enterprise_profiles(neo4j_test_target):
             )
             for user in (
                 "graphcheck_restricted",
+                "graphcheck_boosted",
                 "graphcheck_home_reader",
                 "graphcheck_home_denied",
             )

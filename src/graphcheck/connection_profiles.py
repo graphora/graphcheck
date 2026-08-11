@@ -63,7 +63,7 @@ def write_default_profiles(root: Path) -> None:
     (root / PROFILES_FILE).write_text(
         """# Edit the inline password below for the fastest local setup.
 # For CI/production, remove `password` and use `password_env: NEO4J_PASSWORD` instead.
-# Supply a dedicated read-only user; debug validates privileges and EXPLAIN-checks every query.
+# Enterprise: use a dedicated read-only user. Community: EXPLAIN guards every submitted query.
 # Use bolt:// for direct local Bolt, or neo4j+s:// for a CA-signed TLS/routing endpoint.
 default: local
 profiles:

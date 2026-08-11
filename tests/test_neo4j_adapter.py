@@ -78,11 +78,12 @@ def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
     assert captured["max_transaction_retry_time"] == 0.0
 
 
-def _credential_probe_client(rows):
+def _credential_probe_client(rows, *, edition="enterprise"):
     client = object.__new__(Neo4jClient)
     client._profile = ConnectionProfile(
         uri="bolt://localhost:7687", user="auditor", password="pw", database="neo4j"
     )
+    client._probe_edition = edition
     client.run_read = lambda query: rows
     return client
 
@@ -90,8 +91,27 @@ def _credential_probe_client(rows):
 def test_read_only_credential_probe_accepts_access_and_match_only():
     _credential_probe_client(
         [
-            {"access": "GRANTED", "action": "ACCESS", "graph": "neo4j"},
-            {"access": "GRANTED", "action": "MATCH", "graph": "neo4j"},
+            {
+                "access": "GRANTED",
+                "action": "ACCESS",
+                "graph": "neo4j",
+                "resource": "database",
+                "segment": "database",
+            },
+            {
+                "access": "GRANTED",
+                "action": "MATCH",
+                "graph": "neo4j",
+                "resource": "all_properties",
+                "segment": "NODE(*)",
+            },
+            {
+                "access": "GRANTED",
+                "action": "execute",
+                "graph": "*",
+                "resource": "database",
+                "segment": "PROCEDURE(*)",
+            },
         ]
     ).verify_read_only_credential()
 
@@ -109,7 +129,16 @@ def test_read_only_credential_probe_rejects_granted_write_privilege(action):
 
 def test_read_only_credential_probe_rejects_write_capable_builtin_role():
     client = _credential_probe_client(
-        [{"access": "GRANTED", "action": "ACCESS", "graph": "*", "role": "admin"}]
+        [
+            {
+                "access": "GRANTED",
+                "action": "ACCESS",
+                "graph": "*",
+                "resource": "database",
+                "segment": "database",
+                "role": "admin",
+            }
+        ]
     )
 
     with pytest.raises(GraphCheckError) as caught:
@@ -117,6 +146,48 @@ def test_read_only_credential_probe_rejects_write_capable_builtin_role():
 
     assert caught.value.error.code == "neo4j.credential_not_read_only"
     assert "ROLE ADMIN" in caught.value.error.message
+
+
+@pytest.mark.parametrize(
+    ("action", "resource", "segment"),
+    [
+        ("execute_boosted", "database", "PROCEDURE(*)"),
+        ("execute", "database", "BOOSTED PROCEDURE(*)"),
+        ("dbms_actions", "database", "database"),
+        ("index", "database", "database"),
+        ("constraint", "database", "database"),
+        ("token", "database", "database"),
+        ("transaction_management", "database", "USER(*)"),
+    ],
+)
+def test_read_only_credential_probe_rejects_boosted_and_administrative_grants(
+    action, resource, segment
+):
+    client = _credential_probe_client(
+        [
+            {
+                "access": "GRANTED",
+                "action": action,
+                "graph": "*",
+                "resource": resource,
+                "segment": segment,
+                "role": "custom_role",
+            }
+        ]
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert segment.upper() in caught.value.error.message
+
+
+def test_read_only_credential_probe_accepts_community_without_rbac_query():
+    client = _credential_probe_client([], edition="community")
+    client.run_read = lambda query: pytest.fail("Community must not inspect Enterprise RBAC")
+
+    client.verify_read_only_credential()
 
 
 def test_read_only_credential_probe_fails_closed_without_privilege_evidence():
