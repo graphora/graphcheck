@@ -398,9 +398,10 @@ collection.
 
 ## Verdict evaluation
 
-`VerdictEvaluator` is pure over the compiled check, result rows, result-column metadata, and optional
-baseline. It does not inspect severity. The runner maps `Evaluation.passed` through declared
-severity:
+`VerdictEvaluator` is pure over the compiled check, result rows, result-column metadata, optional
+baseline, and the probed global-empty state. A globally empty graph permits vacuous conformance
+measurement even when its schema inventory lacks the requested tokens; a populated graph does not.
+The evaluator does not inspect severity. The runner maps `Evaluation.passed` through declared severity:
 
 | Evaluation | Severity | Verdict |
 | --- | --- | --- |

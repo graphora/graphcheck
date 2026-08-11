@@ -423,12 +423,12 @@ def _run_diagnostics(results: Results) -> str:
     messages: list[tuple[str, str]] = []
     if results.run.partial_reason is not None:
         messages.append(("Partial reason", results.run.partial_reason))
-    if not any(check.executed for check in results.checks):
+    if not any(check.measured is not None for check in results.checks):
         messages.append(
             (
                 "Nothing to evaluate",
-                "No selected checks executed. Adjust the selection or resolve the reported "
-                "skip reasons, then rerun.",
+                "No selected check produced a measured result. Adjust the selection or resolve "
+                "the reported errors or skip reasons, then rerun.",
             )
         )
     elif (

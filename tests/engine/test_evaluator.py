@@ -282,6 +282,31 @@ def test_missing_schema_reference_is_an_error_never_an_empty_pass():
     assert "CustomerTypo" in caught.value.error.message
 
 
+def test_missing_schema_reference_is_vacuously_measured_for_globally_empty_graph():
+    evaluation = evaluate_check(
+        _completeness(),
+        [
+            _completeness_row(
+                schema_ok=False,
+                missing_labels=["Customer"],
+                coverage=1.0,
+                population=0,
+                conforming_count=0,
+                violation_count=0,
+            )
+        ],
+        graph_empty=True,
+    )
+
+    assert evaluation.passed is True
+    assert evaluation.measured == {
+        "coverage": 1.0,
+        "population": 0,
+        "conforming": 0,
+        "violations": 0,
+    }
+
+
 def test_compiled_summary_must_explicitly_report_schema_status():
     row = _completeness_row()
     row.pop("schema_ok")

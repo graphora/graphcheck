@@ -1681,6 +1681,20 @@ def test_unknown_relationship_type_notification_is_a_query_error():
     assert "OWNZ" in caught.value.error.message
 
 
+def test_missing_schema_notifications_are_non_blocking_for_a_probed_empty_graph():
+    from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
+
+    _raise_for_missing_schema_reference(
+        (
+            {
+                "code": "Neo.ClientNotification.Statement.UnknownLabelWarning",
+                "description": "The label is not in the database: Customer",
+            },
+        ),
+        graph_empty=True,
+    )
+
+
 def test_read_classification_cache_is_bounded_per_client_and_cleared_on_close(monkeypatch):
     import neo4j
 

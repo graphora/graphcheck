@@ -310,6 +310,7 @@ class Neo4jClient:
         """Yield a planner-verified reader whose queries share one read snapshot."""
 
         deadline = _timeout_deadline(timeout_s)
+        graph_empty = self._probed_graph_is_empty()
         try:
             with (
                 self._driver.session(
@@ -323,6 +324,7 @@ class Neo4jClient:
                     self._profile.database,
                     deadline,
                     self._read_classifications,
+                    graph_empty,
                 )
         except GraphCheckError:
             raise
@@ -468,7 +470,9 @@ class Neo4jClient:
                 consume = getattr(result, "consume", None)
                 summary = consume() if complete and callable(consume) else None
                 notifications = _summary_notifications(summary)
-                _raise_for_missing_schema_reference(notifications)
+                _raise_for_missing_schema_reference(
+                    notifications, graph_empty=self._probed_graph_is_empty()
+                )
                 return QueryResult(
                     rows=rows,
                     columns=columns,
@@ -487,6 +491,14 @@ class Neo4jClient:
             raise
         except Exception as exc:
             raise map_neo4j_error(exc) from exc
+
+    def _probed_graph_is_empty(self) -> bool:
+        with self._probe_lock:
+            return bool(
+                self._probe_result is not None
+                and self._probe_result[2].nodes == 0
+                and self._probe_result[2].relationships == 0
+            )
 
     def explain_read(
         self,
@@ -809,11 +821,13 @@ class _TransactionReader:
         database: str,
         deadline: float | None,
         read_classifications: _ReadClassificationCache,
+        graph_empty: bool,
     ) -> None:
         self._transaction = transaction
         self._database = database
         self._deadline = deadline
         self._read_classifications = read_classifications
+        self._graph_empty = graph_empty
 
     def run_read_result(
         self,
@@ -851,7 +865,7 @@ class _TransactionReader:
             consume = getattr(result, "consume", None)
             summary = consume() if callable(consume) else None
             notifications = _summary_notifications(summary)
-            _raise_for_missing_schema_reference(notifications)
+            _raise_for_missing_schema_reference(notifications, graph_empty=self._graph_empty)
             return QueryResult(
                 rows=rows,
                 columns=columns,
@@ -1185,7 +1199,11 @@ def _notification_dict(notification: object) -> dict[str, Any] | None:
     return values or None
 
 
-def _raise_for_missing_schema_reference(notifications: tuple[dict[str, Any], ...]) -> None:
+def _raise_for_missing_schema_reference(
+    notifications: tuple[dict[str, Any], ...], *, graph_empty: bool = False
+) -> None:
+    if graph_empty:
+        return
     for notification in notifications:
         kind = _missing_schema_kind(notification)
         if kind is None:

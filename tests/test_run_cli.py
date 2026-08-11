@@ -885,7 +885,10 @@ competency:
             )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: PermissionDeniedClient())
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient",
+        lambda profile: PermissionDeniedClient(counts=Counts(nodes=0, relationships=0)),
+    )
 
     result = runner.invoke(app, ["run"])
 
@@ -899,6 +902,11 @@ competency:
     assert "neo4j.permission_denied" in result.stderr
     assert "Fix: Grant read access" in result.stderr
     assert "Grant read access" in _report(tmp_path)
+    assert "Nothing to evaluate" in result.stdout
+    assert "no selected check produced a measured result" in result.stdout
+    assert "Empty graph" not in result.stdout
+    assert "Nothing to evaluate" in _report(tmp_path)
+    assert "Empty graph" not in _report(tmp_path)
     _assert_no_traceback(result)
 
 
@@ -965,8 +973,8 @@ conformance:
         },
     )
     summary = {
-        "schema_ok": True,
-        "missing_labels": [],
+        "schema_ok": False,
+        "missing_labels": ["Customer"],
         "missing_relationship_types": [],
         "missing_properties": [],
         "coverage": 1.0,
@@ -988,6 +996,8 @@ conformance:
     assert result.exit_code == payload["run"]["exit_code"] == 0
     assert payload["checks"][0]["verdict"] == "pass"
     assert payload["checks"][0]["measured"]["population"] == 0
+    assert "CALL db.labels()" in client.read_calls[0][0]
+    assert client.read_calls[0][1]["required_labels"] == ["Customer"]
     assert "Empty graph" in result.stdout
     assert "load data if this was unexpected" in result.stdout
     assert "Empty graph" in _report(tmp_path)

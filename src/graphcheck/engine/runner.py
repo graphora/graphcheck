@@ -780,6 +780,10 @@ class Engine:
                 evaluator_kwargs.update(
                     complete=execution.complete,
                     observed_rows=execution.observed_rows,
+                    graph_empty=(
+                        getattr(target, "nodes", None) == 0
+                        and getattr(target, "relationships", None) == 0
+                    ),
                 )
             evaluation = self.evaluator.evaluate(
                 # Evidence extraction must see executed literals, never unresolved graph tokens.

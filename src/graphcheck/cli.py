@@ -2030,10 +2030,10 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
             err=True,
         )
         typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
-    if not any(check.executed for check in results.checks):
+    if not any(check.measured is not None for check in results.checks):
         typer.echo(
-            "Nothing to evaluate: no selected checks executed. "
-            "Fix: adjust the selection or resolve the reported skip reasons, then rerun."
+            "Nothing to evaluate: no selected check produced a measured result. "
+            "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
         )
     elif (
         results.run.target is not None
