@@ -1,3 +1,4 @@
+import inspect
 from dataclasses import dataclass
 
 import pytest
@@ -6,6 +7,7 @@ from graphcheck.contracts.check import load_suite
 from graphcheck.engine.compiler import compile_check
 from graphcheck.engine.executor import Executor, ReadOnlyExecutor, execute_query
 from graphcheck.errors import GraphCheckError
+from graphcheck.neo4j_adapter import QueryResult, ResultPolicy
 
 
 @dataclass(frozen=True)
@@ -72,3 +74,67 @@ def test_executor_rejects_connector_without_read_api():
         ReadOnlyExecutor(object()).execute("RETURN 1")
 
     assert caught.value.error.code == "engine.connector_invalid"
+
+
+def test_executor_inspects_timeout_support_only_during_construction(monkeypatch):
+    calls = 0
+    real_signature = inspect.signature
+
+    def count_signature(method):
+        nonlocal calls
+        calls += 1
+        return real_signature(method)
+
+    class Client:
+        def run_read(self, query, params, *, timeout_s=None):
+            return [{"value": 1}]
+
+    monkeypatch.setattr("graphcheck.engine.executor.inspect.signature", count_signature)
+    executor = ReadOnlyExecutor(Client())
+
+    executor.execute("RETURN 1 AS value")
+    executor.execute("RETURN 1 AS value")
+
+    assert calls == 1
+
+
+def test_executor_routes_bounded_policies_and_completeness_metadata():
+    calls = []
+
+    class Client:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            raise AssertionError("bounded path must be preferred")
+
+        def run_read_result_bounded(
+            self,
+            query,
+            params,
+            *,
+            policy,
+            timeout_s=None,
+            stop_when=None,
+        ):
+            calls.append((query, params, policy, timeout_s, stop_when))
+            return QueryResult(
+                rows=[{"value": 1}],
+                columns=("value",),
+                notifications=(),
+                complete=False,
+                observed_rows=1,
+                limit=4,
+            )
+
+    policy = ResultPolicy(max_rows=4)
+
+    def stop_when(row):
+        return row["value"] == 1
+
+    result = ReadOnlyExecutor(Client()).execute(
+        "RETURN 1 AS value",
+        timeout_s=2.5,
+        policy=policy,
+        stop_when=stop_when,
+    )
+
+    assert (result.complete, result.observed_rows, result.limit) == (False, 1, 4)
+    assert calls == [("RETURN 1 AS value", {}, policy, 2.5, stop_when)]

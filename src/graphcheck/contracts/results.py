@@ -252,6 +252,11 @@ class RunTarget(_Strict):
     capabilities: Capabilities
 
 
+class ResultsTarget(RunTarget):
+    nodes: int | None = Field(default=None, ge=0)
+    relationships: int | None = Field(default=None, ge=0)
+
+
 class Selection(_Strict):
     suites: list[str]
     tags: list[str]
@@ -274,7 +279,7 @@ class Run(_Strict):
     exit_code: int
     selection: Selection
     redaction: Redaction
-    target: RunTarget | None  # present-but-nullable; null only for failed runs
+    target: ResultsTarget | None  # present-but-nullable; null only for failed runs
     error: CheckError | None  # present-but-nullable; non-null only for failed runs
 
     @field_validator("started_at", "finished_at")

@@ -39,9 +39,9 @@ def test_graph_token_uses_rich_read_api_with_timeout_and_stable_selection():
     assert value == "CUST-0001"
     assert len(client.calls) == 1
     query, params, timeout = client.calls[0]
-    assert "MATCH (n)" in query
-    assert "'Customer' IN labels(n)" in query
-    assert "ORDER BY toString(n.id) LIMIT 1" in query
+    assert "MATCH (n:`Customer`)" in query
+    assert "labels(n)" not in query
+    assert "ORDER BY toString(n.`id`) LIMIT 1" in query
     assert params == {}
     assert timeout == 4.5
 

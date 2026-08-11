@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import TypeAdapter
 
 from graphcheck.contracts.check import _SuiteFile
@@ -12,7 +11,6 @@ from graphcheck.packs.metadata import PackMetadata
 
 SPECS_DIR = Path(__file__).resolve().parents[3] / "docs" / "specs"
 JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema"
-_FORMAT_CHECKER = FormatChecker()
 _CHECK_SCHEMA_COMMENT = (
     "Portable structural contract. Consumers must additionally enforce the semantic "
     "invariants in SPEC-02: globally unique check ids, distinct label_cooccurrence "
@@ -52,11 +50,13 @@ def pack_metadata_schema() -> dict:
 
 def validate_pack_metadata_schema(instance: object) -> None:
     """Validate pack metadata, including standard JSON Schema format assertions."""
+    from jsonschema import Draft202012Validator, FormatChecker
+
     schema = pack_metadata_schema()
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(
         schema,
-        format_checker=_FORMAT_CHECKER,
+        format_checker=FormatChecker(),
     )
     validator.validate(instance)
 
@@ -119,11 +119,13 @@ def validate_check_schema(instance: object) -> None:
 
     Use ``load_suite`` for the additional semantic invariants defined by SPEC-02.
     """
+    from jsonschema import Draft202012Validator, FormatChecker
+
     schema = check_combined_schema()
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(
         schema,
-        format_checker=_FORMAT_CHECKER,
+        format_checker=FormatChecker(),
     )
     validator.validate(instance)
 

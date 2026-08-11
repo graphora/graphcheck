@@ -138,6 +138,8 @@ Emitted after each database operation known to the engine. There is intentionall
 | `server_available_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `server_consumed_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `read_guard_outcome` | `allowed`, `rejected`, `error`, or `not_run` | Result of the read-only guard. |
+| `read_guard_ms` | non-negative integer or null | Read-guard time for either a cache hit or miss. |
+| `read_guard_cache_hit` | boolean or null | Whether a successful guard used this client's cache. |
 | `notification_count` | non-negative integer or null | Count only. |
 | `error_code` | safe error code or null | Stable allowlisted code. |
 
@@ -293,18 +295,19 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `command` | `init`, `debug`, `run`, `report`, `profile`, `diff`, `baseline`, `telemetry`, or `other` | Command name only. `profile`, `diff`, and `baseline` are first-class and are never folded into `other`. |
+| `command` | `init`, `debug`, `run`, `report`, `profile`, `generate`, `diff`, `baseline`, `telemetry`, or `other` | Command name only. `profile`, `generate`, `diff`, and `baseline` are first-class and are never folded into `other`. |
 | `action` | safe action enum or null | Per-command action from the *Safe allowlists* set; null for commands with no sub-action. Arbitrary arguments are never included. |
 | `process_outcome` | `success`, `user_error`, `engine_error`, or `unexpected_error` | CLI boundary result, defined by operational failure — not by exit code (see the semantic rule below). |
 | `failure_stage` | safe stage enum or null | Set if and only if `process_outcome` is not `success`; the pipeline stage that failed. Null on success. |
 | `duration_ms` | non-negative integer | Total command duration. |
 | `setup_ms` | non-negative integer or null | Time before the engine ran (discovery, config, suite/profile load, client setup). |
-| `artifact_write_ms` | non-negative integer or null | Time spent writing result or baseline artifacts. |
+| `artifact_write_ms` | non-negative integer or null | Time spent writing result, baseline, or generated-suite artifacts. |
 | `render_ms` | non-negative integer or null | Time spent rendering the HTML report. |
 | `output_mode` | `human` or `json` | Selected output mode. |
 | `results_artifact` | `not_requested`, `written`, or `error` | Outcome of the `results.json` write. |
 | `report_artifact` | `not_requested`, `written`, or `error` | Outcome of the HTML report write. |
 | `baseline_artifact` | `not_requested`, `written`, or `error` | Outcome of the baseline write. |
+| `generated_artifact` | `not_requested`, `written`, or `error` | Outcome of the generated-suite write. |
 | `telemetry_command_id` | UUID | Random UUID v4 for this invocation; correlates every PostHog event from this command. |
 | `telemetry_run_id` | UUID or null | Equal to the engine run's `telemetry_run_id` when a run occurred; null otherwise. A non-null value is the definitive signal that the engine ran. |
 | `probe_outcome` | `success`, `error`, `timeout`, or null | For `init` and `debug`: connection-probe result outside a run; null when no probe occurred. |
@@ -316,6 +319,7 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 | `interactive` | boolean | Whether standard input/output were interactive. |
 | `ci` | boolean | Derived from a fixed allowlist of common CI indicator variables; variable values are excluded. |
 | `os_family` | `windows`, `macos`, `linux`, or `other` | Coarse operating-system family. |
+| `os_version` | string | OS major or major/minor only, for example `"11"` or `"6.8"`; `"unknown"` when unavailable. macOS uses the product version, Linux uses the kernel version, and exact builds, distribution details, suffixes, and architecture are excluded. |
 | `python_minor` | string | Major and minor only, for example `"3.12"`. |
 | `graphcheck_version` | string | Released GraphCheck version. |
 | `safe_error_code` | safe error code or null | Stable classification; null on success. |
@@ -391,7 +395,7 @@ The adapter adds:
 
 | Field | Rule |
 | --- | --- |
-| `telemetry_schema_version` | Initially `"1.0"`. |
+| `telemetry_schema_version` | `"1.1"` after adding coarse `os_version`; versioned independently of engine events and consent. |
 | `consent_version` | Version of the consent text accepted by the user. |
 | `graphcheck_version` | Released GraphCheck version. |
 | `distinct_id` | Persisted installation UUID after `telemetry enable`. Under process-only `GRAPHCHECK_TELEMETRY=1` with no stored opt-in, a fresh per-process UUID is generated and never persisted. |
@@ -448,7 +452,9 @@ PostHog project not to retain or derive location data from it.
    ID breaks linkage to earlier events.
 9. Renewed consent is required **only when `consent_version` changes** — that is, when a materially
    expanded data category is introduced. Ordinary upgrades and schema evolution within the existing
-   allowlisted categories keep the stored opt-in and do not silently expand consent.
+   allowlisted categories keep the stored opt-in and do not silently expand consent. Schema `1.1`
+   adds only a major/minor `os_version` within the already disclosed coarse runtime-environment
+   category; exact build, distribution, suffix, and architecture data remain prohibited.
 10. The telemetry control command must not itself emit telemetry for `preview`, `disable`, `status`,
     or `reset-id`. Only `enable` may emit a single `graphcheck_command_completed` — the invocation at
     which consent is first granted.
@@ -466,7 +472,7 @@ and privacy review.
 | `report` | `open`, `list`, `compare`, `prune`, `failures-only` |
 | `baseline` | `set`, `list` |
 | `telemetry` | `enable`, `disable`, `status`, `preview`, `reset-id` |
-| `init`, `debug`, `run`, `diff`, `profile` | none — `action` is null |
+| `init`, `debug`, `run`, `diff`, `profile`, `generate` | none — `action` is null |
 
 ### Check templates (`template`)
 
@@ -495,7 +501,11 @@ diff.incomparable | diff.failed |
 engine.compile_failed | engine.parameter_resolution_failed |
 engine.evaluate_failed | engine.unexpected |
 read_guard.rejected | artifact.write_failed |
-report.render_failed | report.open_failed | unknown
+report.render_failed | report.open_failed |
+generate.provider_auth_failed | generate.provider_unreachable |
+generate.provider_rate_limited | generate.provider_timeout |
+generate.provider_failed | generate.output_invalid |
+generate.no_valid_candidates | unknown
 ```
 
 ### Exception types (`exception_type`)
@@ -527,7 +537,8 @@ CLI failure stages (`failure_stage`):
 
 ```
 project_discovery | config_load | suite_load | profile_load | client_setup |
-probe | engine | profile_collection | baseline_load | baseline_write |
+probe | engine | profile_collection | baseline_load | document_load |
+provider_request | generation_validation | baseline_write |
 diff_compare | artifact_write | report_render | report_open
 ```
 
@@ -538,7 +549,7 @@ diff_compare | artifact_write | report_render | report_open
 - `skip_reason`: `generated`, `unsupported`, `not_run`.
 - `partial_reason_codes` (run): `suite_input_invalid`, `unsupported_check`, `partial_baseline`, `baseline_measurement_missing`, `deadline_exhausted`, `unknown`.
 - `partial_reason` (profile): `deadline_exhausted`, `property_coverage_incomplete`, `degree_distribution_incomplete`, `schema_incomplete`, `probe_incomplete`, `unknown`.
-- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`): `not_requested`, `written`, `error`.
+- Artifact outcomes (`results_artifact`, `report_artifact`, `baseline_artifact`, `generated_artifact`): `not_requested`, `written`, `error`.
 
 ## Privacy denylist
 
@@ -550,6 +561,7 @@ No telemetry payload may contain:
 - check IDs, check names, suite IDs, suite names, tags, questions, descriptions, or provenance;
 - database names, URIs, usernames, passwords, profile names, target fingerprints, or server
   addresses;
+- generation provider names, model names, destinations, prompts, or document contents;
 - project names, repository names, branches, remotes, commit hashes, working directories, paths,
   filenames, file contents, or artifact run IDs;
 - command-line arguments, environment-variable names or values, hostnames, OS usernames, emails,
@@ -741,7 +753,8 @@ are intentionally absent from telemetry.
 13. Correlation tests assert every event of one invocation shares `telemetry_command_id`, and that
     `telemetry_run_id` links `graphcheck_command_completed` to its engine run.
 14. Allowlist tests assert that unknown actions, templates, error codes, exception types, and stages
-    map to `unknown`/`custom`, and that no coarse cardinality bucket appears in any payload.
+    map to `unknown`/`custom`, that OS/Python versions remain coarse, and that no coarse cardinality
+    bucket appears in any payload.
 15. A `graphcheck_profile_completed` test covers complete, partial, and error outcomes — including a
     setup failure before profiling starts — asserts profiler-specific stages and `partial_reason`,
     exercises the per-stage timings, and asserts no profiled graph content leaves the process.

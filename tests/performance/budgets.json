@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "references": {
+    "windows-amd64-python-3.12": {
+      "description": "Windows 11 AMD64, CPython 3.12, fresh processes, one discarded warm-up and ten measured samples",
+      "budgets": {
+        "cli-version-cold": {
+          "mode": "required",
+          "reference_environment": "windows-amd64-python-3.12",
+          "baseline_median_ms": 59.624,
+          "baseline_p95_ms": 68.55,
+          "median_regression_pct": 20,
+          "observation_runs": 3,
+          "observation_medians_ms": [58.28, 59.624, 56.245],
+          "observation_p95_ms": [62.736, 68.55, 57.159]
+        },
+        "cli-help-cold": {
+          "mode": "required",
+          "reference_environment": "windows-amd64-python-3.12",
+          "baseline_median_ms": 398.951,
+          "baseline_p95_ms": 915.875,
+          "median_regression_pct": 20,
+          "observation_runs": 3,
+          "observation_medians_ms": [386.999, 396.412, 398.951],
+          "observation_p95_ms": [400.35, 915.875, 410.736]
+        },
+        "cli-telemetry-status-cold": {
+          "mode": "required",
+          "reference_environment": "windows-amd64-python-3.12",
+          "baseline_median_ms": 414.291,
+          "baseline_p95_ms": 803.238,
+          "median_regression_pct": 20,
+          "observation_runs": 3,
+          "observation_medians_ms": [392.358, 400.48, 414.291],
+          "observation_p95_ms": [400.008, 803.238, 451.938]
+        },
+        "cli-invalid-command-cold": {
+          "mode": "required",
+          "reference_environment": "windows-amd64-python-3.12",
+          "baseline_median_ms": 400.509,
+          "baseline_p95_ms": 466.74,
+          "median_regression_pct": 20,
+          "observation_runs": 3,
+          "observation_medians_ms": [383.467, 380.93, 400.509],
+          "observation_p95_ms": [386.619, 466.74, 422.205]
+        }
+      }
+    }
+  }
+}

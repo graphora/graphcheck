@@ -2,6 +2,7 @@ import json
 import logging
 import shutil
 import sys
+import threading
 import time
 import uuid
 import webbrowser
@@ -10,72 +11,124 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING, Annotated
 
 import typer
-from pydantic import ValidationError
 
 from graphcheck import __version__
-from graphcheck.baselines import resolve_diff_baselines, set_current_baseline, write_baseline
-from graphcheck.connection_profiles import load_profiles, select_profile, write_default_profiles
-from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
-from graphcheck.contracts.results import CheckError, Results, RunTarget, Verdict
-from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
-from graphcheck.diff import SchemaVersionMismatch, compare, render_human, render_json
-from graphcheck.engine import DirectoryBaselineProvider, Engine, SuiteInput, failed_results
-from graphcheck.errors import GraphCheckError
-from graphcheck.neo4j_adapter import Neo4jClient, debug_trace, error_json, init_trace
-from graphcheck.profiler import profile as build_profile
-from graphcheck.project import (
-    ARTIFACTS_DIR,
-    PROJECT_FILE,
-    ensure_gitignore_entries,
-    find_project_root,
-    load_project_config,
-    write_default_project,
-    write_example_suite,
-)
-from graphcheck.reporting import (
-    ReportHistoryError,
-    ReportRun,
-    discover_report_runs,
-    find_report_run,
-    format_report_comparison,
-    format_report_history,
-    prune_report_runs,
-    write_html_report,
-    write_results,
-)
-from graphcheck.telemetry.events import EventOutcome
-from graphcheck.telemetry.policy import (
-    ArtifactOutcome,
-    CliFailureStage,
-    CommandAction,
-    CommandName,
-    OutputMode,
-    ProcessOutcome,
-    SafeErrorCode,
-    assert_private_payload,
+from graphcheck.telemetry.consent import (
     disable_telemetry,
     enable_telemetry,
     reset_installation_id,
     resolve_consent,
+)
+from graphcheck.telemetry.types import (
+    CONSENT_VERSION,
+    TELEMETRY_SCHEMA_VERSION,
+    ArtifactOutcome,
+    CliFailureStage,
+    CommandAction,
+    CommandName,
+    ConsentState,
+    EventOutcome,
+    OutputMode,
+    ProcessOutcome,
+    SafeErrorCode,
     safe_command,
 )
-from graphcheck.telemetry.posthog import telemetry_delivery_configured
-from graphcheck.telemetry.runtime import CommandTelemetryRuntime
 
-_DIAGNOSTIC_VERDICTS = {Verdict.FAIL, Verdict.WARN, Verdict.ERRORED}
+if TYPE_CHECKING:
+    from graphcheck.contracts.profile import BaselineProfile
+    from graphcheck.contracts.results import CheckError, Results, RunTarget
+    from graphcheck.engine import SuiteInput
+    from graphcheck.generation.disclosure import GenerateDisclosure
+    from graphcheck.generation.service import DroppedCandidate, GenerateResult
+    from graphcheck.reporting.history import ReportRun
+
 _NEO4J_NOTIFICATION_LOGGER = "neo4j.notifications"
 
-# Kept as an injection point for integrations that patched the original comparator.
-compare_baselines = compare
+
+def _call(module: str, name: str, *args, **kwargs):
+    """Import a command dependency only when its command actually uses it."""
+    return getattr(import_module(module), name)(*args, **kwargs)
+
+
+# Stable injection points for tests and integrations; each forwards lazily by default.
+def find_project_root(*args, **kwargs):
+    return _call("graphcheck.project", "find_project_root", *args, **kwargs)
+
+
+def load_profiles(*args, **kwargs):
+    return _call("graphcheck.connection_profiles", "load_profiles", *args, **kwargs)
+
+
+def select_profile(*args, **kwargs):
+    return _call("graphcheck.connection_profiles", "select_profile", *args, **kwargs)
+
+
+def Neo4jClient(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "Neo4jClient", *args, **kwargs)
+
+
+def init_trace(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "init_trace", *args, **kwargs)
+
+
+def debug_trace(*args, **kwargs):
+    return _call("graphcheck.neo4j_adapter", "debug_trace", *args, **kwargs)
+
+
+def build_profile(*args, **kwargs):
+    return _call("graphcheck.profiler", "profile", *args, **kwargs)
+
+
+def resolve_diff_baselines(*args, **kwargs):
+    return _call("graphcheck.baselines", "resolve_diff_baselines", *args, **kwargs)
+
+
+def compare_baselines(*args, **kwargs):
+    return _call("graphcheck.diff", "compare", *args, **kwargs)
+
+
+def generation_service_factory(*args, **kwargs):
+    return _call("graphcheck.generation.service", "GenerationService", *args, **kwargs)
+
+
+def write_results(*args, **kwargs):
+    return _call("graphcheck.reporting.writer", "write_results", *args, **kwargs)
+
+
+def write_html_report(*args, **kwargs):
+    return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
+
+
+def open_report_explorer(*args, **kwargs):
+    return _call("graphcheck.reporting.explorer", "launch_report_explorer", *args, **kwargs)
+
+
+def run_monitor(*args, **kwargs):
+    return _call("graphcheck.observability.runner", "run_monitor", *args, **kwargs)
+
+
+def render_run_artifacts(results: "Results") -> tuple[bytes, bytes, bytes]:
+    model, rendered_json = _call("graphcheck.reporting.writer", "validated_results_json", results)
+    rendered_html = _call("graphcheck.reporting.html", "render_validated_html_report", model)
+    rendered_summary = _call("graphcheck.reporting.history", "report_summary_json", model)
+    return (
+        rendered_json.encode("utf-8"),
+        rendered_html.encode("utf-8"),
+        rendered_summary.encode("utf-8"),
+    )
+
 
 app = typer.Typer(
     name="graphcheck",
     help="Semantic observability for property graphs.",
     add_completion=False,
     no_args_is_help=True,
+    rich_markup_mode="rich",
 )
 telemetry_app = typer.Typer(
     name="telemetry",
@@ -87,7 +140,7 @@ app.add_typer(telemetry_app, name="telemetry")
 baseline_app = typer.Typer(help="Manage baseline snapshots.")
 app.add_typer(baseline_app, name="baseline")
 
-_COMMAND_TELEMETRY: ContextVar[CommandTelemetryRuntime | None] = ContextVar(
+_COMMAND_TELEMETRY: ContextVar[object | None] = ContextVar(
     "graphcheck_command_telemetry",
     default=None,
 )
@@ -104,7 +157,7 @@ def _telemetry_command(command: CommandName):
                 output_mode = (
                     OutputMode.JSON if kwargs.get("json_output") is True else OutputMode.HUMAN
                 )
-                runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+                runtime = _start_telemetry_runtime(command, output_mode=output_mode)
                 token = _COMMAND_TELEMETRY.set(runtime)
             runtime.mark_callback_entered()
             try:
@@ -131,11 +184,11 @@ def _telemetry_command(command: CommandName):
     return decorate
 
 
-def _command_telemetry() -> CommandTelemetryRuntime | None:
+def _command_telemetry():
     return _COMMAND_TELEMETRY.get()
 
 
-def cli() -> None:
+def cli(*, consent: ConsentState | None = None) -> None:
     """Run Typer behind the true command boundary, including argument-parsing failures."""
 
     arguments = tuple(sys.argv[1:])
@@ -145,7 +198,7 @@ def cli() -> None:
         return
 
     output_mode = OutputMode.JSON if "--json" in arguments else OutputMode.HUMAN
-    runtime = CommandTelemetryRuntime.start(command, output_mode=output_mode)
+    runtime = _start_telemetry_runtime(command, output_mode=output_mode, consent=consent)
     token = _COMMAND_TELEMETRY.set(runtime)
     try:
         app()
@@ -180,9 +233,43 @@ def _command_from_argv(arguments: Sequence[str]) -> CommandName:
     return CommandName.OTHER
 
 
+def _start_telemetry_runtime(
+    command: CommandName,
+    *,
+    output_mode: OutputMode,
+    consent: ConsentState | None = None,
+    action: CommandAction | str | None = None,
+):
+    state = consent
+    if state is None:
+        try:
+            state = resolve_consent()
+        except Exception:
+            from graphcheck.telemetry.types import ConsentSource
+
+            state = ConsentState(False, ConsentSource.DEFAULT)
+    if state.enabled:
+        from graphcheck.telemetry.runtime import CommandTelemetryRuntime
+
+        return CommandTelemetryRuntime.start(
+            command,
+            action=action,
+            output_mode=output_mode,
+            consent=state,
+        )
+    from graphcheck.telemetry.inactive import InactiveCommandTelemetryRuntime
+
+    return InactiveCommandTelemetryRuntime.start(
+        command,
+        action=action,
+        output_mode=output_mode,
+        consent=state,
+    )
+
+
 def _version(value: bool) -> None:
     if value:
-        typer.echo(f"graphcheck {__version__}")
+        typer.secho(f"graphcheck {__version__}", fg=typer.colors.BRIGHT_BLUE, bold=True)
         raise typer.Exit()
 
 
@@ -208,17 +295,21 @@ def telemetry_enable() -> None:
     before = resolve_consent()
     enable_telemetry()
     state = resolve_consent()
-    typer.echo("Anonymous GraphCheck telemetry is enabled.")
-    if not telemetry_delivery_configured():
-        typer.echo("Telemetry delivery is not configured in this build; consent remains stored.")
+    typer.secho("Anonymous GraphCheck telemetry is enabled.", fg=typer.colors.GREEN)
+    if not _telemetry_delivery_configured():
+        typer.secho(
+            "Telemetry delivery is not configured in this build; consent remains stored.",
+            fg=typer.colors.YELLOW,
+        )
     # This is the single telemetry control action that may emit: consent exists only after the
     # state has been stored, so construct the command runtime at that point.
     try:
         if before.enabled or not state.enabled:
             return
-        runtime = CommandTelemetryRuntime.start(
+        runtime = _start_telemetry_runtime(
             CommandName.TELEMETRY,
             action=CommandAction.ENABLE,
+            output_mode=OutputMode.HUMAN,
             consent=state,
         )
         runtime.started_perf = started
@@ -232,7 +323,7 @@ def telemetry_disable() -> None:
     """Disable telemetry without sending an event."""
 
     disable_telemetry()
-    typer.echo("Anonymous GraphCheck telemetry is disabled.")
+    typer.secho("Anonymous GraphCheck telemetry is disabled.", fg=typer.colors.YELLOW)
 
 
 @telemetry_app.command("status")
@@ -240,11 +331,18 @@ def telemetry_status() -> None:
     """Show the effective user/process telemetry state."""
 
     state = resolve_consent()
-    typer.echo(f"Telemetry: {'enabled' if state.enabled else 'disabled'}")
+    typer.secho(
+        f"Telemetry: {'enabled' if state.enabled else 'disabled'}",
+        fg=typer.colors.GREEN if state.enabled else typer.colors.YELLOW,
+    )
     typer.echo(f"Source: {state.source.value}")
-    typer.echo(f"Delivery: {'configured' if telemetry_delivery_configured() else 'not configured'}")
+    delivery = "configured" if _telemetry_delivery_configured() else "not configured"
+    typer.echo(f"Delivery: {delivery}")
     if state.renewal_required:
-        typer.echo("Consent renewal is required for the current telemetry consent version.")
+        typer.secho(
+            "Consent renewal is required for the current telemetry consent version.",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @telemetry_app.command("preview")
@@ -261,24 +359,36 @@ def telemetry_reset_id() -> None:
 
     state = reset_installation_id()
     if state.enabled:
-        typer.echo("Telemetry installation ID was reset; telemetry remains enabled.")
+        typer.secho(
+            "Telemetry installation ID was reset; telemetry remains enabled.",
+            fg=typer.colors.GREEN,
+        )
     else:
-        typer.echo("Inactive telemetry installation ID was cleared.")
+        typer.secho("Inactive telemetry installation ID was cleared.", fg=typer.colors.GREEN)
 
 
 @app.command()
 @_telemetry_command(CommandName.INIT)
 def init() -> None:
     """Scaffold a new GraphCheck project in the current directory."""
+    from graphcheck.connection_profiles import write_default_profiles
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import (
+        PROJECT_FILE,
+        ensure_gitignore_entries,
+        write_default_project,
+        write_example_suite,
+    )
+
     root = Path.cwd()
     write_default_project(root)
     write_default_profiles(root)
     ensure_gitignore_entries(root)
     write_example_suite(root)
 
-    typer.echo(f"Wrote {PROJECT_FILE}")
-    typer.echo("Wrote profiles.yml")
-    typer.echo("Wrote checks/example.yml with 3 sample checks")
+    typer.secho(f"Wrote {PROJECT_FILE}", fg=typer.colors.GREEN)
+    typer.secho("Wrote profiles.yml", fg=typer.colors.GREEN)
+    typer.secho("Wrote checks/example.yml with 3 sample checks", fg=typer.colors.GREEN)
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
@@ -291,9 +401,9 @@ def init() -> None:
                 started_perf=probe_started,
                 outcome=EventOutcome.ERROR,
             )
-        typer.echo(f"Neo4j was not detected: {exc.error.code}")
-        typer.echo(exc.error.message)
-        typer.echo(f"Fix: {exc.error.fix}")
+        typer.secho(f"Neo4j was not detected: {exc.error.code}", fg=typer.colors.YELLOW)
+        typer.secho(exc.error.message, fg=typer.colors.YELLOW)
+        typer.secho(f"Fix: {exc.error.fix}", fg=typer.colors.CYAN)
     else:
         if (telemetry := _command_telemetry()) is not None:
             telemetry.record_probe(
@@ -301,9 +411,15 @@ def init() -> None:
                 outcome=EventOutcome.SUCCESS,
                 target=trace.target,
             )
-        typer.echo(f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})")
-        typer.echo(f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}")
-    typer.echo("Next: edit checks/example.yml, then run `graphcheck run`")
+        typer.secho(
+            f"Detected Neo4j at {profile.uri} (version {trace.target.server_version})",
+            fg=typer.colors.GREEN,
+        )
+        typer.secho(
+            f"APOC: {'yes' if trace.target.capabilities.apoc else 'no'}",
+            fg=typer.colors.GREEN if trace.target.capabilities.apoc else typer.colors.YELLOW,
+        )
+    typer.secho("Next: edit checks/example.yml, then run `graphcheck run`", fg=typer.colors.CYAN)
 
 
 @app.command()
@@ -313,6 +429,10 @@ def debug(
     json_output: bool = typer.Option(False, "--json", help="Emit the stable debug JSON trace."),
 ) -> None:
     """Diagnose the configured Neo4j connection."""
+    from graphcheck.debug_diagnostics import CapabilityContext, blocked_checks_for_project
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.neo4j_adapter import error_json
+
     profile_name = profile or "local"
     try:
         root = find_project_root()
@@ -361,7 +481,12 @@ def debug(
 
     caps = trace.target.capabilities
     typer.echo(f"Profile: {trace.profile}")
-    typer.echo(f"Neo4j version: {trace.target.server_version}")
+    if trace.versions is not None:
+        typer.echo(f"GraphCheck version: {trace.versions.graphcheck}")
+        typer.echo(f"Neo4j Python driver: {trace.versions.neo4j_driver}")
+    typer.echo(f"Neo4j Server: {trace.target.server_version}")
+    if trace.versions is not None:
+        typer.echo(f"Cypher: {trace.versions.cypher}")
     typer.echo(f"Edition: {trace.target.edition}")
     typer.echo(f"Database name: {trace.target.database}")
     typer.echo(f"APOC: {'yes' if caps.apoc else 'no'}")
@@ -415,6 +540,10 @@ def profile(
     ),
 ) -> None:
     """Generate a baseline profile for the connected Neo4j graph."""
+    from graphcheck.baselines import write_baseline
+    from graphcheck.contracts.profile import ProfileStatus
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import PROJECT_FILE, default_project_config, load_project_config
 
     telemetry = _command_telemetry()
     setup_started = time.monotonic()
@@ -422,6 +551,11 @@ def profile(
     unexpected_stage = CliFailureStage.PROJECT_DISCOVERY
     try:
         root = find_project_root()
+        config = (
+            load_project_config(root)
+            if (root / PROJECT_FILE).is_file()
+            else default_project_config()
+        )
         unexpected_stage = CliFailureStage.PROFILE_LOAD
         profiles = load_profiles(root)
         _, selected = select_profile(profiles, profile)
@@ -443,14 +577,10 @@ def profile(
                 if telemetry is not None and telemetry.enabled
                 else None
             )
-            baseline = (
-                build_profile(
-                    client,
-                    telemetry_observer=observer,
-                    telemetry_result_observer=result_observer,
-                )
-                if observer is not None
-                else build_profile(client)
+            baseline = build_profile(
+                client,
+                telemetry_observer=observer,
+                telemetry_result_observer=result_observer,
             )
         finally:
             client.close()
@@ -492,7 +622,7 @@ def profile(
         )
     artifact_started = time.monotonic()
     try:
-        path = write_baseline(baseline)
+        path = write_baseline(baseline, root, config.artifacts)
     except OSError as exc:
         if telemetry is not None:
             telemetry.baseline_artifact = ArtifactOutcome.ERROR
@@ -520,6 +650,185 @@ def profile(
             baseline,
             path,
         )
+
+
+@app.command()
+def monitor(
+    profile: str | None = typer.Option(None, "--profile", help="Connection profile to use."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Metrics server host."),
+    port: int = typer.Option(9100, "--port", min=1, max=65535, help="Metrics server port."),
+    interval: int = typer.Option(
+        15,
+        "--interval",
+        min=1,
+        help="Seconds between database health checks.",
+    ),
+) -> None:
+    """Expose connected-database health metrics until interrupted."""
+    from graphcheck.errors import GraphCheckError
+
+    client: Neo4jClient | None = None
+    try:
+        root = find_project_root()
+        profiles = load_profiles(root)
+        _, selected = select_profile(profiles, profile)
+        client = Neo4jClient(selected)
+        display_host = "localhost" if host == "0.0.0.0" else host
+
+        typer.echo("Starting GraphCheck monitoring...")
+        typer.echo(f"Metrics endpoint: http://{display_host}:{port}/metrics")
+        typer.echo(f"Health check interval: {interval} seconds")
+        typer.echo("Press Ctrl+C to stop monitoring.")
+
+        try:
+            run_monitor(
+                client=client,
+                interval_seconds=interval,
+                host=host,
+                port=port,
+            )
+        except OSError:
+            typer.echo("Unable to start GraphCheck monitoring.", err=True)
+            typer.echo(
+                f"Failed to start metrics server on {display_host}:{port}.",
+                err=True,
+            )
+            typer.echo("The port may already be in use.", err=True)
+            raise typer.Exit(1) from None
+    except GraphCheckError as exc:
+        typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
+        typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        if client is not None:
+            client.close()
+
+
+@app.command()
+@_telemetry_command(CommandName.GENERATE)
+def generate(
+    from_: Annotated[
+        Path | None,
+        typer.Option("--from", help="Baseline JSON; defaults to the latest valid snapshot."),
+    ] = None,
+    docs: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--docs",
+            help="UTF-8 domain document sent verbatim. Repeat for multiple files.",
+        ),
+    ] = None,
+    count: Annotated[
+        int,
+        typer.Option("--count", min=1, max=20, help="Approximate number of checks to propose."),
+    ] = 5,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a stable machine-readable result."),
+    ] = False,
+) -> None:
+    """Generate non-deterministic, inert check suggestions for human review."""
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.generation.service import GenerationStage
+
+    telemetry = _command_telemetry()
+    current_stage = CliFailureStage.PROJECT_DISCOVERY
+    artifact_started: float | None = None
+
+    def observe_stage(stage: GenerationStage) -> None:
+        nonlocal artifact_started, current_stage
+        current_stage = CliFailureStage(stage.value)
+        if stage is GenerationStage.ARTIFACT_WRITE:
+            artifact_started = time.monotonic()
+
+    def mark_generated_artifact(outcome: ArtifactOutcome) -> None:
+        if telemetry is not None and artifact_started is not None:
+            telemetry.mark_generated_artifact(artifact_started, outcome)
+
+    def disclose(event: "GenerateDisclosure") -> None:
+        if json_output:
+            typer.echo(
+                json.dumps(event.as_json(), separators=(",", ":"), ensure_ascii=False),
+                err=True,
+            )
+        else:
+            typer.echo(event.render_human(), err=True)
+
+    def warn(candidate: "DroppedCandidate") -> None:
+        if not json_output:
+            typer.echo(
+                f"Warning [{candidate.code}] {candidate.candidate}: {candidate.reason}",
+                err=True,
+            )
+
+    try:
+        root = find_project_root()
+        current_stage = CliFailureStage.CONFIG_LOAD
+        result = generation_service_factory().generate(
+            project_root=root,
+            baseline_from=from_,
+            document_paths=docs,
+            requested_count=count,
+            disclosure_sink=disclose,
+            warning_sink=warn,
+            invocation_dir=Path.cwd(),
+            stage_observer=observe_stage,
+        )
+    except GraphCheckError as exc:
+        if exc.error.code.startswith("generate.write_"):
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(exc.error.code),
+                exc.error.code,
+            )
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "command": "generate",
+                        "status": "error",
+                        "error": exc.error.model_dump(mode="json"),
+                    },
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            typer.echo(f"Error [{exc.error.code}]: {exc.error.message}", err=True)
+            typer.echo(f"Fix: {exc.error.fix}", err=True)
+        raise typer.Exit(1) from exc
+    except Exception:
+        if current_stage is CliFailureStage.ARTIFACT_WRITE:
+            mark_generated_artifact(ArtifactOutcome.ERROR)
+        if telemetry is not None:
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                current_stage,
+                SafeErrorCode.UNKNOWN,
+            )
+        raise
+
+    mark_generated_artifact(ArtifactOutcome.WRITTEN)
+    _render_generate_result(result, json_output=json_output)
+
+
+def _render_generate_result(result: "GenerateResult", *, json_output: bool) -> None:
+    if json_output:
+        typer.echo(
+            json.dumps(
+                result.model_dump(mode="json"),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+        return
+    dropped = f" ({result.dropped} dropped)" if result.dropped else ""
+    typer.echo(
+        f"Wrote {result.written} generated checks to {result.path}{dropped}; "
+        "review them and remove generated: true to activate."
+    )
 
 
 @app.command()
@@ -588,6 +897,18 @@ def report(
         _print_report_command_help()
         return
 
+    from graphcheck.contracts.results import Verdict
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import load_project_config
+    from graphcheck.reporting.history import (
+        ReportHistoryError,
+        discover_report_runs,
+        find_report_run,
+        format_report_comparison,
+        format_report_history,
+        prune_report_runs,
+    )
+
     try:
         root = find_project_root()
         config = load_project_config(root)
@@ -632,36 +953,47 @@ def report(
             output = record.directory / "report.failures.html"
             render_started = time.monotonic()
             try:
-                write_html_report(record.results, output, verdicts=_DIAGNOSTIC_VERDICTS)
-            except Exception as exc:
+                write_html_report(
+                    record.results,
+                    output,
+                    verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
+                )
+            except OSError as exc:
                 if telemetry is not None:
-                    telemetry.render_ms = max(
-                        0,
-                        round((time.monotonic() - render_started) * 1000),
-                    )
+                    telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
                     telemetry.report_artifact = ArtifactOutcome.ERROR
                     telemetry.fail(
                         ProcessOutcome.UNEXPECTED_ERROR,
                         CliFailureStage.REPORT_RENDER,
                         SafeErrorCode.REPORT_RENDER_FAILED,
                     )
-                typer.echo(f"report.error: Could not render {output}: {exc}", err=True)
+                typer.echo("report.error: failed to render the requested report", err=True)
                 raise typer.Exit(1) from exc
             if telemetry is not None:
-                telemetry.render_ms = max(
-                    0,
-                    round((time.monotonic() - render_started) * 1000),
-                )
+                telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
                 telemetry.report_artifact = ArtifactOutcome.WRITTEN
-            typer.echo(f"Wrote {output}")
+            typer.secho(f"Wrote {output}", fg=typer.colors.GREEN)
             if open_report:
                 _open_html_report(output)
             return
 
         if open_report:
-            if report_id is not None:
-                record = find_report_run(discover_report_runs(runs_dir), report_id)
-                _open_html_report(record.report_path)
+            records = discover_report_runs(runs_dir)
+            if records:
+                record = (
+                    find_report_run(records, report_id) if report_id is not None else records[0]
+                )
+                open_report_explorer(
+                    runs_dir,
+                    record.id,
+                    opener=webbrowser.open,
+                    on_open=lambda _: typer.echo(
+                        f"Opened report explorer for {record.id}. "
+                        "Keep this terminal open; press Ctrl+C to stop."
+                    ),
+                )
+            elif report_id is not None:
+                find_report_run(records, report_id)
             else:
                 _open_html_report(_latest_html_report(runs_dir))
     except ReportHistoryError as exc:
@@ -695,6 +1027,9 @@ def baseline_set(
     ),
 ) -> None:
     """Select an existing snapshot as the active baseline."""
+    from graphcheck.baselines import set_current_baseline
+    from graphcheck.errors import GraphCheckError
+
     telemetry = _command_telemetry()
     if telemetry is not None:
         telemetry.set_action(CommandAction.SET)
@@ -710,7 +1045,7 @@ def baseline_set(
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(f"Baseline set to {selected.name}")
+    typer.secho(f"Baseline set to {selected.name}", fg=typer.colors.GREEN)
 
 
 @app.command("diff")
@@ -727,6 +1062,12 @@ def diff_command(
     json_output: bool = typer.Option(False, "--json", help="Emit the structured diff as JSON."),
 ) -> None:
     """Compare two stored baseline snapshots."""
+    from pydantic import ValidationError
+
+    from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+    from graphcheck.diff import SchemaVersionMismatch, render_human, render_json
+    from graphcheck.errors import GraphCheckError
+
     telemetry = _command_telemetry()
     try:
         current_baseline_path, latest_baseline_path = resolve_diff_baselines(
@@ -809,7 +1150,7 @@ def diff_command(
             raise typer.Exit(2)
         _print_target_identity_warning(current_baseline, latest_baseline)
         if not typer.confirm("Do you want to continue?", default=False):
-            typer.echo("Diff cancelled by user.")
+            typer.secho("Diff cancelled by user.", fg=typer.colors.YELLOW)
             return
 
     try:
@@ -843,9 +1184,9 @@ def diff_command(
         raise
     if isinstance(report, list):  # Compatibility with the original line-oriented hook.
         if not report:
-            typer.echo("No drift detected.")
+            typer.secho("No drift detected.", fg=typer.colors.GREEN, bold=True)
             return
-        typer.echo("Graph drift detected.\n")
+        typer.secho("Graph drift detected.\n", fg=typer.colors.YELLOW, bold=True)
         for message in report:
             typer.echo(message)
         return
@@ -859,19 +1200,19 @@ def diff_command(
         raise typer.Exit(1)
 
 
-def _target_identity(target: RunTarget) -> str:
+def _target_identity(target: "RunTarget") -> str:
     return target.database
 
 
-def _target_identity_json(target: RunTarget) -> dict[str, str]:
+def _target_identity_json(target: "RunTarget") -> dict[str, str]:
     return {"database": _target_identity(target)}
 
 
 def _print_target_identity_warning(
-    current_baseline: BaselineProfile,
-    latest_baseline: BaselineProfile,
+    current_baseline: "BaselineProfile",
+    latest_baseline: "BaselineProfile",
 ) -> None:
-    typer.echo("WARNING")
+    typer.secho("WARNING", fg=typer.colors.YELLOW, bold=True)
     typer.echo()
     typer.echo("The selected baseline snapshots belong to different database / target identities.")
     typer.echo()
@@ -888,11 +1229,13 @@ def _print_target_identity_warning(
 
 
 def _print_profile_summary(
-    baseline: BaselineProfile,
+    baseline: "BaselineProfile",
     baseline_path: Path,
 ) -> None:
+    from graphcheck.contracts.profile import ProfileStatus
+
     if baseline.status is ProfileStatus.PARTIAL:
-        typer.echo("Profile completed with partial data.")
+        typer.secho("Profile completed with partial data.", fg=typer.colors.YELLOW, bold=True)
         typer.echo()
         typer.echo(f"Status: {baseline.status}")
         typer.echo(f"Reason: {baseline.partial_reason}")
@@ -904,7 +1247,7 @@ def _print_profile_summary(
         typer.echo(f"Baseline written to:\n{baseline_path}")
         return
 
-    typer.echo("Profile completed.")
+    typer.secho("Profile completed.", fg=typer.colors.GREEN, bold=True)
     typer.echo()
 
     typer.echo(f"Status: {baseline.status}")
@@ -1021,13 +1364,25 @@ def _cli_stage_for_error(code: str) -> CliFailureStage:
         return CliFailureStage.PROBE
     if code.startswith("report."):
         return CliFailureStage.REPORT_RENDER
+    if code.startswith("generate.baseline_"):
+        return CliFailureStage.BASELINE_LOAD
+    if code.startswith("generate.doc_"):
+        return CliFailureStage.DOCUMENT_LOAD
+    if code.startswith("generate.provider_"):
+        return CliFailureStage.PROVIDER_REQUEST
+    if code in {"generate.output_invalid", "generate.no_valid_candidates"}:
+        return CliFailureStage.GENERATION_VALIDATION
+    if code.startswith("generate.write_"):
+        return CliFailureStage.ARTIFACT_WRITE
     return CliFailureStage.CONFIG_LOAD
 
 
 def _telemetry_preview_payload() -> dict[str, object]:
+    from graphcheck.telemetry.policy import assert_private_payload
+
     common = {
-        "telemetry_schema_version": "1.0",
-        "consent_version": "1.0",
+        "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
+        "consent_version": CONSENT_VERSION,
         "graphcheck_version": __version__,
         "distinct_id": "<installation-uuid>",
         "session_id": "<process-uuid>",
@@ -1093,6 +1448,9 @@ def _telemetry_preview_payload() -> dict[str, object]:
                 "process_outcome": "success",
                 "failure_stage": None,
                 "telemetry_run_id": "<run-uuid>",
+                "os_family": "linux",
+                "os_version": "6.8",
+                "python_minor": "3.12",
             },
         },
         {
@@ -1116,6 +1474,12 @@ def _telemetry_preview_payload() -> dict[str, object]:
     return {"sent": False, "events": events}
 
 
+def _telemetry_delivery_configured() -> bool:
+    from graphcheck.telemetry.posthog import telemetry_delivery_configured
+
+    return telemetry_delivery_configured()
+
+
 def _print_report_command_help() -> None:
     typer.echo(
         "Report commands:\n"
@@ -1128,7 +1492,9 @@ def _print_report_command_help() -> None:
     )
 
 
-def _latest_run(records: list[ReportRun]) -> ReportRun:
+def _latest_run(records: list["ReportRun"]) -> "ReportRun":
+    from graphcheck.reporting.history import ReportHistoryError
+
     if not records:
         raise ReportHistoryError(
             "No results.json found in report history. Run `graphcheck run` first."
@@ -1137,6 +1503,8 @@ def _latest_run(records: list[ReportRun]) -> ReportRun:
 
 
 def _latest_html_report(runs_dir: Path) -> Path:
+    from graphcheck.reporting.history import ReportHistoryError
+
     reports = list(runs_dir.rglob("report.html")) if runs_dir.is_dir() else []
     if not reports:
         raise ReportHistoryError(
@@ -1146,6 +1514,8 @@ def _latest_html_report(runs_dir: Path) -> Path:
 
 
 def _open_html_report(path: Path) -> None:
+    from graphcheck.reporting.history import ReportHistoryError
+
     if not path.is_file():
         raise ReportHistoryError(f"No report.html found for the selected run at {path}.")
     try:
@@ -1154,7 +1524,7 @@ def _open_html_report(path: Path) -> None:
         raise ReportHistoryError(f"Could not open {path} in the default browser: {exc}") from exc
     if not opened:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
-    typer.echo(f"Opened {path}")
+    typer.secho(f"Opened {path}", fg=typer.colors.CYAN)
 
 
 @app.command("run")
@@ -1176,8 +1546,18 @@ def run_command(
         "--fail-fast",
         help="Stop after the first error-severity failure and mark later checks not run.",
     ),
+    concurrency: int | None = typer.Option(
+        None,
+        "--concurrency",
+        min=1,
+        help="Maximum concurrent checks; overrides graphcheck.yml.",
+    ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
+    from graphcheck.contracts.results import CheckError
+    from graphcheck.engine import DirectoryBaselineProvider, Engine, EngineConfig, failed_results
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import ARTIFACTS_DIR, load_project_config
 
     requested_suites = list(dict.fromkeys(suite or []))
     root: Path | None = None
@@ -1199,13 +1579,15 @@ def run_command(
         )
         profiles = load_profiles(root)
         _, selected_profile = select_profile(profiles, profile)
-        client = Neo4jClient(selected_profile)
+        max_concurrency = concurrency or int(config.concurrency)
+        client = _new_neo4j_client(selected_profile, max_concurrency)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
             results = Engine(
                 client,
                 baselines=DirectoryBaselineProvider(artifacts / "baselines"),
+                config=EngineConfig(max_concurrency=max_concurrency),
                 progress_callback=progress_callback,
                 event_sink=telemetry.event_sink if telemetry is not None else None,
             ).run(
@@ -1272,7 +1654,11 @@ def run_command(
             try:
                 client.close()
             except Exception as exc:  # a close failure must not discard a completed run artifact
-                typer.echo(f"Warning: Neo4j driver cleanup failed: {exc}", err=True)
+                typer.secho(
+                    f"Warning: Neo4j driver cleanup failed: {exc}",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
 
     if (
         results.run.status.value == "failed"
@@ -1323,8 +1709,19 @@ def run_command(
                     else SafeErrorCode.ARTIFACT_WRITE_FAILED
                 ),
             )
-        typer.echo(f"run.artifact_failed: Could not write run artifacts: {exc}", err=True)
-        typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
+        if results.run.error is not None:
+            _print_setup_error(results.run.error)
+        typer.secho(
+            f"run.artifact_failed: Could not write run artifacts: {exc}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(
+            "Fix: Check the configured artifacts path and filesystem permissions.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
         raise typer.Exit(3) from exc
     if telemetry is not None:
         telemetry.render_ms = sum(render_times)
@@ -1339,7 +1736,24 @@ def run_command(
     raise typer.Exit(results.run.exit_code)
 
 
-def _selected_check_count(suites: Sequence[SuiteInput], tags: Sequence[str]) -> int:
+def _new_neo4j_client(profile, max_concurrency: int):
+    """Construct the real workload-aware client while retaining simple CLI test doubles."""
+
+    import inspect
+
+    parameters = inspect.signature(Neo4jClient).parameters.values()
+    accepts_setting = any(
+        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    return (
+        Neo4jClient(profile, max_concurrency=max_concurrency)
+        if accepts_setting
+        else Neo4jClient(profile)
+    )
+
+
+def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
     return sum(
         1
         for suite_input in suites
@@ -1352,6 +1766,15 @@ def _interactive_stderr() -> bool:
     return bool(getattr(sys.stderr, "isatty", lambda: False)())
 
 
+def _elapsed_clock(started: float) -> str:
+    minutes, seconds = divmod(max(0, int(time.monotonic() - started)), 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _progress_template(check_name: str) -> str:
+    return "%(label)s  [%(bar)s]  %(info)s Complete | Checking: " + check_name.replace("%", "%%")
+
+
 @contextmanager
 def _run_progress(
     total_checks: int,
@@ -1360,26 +1783,56 @@ def _run_progress(
         yield None
         return
 
+    started = time.monotonic()
+    state = {"check": "Preparing graph checks"}
+    lock = threading.Lock()
+    stopped = threading.Event()
     with typer.progressbar(
         length=total_checks,
-        label="Running graph checks",
+        label="00:00",
         file=sys.stderr,
-        show_eta=True,
+        show_eta=False,
         show_percent=True,
         show_pos=True,
-        fill_char="=",
-        empty_char="-",
+        fill_char=typer.style("=", fg=typer.colors.GREEN),
+        empty_char=typer.style("-", fg=typer.colors.BRIGHT_BLACK),
         width=28,
+        color=True,
+        bar_template=_progress_template(state["check"]),
     ) as bar:
 
-        def update(completed: int, total: int, check_name: str) -> None:
-            bar.label = "Checks complete" if completed == total else f"Completed {check_name}"
-            bar.update(1)
+        def refresh() -> None:
+            with lock:
+                bar.label = _elapsed_clock(started)
+                bar.bar_template = _progress_template(state["check"])
+                render = getattr(bar, "render_progress", None)
+                if callable(render):
+                    render()
 
-        yield update
+        def tick() -> None:
+            while not stopped.wait(1):
+                refresh()
+
+        ticker = threading.Thread(target=tick, name="graphcheck-progress-clock", daemon=True)
+        ticker.start()
+
+        def update(completed: int, total: int, check_name: str) -> None:
+            with lock:
+                state["check"] = check_name
+                bar.label = _elapsed_clock(started)
+                bar.bar_template = _progress_template(check_name)
+                bar.update(1)
+
+        try:
+            yield update
+        finally:
+            stopped.set()
+            ticker.join(timeout=1)
 
 
 def _selection_tags(selectors: list[str]) -> list[str]:
+    from graphcheck.errors import GraphCheckError
+
     tags: list[str] = []
     for selector in selectors:
         kind, separator, value = selector.partition(":")
@@ -1395,7 +1848,10 @@ def _selection_tags(selectors: list[str]) -> list[str]:
     return tags
 
 
-def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[SuiteInput]:
+def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["SuiteInput"]:
+    from graphcheck.engine import SuiteInput
+    from graphcheck.errors import GraphCheckError
+
     if not checks_dir.is_dir():
         raise GraphCheckError(
             "run.checks_missing",
@@ -1415,11 +1871,11 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[Su
             "Check the configured checks path and its filesystem permissions.",
         ) from exc
 
+    requested = set(requested_suites)
     loaded: list[SuiteInput] = []
     for path in paths:
         try:
-            text = path.read_text(encoding="utf-8")
-            loaded.append(SuiteInput.from_yaml(text, source=str(path)))
+            loaded.append(SuiteInput.from_yaml(path.read_text(encoding="utf-8"), source=str(path)))
         except Exception as exc:
             raise GraphCheckError(
                 "run.suite_invalid",
@@ -1427,10 +1883,7 @@ def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list[Su
                 "Fix the suite YAML and remove unknown keys, then run it again.",
             ) from exc
 
-    if not requested_suites:
-        return loaded
-    requested = set(requested_suites)
-    return [item for item in loaded if item.suite.suite in requested]
+    return [item for item in loaded if not requested or item.suite.suite in requested]
 
 
 def _project_path(root: Path, configured: str) -> Path:
@@ -1439,13 +1892,16 @@ def _project_path(root: Path, configured: str) -> Path:
 
 
 def _write_run_artifacts(
-    results: Results,
+    results: "Results",
     runs_dir: Path,
     *,
     render_observer: Callable[[int, bool], None] | None = None,
 ) -> tuple[Path, Path]:
+    from graphcheck.reporting.history import report_name
+
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
+    results.run.id = report_name(results)
     historical_dir = runs_dir / results.run.id
     if (
         historical_dir.name.casefold() == "latest"
@@ -1453,18 +1909,14 @@ def _write_run_artifacts(
     ):
         raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
 
-    _publish_run_directory(results, historical_dir, render_observer=render_observer)
+    artifacts = render_run_artifacts(results)
+    _publish_run_directory(artifacts, historical_dir)
     latest_dir = runs_dir / "latest"
-    _publish_run_directory(results, latest_dir, render_observer=render_observer)
+    _publish_run_directory(artifacts, latest_dir)
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
-def _publish_run_directory(
-    results: Results,
-    directory: Path,
-    *,
-    render_observer: Callable[[int, bool], None] | None = None,
-) -> None:
+def _publish_run_directory(artifacts: tuple[bytes, bytes, bytes], directory: Path) -> None:
     """Stage and swap a complete results/report pair without exposing a mixed pair."""
 
     parent = directory.parent
@@ -1475,22 +1927,10 @@ def _publish_run_directory(
     staging.mkdir()
     previous_moved = False
     try:
-        write_results(results, staging / "results.json")
-        render_started = time.monotonic()
-        try:
-            write_html_report(results, staging / "report.html")
-        except Exception:
-            if render_observer is not None:
-                render_observer(
-                    max(0, round((time.monotonic() - render_started) * 1000)),
-                    False,
-                )
-            raise
-        if render_observer is not None:
-            render_observer(
-                max(0, round((time.monotonic() - render_started) * 1000)),
-                True,
-            )
+        for name, content in zip(
+            ("results.json", "report.html", "summary.json"), artifacts, strict=True
+        ):
+            (staging / name).write_bytes(content)
 
         if directory.exists():
             is_junction = getattr(directory, "is_junction", lambda: False)
@@ -1513,31 +1953,63 @@ def _publish_run_directory(
             shutil.rmtree(staging)
 
 
-def _print_setup_error(error: CheckError) -> None:
-    typer.echo(f"{error.code}: {error.message}", err=True)
-    typer.echo(f"Fix: {error.fix}", err=True)
+def _print_setup_error(error: "CheckError") -> None:
+    typer.secho(f"{error.code}: {error.message}", fg=typer.colors.RED, bold=True, err=True)
+    typer.secho(f"Fix: {error.fix}", fg=typer.colors.YELLOW, err=True)
 
 
-def _print_run_summary(results: Results, results_path: Path, report_path: Path) -> None:
+def _run_status_color(status: str) -> str:
+    return {
+        "complete": typer.colors.GREEN,
+        "partial": typer.colors.MAGENTA,
+        "failed": typer.colors.RED,
+    }.get(status, typer.colors.WHITE)
+
+
+def _check_summary(totals) -> str:
+    values = (
+        ("passed", totals.passed, typer.colors.GREEN),
+        ("failed", totals.fail, typer.colors.RED),
+        ("warnings", totals.warn, typer.colors.YELLOW),
+        ("errored", totals.errored, typer.colors.MAGENTA),
+        ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
+    )
+    return "".join(
+        f" | {typer.style(f'{label} {value}', fg=color)}" for label, value, color in values
+    )
+
+
+def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
+    from graphcheck.reporting.history import display_run_status
+
     totals = results.totals
     score = "n/a" if results.score is None else str(results.score.value)
-    typer.echo(f"GraphCheck run {results.run.id}: {results.run.status.value}")
+    status = display_run_status(results).value
+    typer.echo(
+        f"GraphCheck run {results.run.id}: "
+        f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
+    )
+    if results.run.target is not None:
+        nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
+        relationships = (
+            "unavailable"
+            if results.run.target.relationships is None
+            else str(results.run.target.relationships)
+        )
+        typer.echo(
+            f"Target graph: {results.run.target.database} | nodes {nodes} | "
+            f"relationships {relationships}"
+        )
     if len(results.suites) > 1:
         for suite in results.suites:
             suite_score = "n/a" if suite.score is None else str(suite.score)
             typer.echo(
                 f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
-                f"passed {suite.totals.passed} | failed {suite.totals.fail} | "
-                f"warnings {suite.totals.warn} | errored {suite.totals.errored} | "
-                f"skipped {suite.totals.skipped}"
+                f"{_check_summary(suite.totals).removeprefix(' | ')}"
             )
         typer.echo(f"Exit code: {results.run.exit_code}")
     else:
-        typer.echo(
-            "Checks: "
-            f"{totals.checks} | passed {totals.passed} | failed {totals.fail} | "
-            f"warnings {totals.warn} | errored {totals.errored} | skipped {totals.skipped}"
-        )
+        typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
         typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")

@@ -117,14 +117,11 @@ use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
 
 The report shows:
 
-- run id,
-- a grey `RUN COMPLETE`, `RUN PARTIAL`, or `RUN FAILED` metadata label,
-- an outcome-and-timing summary beneath that label; its issue/no-issue text uses
-  the exit-code color while any appended skipped-check count remains neutral,
-- target database, version, and edition when available,
-- run error banner for failed runs,
-- partial-run banner when `partial_reason` is present,
-- run start time and duration,
+- a navbar status summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
+  former banner color retained in a status pill; unreachable Neo4j targets display as failed,
+  interrupted/incomplete runs and runs containing errored checks display as partial, while every
+  other run displays as complete and retains its issue counts,
+- target database, version, edition, node count, and relationship count when available,
 - GraphCheck version,
 - pack version,
 - per-suite executed/selected counts,
@@ -137,6 +134,8 @@ The report shows:
 - an issue summary containing `fail`, `warn`, and `errored` checks; intentional
   `skipped` checks are not issues,
 - checks sorted failures-first,
+- report-history timestamps converted from stored UTC to the browser's local timezone and shown as
+  `yyyy-mm-dd at hh:mm:ss`,
 - compiled Cypher when present,
 - expected and measured values,
 - estimate details when present,
@@ -144,7 +143,8 @@ The report shows:
 - evidence message and node/relationship or aggregate-scope IDs.
 
 The embedded script reveals the checks explorer, navigates from suite status
-markers to checks, filters checks by verdict or search text, sorts the issue
+markers to checks, filters checks by verdict or search text, states when the selected verdict
+category is empty, sorts the issue
 summary, toggles check details, and switches the inline CSS theme. Event handlers
 are registered with `addEventListener`; check identities are read from escaped
 data attributes and matched directly rather than interpolated into JavaScript or
@@ -168,7 +168,8 @@ Within the same verdict, checks sort by severity, suite id, then check id.
 `graphcheck report` operates on report artifacts that already exist. It does not
 connect to Neo4j or create new run data.
 
-`graphcheck run` publishes every completed artifact below `runs/<run-id>/` and
+`graphcheck run` names each report `<target-graph>_<YYYYMMDDTHHMMSSZ>`, publishes every
+completed artifact below the correspondingly named `runs/<report-name>/` directory, and
 then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 

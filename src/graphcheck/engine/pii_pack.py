@@ -3,6 +3,7 @@ from __future__ import annotations
 from textwrap import dedent
 
 from graphcheck.engine.compiler import ConformancePlan, register_conformance_compiler
+from graphcheck.engine.identifiers import node_pattern, property_access
 from graphcheck.engine.sampling import (
     CYPHER_SAMPLE_MODULUS,
     cypher_hash_expression,
@@ -13,6 +14,7 @@ from graphcheck.packs.metadata import PiiPackMetadata
 
 _DEFAULT_SAMPLE_SIZE = 1000
 _SAMPLE_NODE_MULTIPLIER = 1_103_515_245
+_SAMPLE_GATE_MULTIPLIER = 32
 
 _SCHEMA_CATALOG = """
 CALL {
@@ -41,46 +43,96 @@ all(name IN $required_labels WHERE name IN _gc_labels)
 
 
 def _node_pointer(variable: str) -> str:
-    return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
+    return f"{{kind: 'node', id: elementId({variable}), labels: labels({variable})}}"
 
 
-def _candidate_query(*, strings_only: bool) -> str:
+def _candidate_query(*, strings_only: bool, label: str | None, properties: list[str]) -> str:
+    node = node_pattern("n", label)
+    configured_rows = (
+        "["
+        + ", ".join(
+            f"{{property: $properties[{index}], raw: {property_access('n', property_name)}}}"
+            for index, property_name in enumerate(properties)
+        )
+        + "]"
+        if properties
+        else None
+    )
+    population_unwind = (
+        f"UNWIND {configured_rows} AS occurrence\n"
+        "        WITH occurrence.property AS property, occurrence.raw AS raw"
+        if configured_rows
+        else "UNWIND keys(n) AS property\n        WITH property, n[property] AS raw"
+    )
+    candidate_unwind = (
+        f"UNWIND {configured_rows} AS occurrence\n"
+        "          WITH population, n, occurrence.property AS property, occurrence.raw AS raw"
+        if configured_rows
+        else (
+            "UNWIND keys(n) AS property\n          WITH population, n, property, n[property] AS raw"
+        )
+    )
     string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     value_projection = ", value: raw" if strings_only else ""
-    hash_expression = cypher_hash_expression("_gc_occurrence_key")
-    return dedent(
+    population_query = (
         f"""
+        MATCH {node}
+        {population_unwind}
+        WHERE raw IS NOT NULL
+          AND toStringOrNull(raw) = raw
+        RETURN count(*) AS population
+        """
+        if strings_only
+        else f"""
+        MATCH {node}
+        RETURN coalesce(sum(size(keys(n))), 0) AS population
+        """
+    )
+    hash_expression = cypher_hash_expression("_gc_occurrence_key")
+    gate_hash_expression = cypher_hash_expression("_gc_occurrence_key").replace(
+        "$sample_hash_",
+        "$sample_gate_hash_",
+    )
+    # Numeric internal IDs remain only inside this explicitly selected Cypher 5 sampling path.
+    # elementId() is opaque, so retaining the established rank input avoids a silent sample change.
+    return (
+        "CYPHER 5\n"
+        + dedent(
+            f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IS NULL OR $label IN labels(n)
-          UNWIND keys(n) AS property
-          WITH property, n[property] AS raw
-          WHERE raw IS NOT NULL
-            AND ($properties = [] OR property IN $properties)
-            {string_predicate}
-          RETURN count(*) AS population
+          {dedent(population_query).strip()}
         }}
         CALL {{
-          MATCH (n)
-          WHERE $label IS NULL OR $label IN labels(n)
-          UNWIND keys(n) AS property
-          WITH n, property, n[property] AS raw
+          WITH population
+          WITH population
+          WHERE population > 0
+          MATCH {node}
+          {candidate_unwind}
           WHERE raw IS NOT NULL
-            AND ($properties = [] OR property IN $properties)
             {string_predicate}
-          WITH n, property, raw ORDER BY id(n), property
-          WITH n, collect({{property: property, raw: raw}}) AS _gc_node_properties
+          WITH population, n, property, raw ORDER BY elementId(n), property
+          WITH population, n,
+               collect({{property: property, raw: raw}}) AS _gc_node_properties
           UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
-          WITH n, _gc_property_index,
+          WITH population, n, _gc_property_index,
                _gc_node_properties[_gc_property_index] AS occurrence
-          WITH n, occurrence.property AS property, occurrence.raw AS raw,
+          WITH population, n, occurrence.property AS property, occurrence.raw AS raw,
                _gc_property_index
-          WITH n, property, raw,
+          WITH population, n, property, raw,
                (((id(n) % {CYPHER_SAMPLE_MODULUS}) * {_SAMPLE_NODE_MULTIPLIER}
                  + _gc_property_index) % {CYPHER_SAMPLE_MODULUS}) AS _gc_occurrence_key
+          WITH population, n, property, raw, _gc_occurrence_key,
+               {gate_hash_expression} AS _gc_gate_key
+          WHERE population <= $sample_size * $sample_gate_multiplier
+             OR _gc_gate_key < toInteger(ceil(
+                  toFloat({CYPHER_SAMPLE_MODULUS})
+                  * toFloat($sample_size)
+                  * toFloat($sample_gate_multiplier)
+                  / toFloat(population)
+                ))
           WITH n, property, raw, {hash_expression} AS _gc_sample_key
-          ORDER BY _gc_sample_key, id(n), property
+          ORDER BY _gc_sample_key, elementId(n), property
           LIMIT $sample_size
           RETURN collect({{
             evidence: {_node_pointer("n")},
@@ -92,23 +144,8 @@ def _candidate_query(*, strings_only: bool) -> str:
                size(candidates) AS sample_size,
                candidates
         """
-    ).strip()
-
-
-def _population_query(*, strings_only: bool) -> str:
-    string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
-    return dedent(
-        f"""
-        MATCH (n)
-        WHERE $label IS NULL OR $label IN labels(n)
-        UNWIND keys(n) AS property
-        WITH property, n[property] AS raw
-        WHERE raw IS NOT NULL
-          AND ($properties = [] OR property IN $properties)
-          {string_predicate}
-        RETURN count(*) AS population
-        """
-    ).strip()
+        ).strip()
+    )
 
 
 def _common_config(
@@ -118,12 +155,8 @@ def _common_config(
     sample_seed: int,
     properties: list[str],
     required_properties: list[str] | None = None,
-) -> tuple[dict[str, object], dict[str, object]]:
-    label = config.get("label")
-    if label is not None and (not isinstance(label, str) or not label.strip()):
-        raise _invalid("PII label must be a non-blank string when supplied.")
-    if label is not None:
-        label = label.strip()
+) -> dict[str, object]:
+    label = _configured_label(config)
     requested_sample_size = config.get("sample_size")
     if requested_sample_size is None:
         requested_sample_size = _DEFAULT_SAMPLE_SIZE
@@ -136,18 +169,29 @@ def _common_config(
     if isinstance(sample_seed, bool) or not isinstance(sample_seed, int) or sample_seed < 0:
         raise _invalid("PII sample_seed must be a non-negative integer.")
     hash_params = cypher_hash_parameters(sample_seed)
+    gate_hash_params = {
+        name.replace("sample_hash_", "sample_gate_hash_"): value
+        for name, value in cypher_hash_parameters(sample_seed + 1).items()
+    }
     params = {
-        "label": label,
-        "properties": properties,
+        **({"properties": properties} if properties else {}),
         "sample_size": requested_sample_size,
+        "sample_gate_multiplier": _SAMPLE_GATE_MULTIPLIER,
         **hash_params,
+        **gate_hash_params,
         "required_labels": [label] if label is not None else [],
         "required_relationship_types": [],
         "required_properties": required_properties or [],
     }
-    population_params = {"label": label, "properties": properties}
     del evidence_cap
-    return params, population_params
+    return params
+
+
+def _configured_label(config: dict[str, object]) -> str | None:
+    label = config.get("label")
+    if label is not None and (not isinstance(label, str) or not label.strip()):
+        raise _invalid("PII label must be a non-blank string when supplied.")
+    return label.strip() if isinstance(label, str) else None
 
 
 @register_conformance_compiler("pii_name_match")
@@ -160,14 +204,18 @@ def _compile_pii_name_match(
         {"id": pattern_id, "keys": list(metadata.name_match.patterns[pattern_id].keys)}
         for pattern_id in selected
     ]
-    params, population_params = _common_config(
+    params = _common_config(
         config,
         evidence_cap=evidence_cap,
         sample_seed=sample_seed,
         properties=[],
     )
     return ConformancePlan(
-        query=_candidate_query(strings_only=False),
+        query=_candidate_query(
+            strings_only=False,
+            label=_configured_label(config),
+            properties=[],
+        ),
         params=params,
         expected={
             "confidence": metadata.name_match.confidence,
@@ -176,8 +224,7 @@ def _compile_pii_name_match(
         },
         name="Property names do not expose likely personal data",
         sampled=True,
-        population_query=_population_query(strings_only=False),
-        population_params=population_params,
+        sampling_preflight=False,
     )
 
 
@@ -205,7 +252,7 @@ def _compile_pii_value_match(
     properties = (
         [] if configured_properties is None else [item.strip() for item in configured_properties]
     )
-    params, population_params = _common_config(
+    params = _common_config(
         config,
         evidence_cap=evidence_cap,
         sample_seed=sample_seed,
@@ -213,7 +260,11 @@ def _compile_pii_value_match(
         required_properties=properties,
     )
     return ConformancePlan(
-        query=_candidate_query(strings_only=True),
+        query=_candidate_query(
+            strings_only=True,
+            label=_configured_label(config),
+            properties=properties,
+        ),
         params=params,
         expected={
             "confidence": metadata.value_match.confidence,
@@ -222,8 +273,7 @@ def _compile_pii_value_match(
         },
         name="Sampled property values do not match known personal-data formats",
         sampled=True,
-        population_query=_population_query(strings_only=True),
-        population_params=population_params,
+        sampling_preflight=False,
     )
 
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from statistics import median
 from typing import Any
 
 from graphcheck import __version__
@@ -33,24 +34,44 @@ ProfileTelemetryObserver = Callable[[str, str, int, object | None], None]
 ProfileResultTelemetryObserver = Callable[[str, str | None, bool], None]
 
 
+@dataclass
+class _CoverageInventory:
+    nodes: list[PropertyCoverage] = field(default_factory=list)
+    relationships: list[PropertyCoverage] = field(default_factory=list)
+    nodes_complete: bool = False
+    relationships_complete: bool = False
+
+
+_ACTIVE_INVENTORY: ContextVar[_CoverageInventory | None] = ContextVar(
+    "graphcheck_profile_inventory", default=None
+)
+
+
 class _LabelCollectionError(GraphCheckError):
     def __init__(self, cause: GraphCheckError, labels: list[LabelProfile]) -> None:
         super().__init__(cause.error.code, cause.error.message, cause.error.fix)
         self.labels = labels
-        self.partial_reason_code = (
-            "degree_distribution_incomplete"
-            if isinstance(cause, _DegreeDistributionError)
-            else "schema_incomplete"
-        )
-
-
-class _DegreeDistributionError(GraphCheckError):
-    def __init__(self, cause: GraphCheckError, label: LabelProfile) -> None:
-        super().__init__(cause.error.code, cause.error.message, cause.error.fix)
-        self.label = label
+        self.partial_reason_code = "schema_incomplete"
 
 
 def profile(
+    client: Neo4jClient,
+    *,
+    telemetry_observer: ProfileTelemetryObserver | None = None,
+    telemetry_result_observer: ProfileResultTelemetryObserver | None = None,
+) -> BaselineProfile:
+    token = _ACTIVE_INVENTORY.set(_CoverageInventory())
+    try:
+        return _profile(
+            client,
+            telemetry_observer=telemetry_observer,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+    finally:
+        _ACTIVE_INVENTORY.reset(token)
+
+
+def _profile(
     client: Neo4jClient,
     *,
     telemetry_observer: ProfileTelemetryObserver | None = None,
@@ -449,30 +470,26 @@ def collect_labels(
     _telemetry_observer: ProfileTelemetryObserver | None = None,
 ) -> list[LabelProfile]:
     deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
-    # time.sleep(3)  # Wait for the database to stabilize before collecting labels
     labels = sorted(
         str(row["label"])
         for row in _run_read(client, "CALL db.labels() YIELD label RETURN label", deadline=deadline)
     )
     collected: list[LabelProfile] = []
     failure: GraphCheckError | None = None
+    coverage: list[PropertyCoverage] = []
     for label in labels:
         try:
-            collected.append(
-                _collect_label(
-                    client,
-                    label,
-                    deadline,
-                    telemetry_observer=_telemetry_observer,
-                )
-            )
-        except _DegreeDistributionError as exc:
-            collected.append(exc.label)
-            failure = failure or exc
+            profile, label_coverage = _collect_label_inventory(client, label, deadline)
+            collected.append(profile)
+            coverage.extend(label_coverage)
         except GraphCheckError as exc:
             failure = failure or exc
     if failure is not None:
         raise _LabelCollectionError(failure, collected) from failure
+    inventory = _ACTIVE_INVENTORY.get()
+    if inventory is not None:
+        inventory.nodes = coverage
+        inventory.nodes_complete = True
     return collected
 
 
@@ -491,10 +508,19 @@ def collect_relationship_types(
             deadline=deadline,
         )
     )
-    return [
-        _collect_relationship_type(client, relationship_type, deadline)
-        for relationship_type in relationship_types
-    ]
+    collected: list[RelationshipTypeProfile] = []
+    coverage: list[PropertyCoverage] = []
+    for relationship_type in relationship_types:
+        profile, relationship_coverage = _collect_relationship_inventory(
+            client, relationship_type, deadline
+        )
+        collected.append(profile)
+        coverage.extend(relationship_coverage)
+    inventory = _ACTIVE_INVENTORY.get()
+    if inventory is not None:
+        inventory.relationships = coverage
+        inventory.relationships_complete = True
+    return collected
 
 
 def collect_constraints(
@@ -539,62 +565,97 @@ def _collect_index(row: dict[str, Any]) -> IndexProfile:
     )
 
 
-def _collect_relationship_type(
+def _collect_relationship_inventory(
     client: Neo4jClient, relationship_type: str, deadline: float | None
-) -> RelationshipTypeProfile:
+) -> tuple[RelationshipTypeProfile, list[PropertyCoverage]]:
     relationship_type_ref = _cypher_identifier(relationship_type)
-    return RelationshipTypeProfile(
-        name=relationship_type,
-        count=_relationship_type_count(client, relationship_type_ref, deadline),
-    )
-
-
-def _relationship_type_count(
-    client: Neo4jClient, relationship_type_ref: str, deadline: float | None
-) -> int:
     rows = _run_read(
         client,
-        f"MATCH ()-[r:{relationship_type_ref}]->() RETURN count(r) AS count",
+        "CALL {\n"
+        f"  MATCH ()-[r:{relationship_type_ref}]->()\n"
+        "  RETURN count(r) AS count\n"
+        "}\n"
+        "CALL {\n"
+        f"  MATCH ()-[r:{relationship_type_ref}]->()\n"
+        "  UNWIND keys(r) AS property\n"
+        "  WITH property, count(r) AS populated_count\n"
+        "  ORDER BY property\n"
+        "  RETURN collect({name: property, populated_count: populated_count}) AS properties\n"
+        "}\n"
+        "RETURN count, properties",
         deadline=deadline,
     )
-    return int(rows[0]["count"]) if rows else 0
-
-
-def _collect_label(
-    client: Neo4jClient,
-    label: str,
-    deadline: float | None,
-    *,
-    telemetry_observer: ProfileTelemetryObserver | None = None,
-) -> LabelProfile:
-    label_ref = _cypher_identifier(label)
-    count = _label_count(client, label_ref, deadline)
-    properties = [
-        _collect_property(client, label_ref, property_name, deadline)
-        for property_name in _label_properties(client, label_ref, deadline)
-    ]
-    try:
-        degree_distribution = _collect_degree_distribution(
-            client,
-            label_ref,
-            _deadline=deadline,
-            _telemetry_observer=telemetry_observer,
+    row = rows[0] if rows else {}
+    count = int(row.get("count", 0))
+    coverage = [
+        PropertyCoverage(
+            owner="relationship",
+            owner_name=relationship_type,
+            property=str(prop["name"]),
+            coverage=_coverage(int(prop["populated_count"]), count),
         )
-    except GraphCheckError as exc:
-        raise _DegreeDistributionError(
-            exc,
-            LabelProfile(
-                name=label,
-                count=count,
-                properties=properties,
-                degree_distribution=None,
+        for prop in row.get("properties", [])
+    ]
+    return RelationshipTypeProfile(name=relationship_type, count=count), coverage
+
+
+def _collect_label_inventory(
+    client: Neo4jClient, label: str, deadline: float | None
+) -> tuple[LabelProfile, list[PropertyCoverage]]:
+    label_ref = _cypher_identifier(label)
+    rows = _run_read(
+        client,
+        "CALL {\n"
+        f"  MATCH (n:{label_ref})\n"
+        "  WITH n, COUNT { (n)--() } AS degree\n"
+        "  RETURN count(n) AS count,\n"
+        "         coalesce(percentileCont(degree, 0.5), 0) AS median,\n"
+        "         coalesce(percentileCont(degree, 0.95), 0) AS p95,\n"
+        "         coalesce(percentileCont(degree, 0.99), 0) AS p99,\n"
+        "         coalesce(max(degree), 0) AS maximum\n"
+        "}\n"
+        "CALL {\n"
+        f"  MATCH (n:{label_ref})\n"
+        "  UNWIND keys(n) AS property\n"
+        "  WITH property, count(n) AS populated_count, min(elementId(n)) AS sample_id\n"
+        "  MATCH (sample) WHERE elementId(sample) = sample_id\n"
+        "  ORDER BY property\n"
+        "  RETURN collect({name: property, populated_count: populated_count, "
+        "sample: sample[property]}) "
+        "AS properties\n"
+        "}\n"
+        "RETURN count, median, p95, p99, maximum, properties",
+        deadline=deadline,
+    )
+    row = rows[0] if rows else {}
+    count = int(row.get("count", 0))
+    raw_properties = row.get("properties", [])
+    properties = [
+        ProfileProperty(name=str(prop["name"]), type=_python_value_type(prop.get("sample")))
+        for prop in raw_properties
+    ]
+    coverage = [
+        PropertyCoverage(
+            owner="node",
+            owner_name=label,
+            property=str(prop["name"]),
+            coverage=_coverage(int(prop["populated_count"]), count),
+        )
+        for prop in raw_properties
+    ]
+    return (
+        LabelProfile(
+            name=label,
+            count=count,
+            properties=properties,
+            degree_distribution=DegreeDistribution(
+                median=round(float(row.get("median", 0)), 2),
+                p95=round(float(row.get("p95", 0)), 2),
+                p99=round(float(row.get("p99", 0)), 2),
+                maximum=int(row.get("maximum", 0)),
             ),
-        ) from exc
-    return LabelProfile(
-        name=label,
-        count=count,
-        properties=properties,
-        degree_distribution=degree_distribution,
+        ),
+        coverage,
     )
 
 
@@ -612,113 +673,23 @@ def _collect_degree_distribution(
         "degree_distribution",
         lambda: _run_read(
             client,
-            f"MATCH (n:{label_ref}) RETURN COUNT {{ (n)--() }} AS degree",
+            f"MATCH (n:{label_ref}) WITH COUNT {{ (n)--() }} AS degree "
+            "RETURN coalesce(percentileCont(degree, 0.5), 0) AS median, "
+            "coalesce(percentileCont(degree, 0.95), 0) AS p95, "
+            "coalesce(percentileCont(degree, 0.99), 0) AS p99, "
+            "coalesce(max(degree), 0) AS maximum",
             deadline=deadline,
         ),
     )
-    degrees = sorted(int(row["degree"]) for row in rows)
-    if not degrees:
-        return DegreeDistribution(median=0, p95=0, p99=0, maximum=0)
-    return DegreeDistribution(
-        median=median(degrees),
-        p95=_percentile(degrees, 0.95),
-        p99=_percentile(degrees, 0.99),
-        maximum=degrees[-1],
-    )
-
-
-def _percentile(sorted_values: list[int], percentile: float) -> float:
-    rank = (len(sorted_values) - 1) * percentile
-    lower_index = int(rank)
-    upper_index = min(lower_index + 1, len(sorted_values) - 1)
-    fraction = rank - lower_index
-    lower = sorted_values[lower_index]
-    upper = sorted_values[upper_index]
-    return round(lower + (upper - lower) * fraction, 2)
-
-
-def _label_count(client: Neo4jClient, label_ref: str, deadline: float | None) -> int:
-    rows = _run_read(client, f"MATCH (n:{label_ref}) RETURN count(n) AS count", deadline=deadline)
-    return int(rows[0]["count"]) if rows else 0
-
-
-def _label_properties(client: Neo4jClient, label_ref: str, deadline: float | None) -> list[str]:
-    rows = _run_read(
-        client,
-        f"MATCH (n:{label_ref}) UNWIND keys(n) AS property "
-        "RETURN DISTINCT property ORDER BY property",
-        deadline=deadline,
-    )
-    return sorted(str(row["property"]) for row in rows)
-
-
-def _collect_property(
-    client: Neo4jClient, label_ref: str, property_name: str, deadline: float | None
-) -> ProfileProperty:
-    return ProfileProperty(
-        name=property_name,
-        type=_property_type(client, label_ref, property_name, deadline),
-    )
-
-
-def _property_count(
-    client: Neo4jClient, label_ref: str, property_name: str, deadline: float | None
-) -> int:
-    rows = _run_read(
-        client,
-        f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL RETURN count(n) AS count",
-        {"property": property_name},
-        deadline=deadline,
-    )
-    return int(rows[0]["count"]) if rows else 0
-
-
-def _relationship_properties(
-    client: Neo4jClient, relationship_type_ref: str, deadline: float | None
-) -> list[str]:
-    rows = _run_read(
-        client,
-        f"MATCH ()-[r:{relationship_type_ref}]->() UNWIND keys(r) AS property "
-        "RETURN DISTINCT property ORDER BY property",
-        deadline=deadline,
-    )
-    return sorted(str(row["property"]) for row in rows)
-
-
-def _relationship_property_count(
-    client: Neo4jClient,
-    relationship_type_ref: str,
-    property_name: str,
-    deadline: float | None,
-) -> int:
-    rows = _run_read(
-        client,
-        f"MATCH ()-[r:{relationship_type_ref}]->() "
-        "WHERE r[$property] IS NOT NULL RETURN count(r) AS count",
-        {"property": property_name},
-        deadline=deadline,
-    )
-    return int(rows[0]["count"]) if rows else 0
-
-
-def _property_type(
-    client: Neo4jClient,
-    label_ref: str,
-    property_name: str,
-    deadline: float | None,
-) -> str:
-    rows = _run_read(
-        client,
-        f"MATCH (n:{label_ref}) WHERE n[$property] IS NOT NULL "
-        "WITH n "
-        "ORDER BY id(n) "
-        "RETURN n[$property] AS value LIMIT 1",
-        {"property": property_name},
-        deadline=deadline,
-    )
     if not rows:
-        return "unknown"
-    return _python_value_type(rows[0].get("value"))
+        return DegreeDistribution(median=0, p95=0, p99=0, maximum=0)
+    row = rows[0]
+    return DegreeDistribution(
+        median=round(float(row["median"]), 2),
+        p95=round(float(row["p95"]), 2),
+        p99=round(float(row["p99"]), 2),
+        maximum=int(row["maximum"]),
+    )
 
 
 def _python_value_type(value: Any) -> str:
@@ -789,17 +760,15 @@ def collect_property_coverage(
     _deadline: float | None = None,
 ) -> list[PropertyCoverage]:
     deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
-    # time.sleep(3)  # Wait for the database to stabilize before collecting property coverage
-    coverage = [
-        *collect_node_property_coverage(
-            client,
-            _deadline=deadline,
-        ),
-        *collect_relationship_property_coverage(
-            client,
-            _deadline=deadline,
-        ),
-    ]
+    inventory = _ACTIVE_INVENTORY.get()
+    coverage = (
+        [*inventory.nodes, *inventory.relationships]
+        if inventory is not None and inventory.nodes_complete and inventory.relationships_complete
+        else [
+            *collect_node_property_coverage(client, _deadline=deadline),
+            *collect_relationship_property_coverage(client, _deadline=deadline),
+        ]
+    )
     return sorted(
         coverage,
         key=lambda item: (item.owner, item.owner_name, item.property),
@@ -821,28 +790,8 @@ def collect_node_property_coverage(
     )
 
     for label in labels:
-        label_ref = _cypher_identifier(label)
-        label_count = _label_count(client, label_ref, deadline)
-
-        for property_name in _label_properties(client, label_ref, deadline):
-            populated_count = _property_count(
-                client,
-                label_ref,
-                property_name,
-                deadline,
-            )
-
-            coverage.append(
-                PropertyCoverage(
-                    owner="node",
-                    owner_name=label,
-                    property=property_name,
-                    coverage=_coverage(
-                        populated_count,
-                        label_count,
-                    ),
-                )
-            )
+        _, label_coverage = _collect_label_inventory(client, label, deadline)
+        coverage.extend(label_coverage)
 
     return coverage
 
@@ -865,22 +814,9 @@ def collect_relationship_property_coverage(
     )
 
     for relationship_type in relationship_types:
-        relationship_type_ref = _cypher_identifier(relationship_type)
-        relationship_count = _relationship_type_count(client, relationship_type_ref, deadline)
-        for property_name in _relationship_properties(client, relationship_type_ref, deadline):
-            populated_count = _relationship_property_count(
-                client,
-                relationship_type_ref,
-                property_name,
-                deadline,
-            )
-            coverage.append(
-                PropertyCoverage(
-                    owner="relationship",
-                    owner_name=relationship_type,
-                    property=property_name,
-                    coverage=_coverage(populated_count, relationship_count),
-                )
-            )
+        _, relationship_coverage = _collect_relationship_inventory(
+            client, relationship_type, deadline
+        )
+        coverage.extend(relationship_coverage)
 
     return coverage

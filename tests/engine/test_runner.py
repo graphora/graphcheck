@@ -1,4 +1,6 @@
 import hashlib
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -138,6 +140,56 @@ class RichClient:
         raise AssertionError("rich C2 path must be preferred over legacy run_read")
 
 
+class LazyCompetencyClient:
+    def __init__(self, rows, columns=("node_element_id",)):
+        self.rows = rows
+        self.columns = columns
+        self.yielded = 0
+        self.policies = []
+
+    def run_read_result(self, query, params, *, timeout_s=None):
+        raise AssertionError("competencies must use the bounded result path")
+
+    def run_read_result_bounded(
+        self,
+        query,
+        params,
+        *,
+        policy,
+        timeout_s=None,
+        stop_when=None,
+    ):
+        retained = []
+        for row in self.rows:
+            self.yielded += 1
+            if policy.max_rows is not None and len(retained) >= policy.max_rows:
+                raise GraphCheckError(
+                    "engine.result_limit_exceeded",
+                    "result limit exceeded",
+                    "narrow the query",
+                )
+            retained.append(row)
+            if stop_when is not None and stop_when(row):
+                self.policies.append(policy)
+                return QueryResult(
+                    retained,
+                    self.columns,
+                    (),
+                    complete=False,
+                    observed_rows=self.yielded,
+                    limit=policy.max_rows,
+                )
+        self.policies.append(policy)
+        return QueryResult(
+            retained,
+            self.columns,
+            (),
+            complete=True,
+            observed_rows=self.yielded,
+            limit=policy.max_rows,
+        )
+
+
 class FixedClock:
     def __init__(self, *values):
         self.values = list(values)
@@ -192,7 +244,8 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert results.run.graphcheck_version == __version__
     assert results.run.pack_version == PACK_VERSION
     assert results.run.status is RunStatus.COMPLETE
-    assert results.run.target == TARGET
+    assert results.run.target is not None
+    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump()
     assert results.run.selection.suites == ["customer-quality"]
     assert results.run.selection.fail_fast is False
     assert results.run.redaction.policy.value == "none"
@@ -205,8 +258,9 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     check = results.checks[0]
     assert check.verdict is Verdict.PASS
     assert check.started_at == "2026-07-13T10:00:01Z"
-    assert check.compiled_query and "$label" in check.compiled_query
-    assert check.params["label"] == "Customer"
+    assert check.compiled_query and "(n:`Customer`)" in check.compiled_query
+    assert check.params["required_labels"] == ["Customer"]
+    assert "label" not in check.params
     assert check.measured == {
         "coverage": 1.0,
         "population": 2,
@@ -216,6 +270,79 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert client.probe_calls == 1
     assert len(client.read_calls) == 1
     assert client.read_calls[0][2] > 0
+
+
+def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():
+    measurement = RichResult(
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "population": 2,
+                "conforming_count": 1,
+                "violation_count": 1,
+                "coverage": 0.5,
+                "evidence": [],
+            }
+        ],
+        ("population", "conforming_count", "violation_count", "coverage", "evidence"),
+    )
+    evidence = RichResult(
+        [{"evidence": [{"kind": "node", "id": "7", "labels": ["Customer"]}]}],
+        ("evidence",),
+    )
+
+    class TransactionClient(RichClient):
+        def __init__(self):
+            super().__init__([measurement, evidence])
+            self.transactions = 0
+
+        @contextmanager
+        def read_transaction(self, *, timeout_s=None):
+            self.transactions += 1
+            yield self
+
+    client = TransactionClient()
+    results = _engine(client).run_yaml(PASSING_SUITE, target=TARGET)
+
+    assert results.checks[0].verdict is Verdict.FAIL
+    assert results.checks[0].measured["violations"] == 1
+    assert results.checks[0].evidence.elements[0].id == "7"
+    assert client.transactions == 1
+    assert len(client.read_calls) == 2
+    assert client.read_calls[1][1] == {"evidence_cap": 100}
+    assert client.read_calls[1][2] <= client.read_calls[0][2]
+
+
+def test_evidence_query_failure_is_an_errored_check():
+    client = RichClient(
+        [
+            RichResult(
+                [
+                    {
+                        "schema_ok": True,
+                        "missing_labels": [],
+                        "missing_relationship_types": [],
+                        "population": 1,
+                        "conforming_count": 0,
+                        "violation_count": 1,
+                        "coverage": 0.0,
+                        "evidence": [],
+                    }
+                ],
+                ("population", "conforming_count", "violation_count", "coverage", "evidence"),
+            ),
+            GraphCheckError("neo4j.query_failed", "evidence failed", "fix query"),
+        ]
+    )
+
+    check = _engine(client).run_yaml(PASSING_SUITE, target=TARGET).checks[0]
+
+    assert check.verdict is Verdict.ERRORED
+    assert check.error.code == "neo4j.query_failed"
+    assert check.measured is None
+    assert check.evidence is None
 
 
 def test_tag_selection_filters_the_universe_and_records_metadata():
@@ -394,6 +521,33 @@ def test_one_query_error_is_isolated_and_later_check_still_passes():
     assert len(client.read_calls) == 2
     assert results.run.status is RunStatus.COMPLETE
     assert results.totals.errored == 1
+
+
+def test_non_fail_fast_checks_use_bounded_concurrency():
+    barrier = threading.Barrier(2)
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+
+    class ConcurrentClient:
+        def run_read_result(self, query, params, *, timeout_s=None):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                barrier.wait(timeout=2)
+                return RichResult([{"value": 1}], ("value",))
+            finally:
+                with lock:
+                    active -= 1
+
+    results = _engine(ConcurrentClient(), config=EngineConfig(max_concurrency=2)).run_yaml(
+        TWO_COMPETENCIES, target=TARGET
+    )
+
+    assert [check.verdict for check in results.checks] == [Verdict.PASS, Verdict.PASS]
+    assert maximum_active == 2
 
 
 def test_compile_error_is_errored_and_never_passed_or_queried():
@@ -778,3 +932,148 @@ def test_engine_config_rejects_invalid_time_budgets(invalid):
 def test_engine_config_rejects_non_positive_integer_evidence_caps(invalid):
     with pytest.raises(ValueError, match="positive integer"):
         EngineConfig(evidence_cap=invalid)
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "4"])
+def test_engine_config_rejects_invalid_max_concurrency(invalid):
+    with pytest.raises(ValueError, match="max_concurrency"):
+        EngineConfig(max_concurrency=invalid)
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "100"])
+def test_engine_config_rejects_invalid_result_row_limits(invalid):
+    with pytest.raises(ValueError, match="result_row_limit"):
+        EngineConfig(result_row_limit=invalid)
+
+
+def test_competency_minimum_stops_at_the_first_decisive_row():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(1_000_000))
+    suite = """\
+suite: bounded
+competency:
+  - id: minimum
+    question: Are at least three nodes returned?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {rows: {min: 3}}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert client.yielded == 3
+    assert result.measured["observed_rows_at_least"] == 3
+    assert "rows" not in result.measured
+
+
+def test_competency_maximum_and_duplicate_fail_at_the_first_decisive_row():
+    maximum = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    duplicate = LazyCompetencyClient(
+        iter(
+            [
+                {"node_element_id": "n-1"},
+                {"node_element_id": "n-1"},
+                {"node_element_id": "never-read"},
+            ]
+        )
+    )
+    maximum_suite = """\
+suite: bounded-max
+competency:
+  - id: maximum
+    question: Are at most two nodes returned?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect:
+      rows: {max: 2}
+      unique: false
+      contains: [never-read]
+      equals: [never-read]
+"""
+    duplicate_suite = """\
+suite: bounded-unique
+competency:
+  - id: unique
+    question: Are rows unique?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {unique: true}
+"""
+
+    maximum_result = _engine(maximum).run_yaml(maximum_suite, target=TARGET).checks[0]
+    duplicate_result = _engine(duplicate).run_yaml(duplicate_suite, target=TARGET).checks[0]
+
+    assert maximum_result.verdict is Verdict.FAIL
+    assert duplicate_result.verdict is Verdict.FAIL
+    assert maximum.yielded == 3
+    assert duplicate.yielded == 2
+    assert "rows" not in maximum_result.measured
+    assert {"unique", "contains", "equals"}.isdisjoint(maximum_result.measured)
+    assert duplicate_result.measured["unique"] is False
+
+
+def test_combined_expectations_use_the_strictest_consumption_policy():
+    client = LazyCompetencyClient(
+        iter(
+            [
+                {"node_element_id": "n-1"},
+                {"node_element_id": "n-2"},
+                {"node_element_id": "n-3"},
+            ]
+        )
+    )
+    suite = """\
+suite: strictest
+competency:
+  - id: combined
+    question: Are there enough unique rows?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {rows: {min: 2}, unique: true}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert client.yielded == 3
+    assert result.measured["rows"] == 3
+
+
+def test_contains_stops_when_every_pinned_value_has_been_seen():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    suite = """\
+suite: bounded-contains
+competency:
+  - id: contains
+    question: Does the result contain both pinned ids?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {contains: [n-1, n-3]}
+"""
+
+    result = _engine(client).run_yaml(suite, target=TARGET).checks[0]
+
+    assert result.verdict is Verdict.PASS
+    assert result.measured["contains"] is True
+    assert client.yielded == 4
+    assert "rows" not in result.measured
+
+
+def test_complete_assertion_errors_loudly_at_the_safety_ceiling():
+    client = LazyCompetencyClient({"node_element_id": f"n-{index}"} for index in range(100))
+    suite = """\
+suite: bounded-equals
+competency:
+  - id: equals
+    question: Does the full result equal the pinned bag?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {equals: [n-1]}
+"""
+
+    result = (
+        _engine(
+            client,
+            config=EngineConfig(result_row_limit=2),
+        )
+        .run_yaml(suite, target=TARGET)
+        .checks[0]
+    )
+
+    assert result.verdict is Verdict.ERRORED
+    assert result.error.code == "engine.result_limit_exceeded"
+    assert client.yielded == 3

@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError, field_validator
 
 from graphcheck.errors import GraphCheckError, profile_invalid
+from graphcheck.generation.config import GenerateConfig
 
 PROJECT_FILE = "graphcheck.yml"
 PROFILES_FILE = "profiles.yml"
@@ -19,10 +20,24 @@ class ProjectConfig(BaseModel):
     project: str
     checks: str
     artifacts: str
+    concurrency: PositiveInt = 1
+    generate: GenerateConfig | None = None
+
+    @field_validator("concurrency", mode="before")
+    @classmethod
+    def _positive_integer_concurrency(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("concurrency must be a positive integer")
+        return value
 
 
 def default_project_config() -> ProjectConfig:
-    return ProjectConfig(project="graphcheck", checks=CHECKS_DIR, artifacts=ARTIFACTS_DIR)
+    return ProjectConfig(
+        project="graphcheck",
+        checks=CHECKS_DIR,
+        artifacts=ARTIFACTS_DIR,
+        concurrency=1,
+    )
 
 
 def find_project_root(start: Path | None = None) -> Path:
@@ -51,7 +66,7 @@ def load_project_config(root: Path) -> ProjectConfig:
 def write_default_project(root: Path) -> None:
     config = default_project_config()
     (root / PROJECT_FILE).write_text(
-        yaml.safe_dump(config.model_dump(), sort_keys=False),
+        yaml.safe_dump(config.model_dump(exclude_none=True), sort_keys=False),
         encoding="utf-8",
     )
     (root / config.checks).mkdir(exist_ok=True)

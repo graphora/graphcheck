@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+from threading import Lock
 from typing import Annotated, Literal, Protocol, TypeVar
 from uuid import UUID
 
@@ -24,6 +25,8 @@ from pydantic import (
     model_validator,
 )
 
+from graphcheck.telemetry.types import EventOutcome, SafeErrorCode
+
 ENGINE_EVENT_SCHEMA_VERSION = "1.0"
 
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
@@ -36,12 +39,6 @@ class EngineEventKind(StrEnum):
     CHECK_PROCESSED = "CheckProcessed"
     RUN_FINISHED = "RunFinished"
     ENGINE_FAULTED = "EngineFaulted"
-
-
-class EventOutcome(StrEnum):
-    SUCCESS = "success"
-    ERROR = "error"
-    TIMEOUT = "timeout"
 
 
 class TargetSource(StrEnum):
@@ -111,36 +108,6 @@ class PartialReasonCode(StrEnum):
     PARTIAL_BASELINE = "partial_baseline"
     BASELINE_MEASUREMENT_MISSING = "baseline_measurement_missing"
     DEADLINE_EXHAUSTED = "deadline_exhausted"
-    UNKNOWN = "unknown"
-
-
-class SafeErrorCode(StrEnum):
-    NEO4J_UNREACHABLE = "neo4j.unreachable"
-    NEO4J_AUTH_FAILED = "neo4j.auth_failed"
-    NEO4J_PERMISSION_DENIED = "neo4j.permission_denied"
-    NEO4J_DATABASE_NOT_FOUND = "neo4j.database_not_found"
-    NEO4J_QUERY_FAILED = "neo4j.query_failed"
-    PROJECT_MISSING = "project.missing"
-    CONFIG_INVALID = "config.invalid"
-    SUITE_INVALID = "suite.invalid"
-    PROFILE_MISSING = "profile.missing"
-    PROFILE_INVALID = "profile.invalid"
-    PROFILE_COLLECTION_FAILED = "profile.collection_failed"
-    BASELINE_MISSING = "baseline.missing"
-    BASELINE_INVALID = "baseline.invalid"
-    BASELINE_PARTIAL = "baseline.partial"
-    BASELINE_LOAD_FAILED = "baseline.load_failed"
-    BASELINE_WRITE_FAILED = "baseline.write_failed"
-    DIFF_INCOMPARABLE = "diff.incomparable"
-    DIFF_FAILED = "diff.failed"
-    ENGINE_COMPILE_FAILED = "engine.compile_failed"
-    ENGINE_PARAMETER_RESOLUTION_FAILED = "engine.parameter_resolution_failed"
-    ENGINE_EVALUATE_FAILED = "engine.evaluate_failed"
-    ENGINE_UNEXPECTED = "engine.unexpected"
-    READ_GUARD_REJECTED = "read_guard.rejected"
-    ARTIFACT_WRITE_FAILED = "artifact.write_failed"
-    REPORT_RENDER_FAILED = "report.render_failed"
-    REPORT_OPEN_FAILED = "report.open_failed"
     UNKNOWN = "unknown"
 
 
@@ -241,6 +208,8 @@ class QueryFinished(_EngineEventBase):
     read_guard_outcome: ReadGuardOutcome
     notification_count: NonNegativeInt | None
     error_code: SafeErrorCode | None
+    read_guard_ms: NonNegativeInt | None = None
+    read_guard_cache_hit: bool | None = None
 
     @model_validator(mode="after")
     def fields_are_consistent(self) -> QueryFinished:
@@ -405,6 +374,7 @@ class EngineEventEmitter:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid.uuid4
         self._sequence = 0
+        self._lock = Lock()
         self.telemetry_run_id: UUID | None = None
         try:
             self.telemetry_run_id = self._id_factory()
@@ -417,23 +387,24 @@ class EngineEventEmitter:
         return self._sink is not None
 
     def emit(self, model: type[EventModel], /, **payload: object) -> EventModel | None:
-        if self._sink is None or self.telemetry_run_id is None:
-            return None
-        try:
-            self._sequence += 1
-            event = model(
-                event_id=self._id_factory(),
-                telemetry_run_id=self.telemetry_run_id,
-                sequence=self._sequence,
-                occurred_at=self._clock(),
-                **payload,
-            )
-            self._sink.emit(event)
-        except Exception:
-            # SPEC-10 accepts event loss. Construction or observer failure cannot alter the run.
-            self._sink = None
-            return None
-        return event
+        with self._lock:
+            if self._sink is None or self.telemetry_run_id is None:
+                return None
+            try:
+                self._sequence += 1
+                event = model(
+                    event_id=self._id_factory(),
+                    telemetry_run_id=self.telemetry_run_id,
+                    sequence=self._sequence,
+                    occurred_at=self._clock(),
+                    **payload,
+                )
+                self._sink.emit(event)
+            except Exception:
+                # SPEC-10 accepts event loss. Construction or observer failure cannot alter the run.
+                self._sink = None
+                return None
+            return event
 
 
 def _validate_outcome_error_code(

@@ -68,6 +68,7 @@ def _command():
         results_artifact=ArtifactOutcome.WRITTEN,
         report_artifact=ArtifactOutcome.WRITTEN,
         baseline_artifact=ArtifactOutcome.NOT_REQUESTED,
+        generated_artifact=ArtifactOutcome.NOT_REQUESTED,
         telemetry_command_id=COMMAND_ID,
         telemetry_run_id=None,
         probe_outcome=None,
@@ -79,6 +80,7 @@ def _command():
         interactive=False,
         ci=False,
         os_family=OsFamily.LINUX,
+        os_version="6.8",
         python_minor="3.12",
         graphcheck_version="0.1.0",
         safe_error_code=None,
@@ -101,6 +103,8 @@ def test_adapter_adds_common_privacy_properties_and_flushes():
     assert properties["geoip_enrichment"] is False
     assert properties["$process_person_profile"] is False
     assert properties["$geoip_disable"] is True
+    assert properties["os_version"] == "6.8"
+    assert properties["telemetry_schema_version"] == "1.1"
 
 
 def test_final_flush_is_bounded_when_transport_blocks():

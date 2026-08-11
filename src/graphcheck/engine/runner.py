@@ -4,9 +4,12 @@ import hashlib
 import inspect
 import json
 import math
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -20,6 +23,7 @@ from graphcheck.contracts.results import (
     CheckResult,
     RedactionPolicy,
     Results,
+    ResultsTarget,
     RunStatus,
     RunTarget,
     Severity,
@@ -40,8 +44,8 @@ from graphcheck.engine.compiler import (
     expected_for,
     name_for,
 )
-from graphcheck.engine.evaluator import Evaluation, VerdictEvaluator
-from graphcheck.engine.executor import ReadOnlyExecutor
+from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
+from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
     ParameterTokenResolver,
@@ -110,6 +114,9 @@ class EngineConfig:
     # Leave a small serialization/reporting margin inside the user-facing five-minute budget.
     time_budget_s: float = 295.0
     evidence_cap: int = 100
+    result_row_limit: int = 100_000
+    eager_competency_evaluation: bool = False
+    max_concurrency: int = 1
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,
@@ -132,6 +139,20 @@ class EngineConfig:
             or self.evidence_cap < 1
         ):
             raise ValueError("evidence_cap must be a positive integer")
+        if (
+            isinstance(self.max_concurrency, bool)
+            or not isinstance(self.max_concurrency, int)
+            or self.max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
+        if (
+            isinstance(self.result_row_limit, bool)
+            or not isinstance(self.result_row_limit, int)
+            or self.result_row_limit < 1
+        ):
+            raise ValueError("result_row_limit must be a positive integer")
+        if not isinstance(self.eager_competency_evaluation, bool):
+            raise ValueError("eager_competency_evaluation must be boolean")
 
 
 @dataclass
@@ -176,6 +197,8 @@ class Engine:
         self._monotonic = monotonic or time.monotonic
         self._id_factory = id_factory or uuid.uuid4
         self._progress_callback = progress_callback
+        probe = getattr(client, "probe", None)
+        self._probe_accepts_timeout = callable(probe) and _accepts_timeout(probe)
         self._event_sink = event_sink
         self._telemetry_clock = telemetry_clock
         self._telemetry_id_factory = telemetry_id_factory
@@ -191,8 +214,10 @@ class Engine:
         self._telemetry_probe_ms: int | None = None
         self._telemetry_deadline: float | None = None
         self._telemetry_partial_codes: list[PartialReasonCode] = []
-        self._active_check_sequence: int | None = None
-        self._active_check: object | None = None
+        self._active_check_context: ContextVar[tuple[int, object] | None] = ContextVar(
+            f"graphcheck_active_check_{id(self)}", default=None
+        )
+        self._telemetry_state_lock = threading.Lock()
 
     def run_yaml(
         self,
@@ -297,8 +322,7 @@ class Engine:
                 )
             raise
         finally:
-            self._active_check_sequence = None
-            self._active_check = None
+            self._active_check_context.set(None)
 
     def _run_with_events(
         self,
@@ -410,25 +434,27 @@ class Engine:
                 fail_fast=fail_fast,
             )
 
-        check_results: list[CheckResult] = []
-        total_checks = sum(len(item.suite.checks) for item in inputs)
+        tasks = [
+            (suite_input, check) for suite_input in inputs for check in suite_input.suite.checks
+        ]
+        total_checks = len(tasks)
+        result_slots: list[CheckResult | None] = [None] * total_checks
         completed_checks = 0
-        next_check_sequence = 0
 
         def record_result(
+            index: int,
             result: CheckResult,
             suite_id: str,
             check_id: str,
             *,
             timings: _CheckTimings | None = None,
         ) -> None:
-            nonlocal completed_checks, next_check_sequence
-            check_results.append(result)
+            nonlocal completed_checks
+            result_slots[index] = result
             completed_checks += 1
-            next_check_sequence += 1
             self._emit_check_processed(
-                next_check_sequence,
-                self._telemetry_checks[next_check_sequence - 1][1],
+                index + 1,
+                tasks[index][1],
                 result,
                 timings or _CheckTimings(),
             )
@@ -440,17 +466,67 @@ class Engine:
                 )
 
         partial_reasons: list[str] = list(dict.fromkeys(_initial_partial_reasons))
-        fail_fast_after: str | None = None
-        for suite_input in inputs:
-            for check in suite_input.suite.checks:
+        capability_check = getattr(self.compiler, "missing_capabilities", None)
+
+        def prepare(
+            index: int, suite_input: SuiteInput, check, *, check_deadline: bool = True
+        ) -> bool:
+            suite_id = suite_input.suite.suite
+            if check.generated:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.GENERATED),
+                    suite_id,
+                    check.id,
+                )
+                return False
+            missing_capabilities = (
+                tuple(capability_check(check, resolved_target))
+                if callable(capability_check)
+                else ()
+            )
+            if missing_capabilities:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.UNSUPPORTED),
+                    suite_id,
+                    check.id,
+                )
+                rendered = ", ".join(missing_capabilities)
+                _append_once(
+                    partial_reasons,
+                    f"check {suite_id}/{check.id} requires missing capability: {rendered}",
+                )
+                self._add_partial_code(PartialReasonCode.UNSUPPORTED_CHECK)
+                return False
+            if check_deadline and self._monotonic() >= deadline:
+                record_result(
+                    index,
+                    _skipped_result(check, suite_id, SkipReason.NOT_RUN),
+                    suite_id,
+                    check.id,
+                )
+                _append_once(
+                    partial_reasons,
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                )
+                self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
+                return False
+            return True
+
+        if fail_fast:
+            fail_fast_after: str | None = None
+            for index, (suite_input, check) in enumerate(tasks):
+                suite_id = suite_input.suite.suite
                 if fail_fast_after is not None:
                     record_result(
+                        index,
                         _skipped_result(
                             check,
-                            suite_input.suite.suite,
+                            suite_id,
                             SkipReason.NOT_RUN,
                         ),
-                        suite_input.suite.suite,
+                        suite_id,
                         check.id,
                     )
                     _append_once(
@@ -458,85 +534,91 @@ class Engine:
                         f"fail-fast stopped the run after {fail_fast_after}",
                     )
                     continue
-                if check.generated:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.GENERATED,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
+                if not prepare(index, suite_input, check):
                     continue
-                capability_check = getattr(self.compiler, "missing_capabilities", None)
-                missing_capabilities = (
-                    tuple(capability_check(check, resolved_target))
-                    if callable(capability_check)
-                    else ()
-                )
-                if missing_capabilities:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.UNSUPPORTED,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
-                    rendered = ", ".join(missing_capabilities)
-                    _append_once(
-                        partial_reasons,
-                        f"check {suite_input.suite.suite}/{check.id} requires "
-                        f"missing capability: {rendered}",
-                    )
-                    self._add_partial_code(PartialReasonCode.UNSUPPORTED_CHECK)
-                    continue
-                if self._monotonic() >= deadline:
-                    record_result(
-                        _skipped_result(
-                            check,
-                            suite_input.suite.suite,
-                            SkipReason.NOT_RUN,
-                        ),
-                        suite_input.suite.suite,
-                        check.id,
-                    )
-                    _append_once(
-                        partial_reasons,
-                        f"the {self.config.time_budget_s:g}-second run budget was exhausted",
-                    )
-                    self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
-                    continue
-                self._active_check_sequence = next_check_sequence + 1
-                self._active_check = check
-                result, partial_reason, timings = self._run_check(
+                result, partial_reason, timings = self._run_check_if_time(
                     check,
-                    suite_id=suite_input.suite.suite,
+                    check_sequence=index + 1,
+                    suite_id=suite_id,
                     suite_sha=suite_input.source_sha,
                     target=resolved_target,
                     deadline=deadline,
                 )
                 record_result(
+                    index,
                     result,
                     suite_input.suite.suite,
                     check.id,
                     timings=timings,
                 )
-                self._active_check_sequence = None
-                self._active_check = None
                 if partial_reason is not None:
                     _append_once(partial_reasons, partial_reason)
-                if fail_fast and _is_hard_result(result):
-                    fail_fast_after = f"{suite_input.suite.suite}/{check.id}"
+                if _is_hard_result(result):
+                    fail_fast_after = f"{suite_id}/{check.id}"
                 if self._monotonic() >= deadline:
                     _append_once(
                         partial_reasons,
                         f"the {self.config.time_budget_s:g}-second run budget was exhausted",
                     )
                     self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
+        else:
+            runnable = [
+                (index, suite_input, check)
+                for index, (suite_input, check) in enumerate(tasks)
+                if prepare(index, suite_input, check, check_deadline=False)
+            ]
+            outcomes: dict[int, str | None] = {}
+            if self.config.max_concurrency == 1:
+                for index, suite_input, check in runnable:
+                    result, reason, timings = self._run_check_if_time(
+                        check,
+                        check_sequence=index + 1,
+                        suite_id=suite_input.suite.suite,
+                        suite_sha=suite_input.source_sha,
+                        target=resolved_target,
+                        deadline=deadline,
+                    )
+                    outcomes[index] = reason
+                    record_result(
+                        index,
+                        result,
+                        suite_input.suite.suite,
+                        check.id,
+                        timings=timings,
+                    )
+            elif runnable:
+                with ThreadPoolExecutor(
+                    max_workers=min(self.config.max_concurrency, len(runnable)),
+                    thread_name_prefix="graphcheck",
+                ) as pool:
+                    futures = {
+                        pool.submit(
+                            self._run_check_if_time,
+                            check,
+                            check_sequence=index + 1,
+                            suite_id=suite_input.suite.suite,
+                            suite_sha=suite_input.source_sha,
+                            target=resolved_target,
+                            deadline=deadline,
+                        ): (index, suite_input.suite.suite, check.id)
+                        for index, suite_input, check in runnable
+                    }
+                    for future in as_completed(futures):
+                        index, suite_id, check_id = futures[future]
+                        result, reason, timings = future.result()
+                        outcomes[index] = reason
+                        record_result(index, result, suite_id, check_id, timings=timings)
+            for index in sorted(outcomes):
+                if outcomes[index] is not None:
+                    _append_once(partial_reasons, outcomes[index])
+            if runnable and self._monotonic() >= deadline:
+                _append_once(
+                    partial_reasons,
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                )
+                self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
 
+        check_results = [result for result in result_slots if result is not None]
         status = RunStatus.PARTIAL if partial_reasons else RunStatus.COMPLETE
         partial_reason = "; ".join(partial_reasons) if partial_reasons else None
         self._telemetry_stage = EngineStage.FINALIZE
@@ -618,21 +700,66 @@ class Engine:
                     )
                     self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
             self._telemetry_stage = EngineStage.QUERY
-            execution = self._execute_query_with_event(
-                compiled.query,
-                resolved_params,
-                role=QueryRole.CHECK_MEASUREMENT,
-                timeout_s=_remaining(deadline, self._monotonic()),
+            consumption = (
+                CompetencyConsumption(compiled, self.config.result_row_limit)
+                if isinstance(check.spec, CompetencyCheck)
+                and not self.config.eager_competency_evaluation
+                else None
             )
+            if compiled.evidence_query is None:
+                execution = self._execute_query_with_event(
+                    compiled.query,
+                    resolved_params,
+                    role=QueryRole.CHECK_MEASUREMENT,
+                    timeout_s=_remaining(deadline, self._monotonic()),
+                    policy=consumption.policy if consumption is not None else None,
+                    stop_when=consumption.stop_when if consumption is not None else None,
+                )
+            else:
+                with self.executor.transaction(
+                    timeout_s=_remaining(deadline, self._monotonic())
+                ) as transaction:
+                    execution = self._execute_query_with_event(
+                        compiled.query,
+                        resolved_params,
+                        role=QueryRole.CHECK_MEASUREMENT,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                    )
+                    if _evidence_required(compiled, execution.rows):
+                        evidence_execution = self._execute_query_with_event(
+                            compiled.evidence_query,
+                            compiled.evidence_params or resolved_params,
+                            role=QueryRole.EVIDENCE_COLLECTION,
+                            timeout_s=_remaining(deadline, self._monotonic()),
+                            executor=transaction,
+                        )
+                        execution = _merge_evidence(compiled, execution, evidence_execution)
+            if consumption is not None and not execution.complete and not consumption.decisive:
+                raise GraphCheckError(
+                    "engine.result_limit_exceeded",
+                    "The competency query reached the configured result-row safety ceiling "
+                    "before its assertions became decisive.",
+                    "Narrow the query or increase result_row_limit after reviewing "
+                    "its memory cost.",
+                )
             timings.read_guard_ms = execution.read_guard_ms
             self._telemetry_stage = EngineStage.EVALUATE
             stage_started = self._timing_start()
+            evaluator_kwargs = {
+                "columns": execution.columns,
+                "baseline": baseline,
+            }
+            if isinstance(self.evaluator, VerdictEvaluator):
+                evaluator_kwargs.update(
+                    complete=execution.complete,
+                    observed_rows=execution.observed_rows,
+                )
             evaluation = self.evaluator.evaluate(
                 # Evidence extraction must see executed literals, never unresolved graph tokens.
                 replace(compiled, params=resolved_params),
                 execution.rows,
-                columns=execution.columns,
-                baseline=baseline,
+                **evaluator_kwargs,
             )
             if not isinstance(evaluation, Evaluation):
                 raise GraphCheckError(
@@ -702,6 +829,34 @@ class Engine:
             timings,
         )
 
+    def _run_check_if_time(
+        self,
+        check,
+        *,
+        check_sequence: int,
+        suite_id: str,
+        suite_sha: str,
+        target: RunTarget,
+        deadline: float,
+    ) -> tuple[CheckResult, str | None, _CheckTimings]:
+        token = self._active_check_context.set((check_sequence, check))
+        try:
+            if self._monotonic() >= deadline:
+                return (
+                    _skipped_result(check, suite_id, SkipReason.NOT_RUN),
+                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _CheckTimings(),
+                )
+            return self._run_check(
+                check,
+                suite_id=suite_id,
+                suite_sha=suite_sha,
+                target=target,
+                deadline=deadline,
+            )
+        finally:
+            self._active_check_context.reset(token)
+
     def _apply_sampling(
         self,
         compiled: CompiledCheck,
@@ -712,6 +867,39 @@ class Engine:
         target: RunTarget,
         deadline: float,
     ) -> tuple[CompiledCheck, dict[str, object], int | None]:
+        requested = (
+            check.spec.with_.get("sample_size")
+            if isinstance(check.spec, ConformanceCheck)
+            else None
+        )
+        check_requested = requested
+        if requested is None:
+            requested = compiled.params.get("sample_size")
+        if not compiled.sampling_preflight:
+            sample_size = self.config.sampling.sample_size
+            if requested is not None:
+                sample_size = min(sample_size, int(requested))
+            exhaustive_limit = self.config.sampling.exhaustive_limit
+            if check_requested is not None:
+                exhaustive_limit = min(exhaustive_limit, int(check_requested))
+            resolved = {
+                **params,
+                "sample_size": sample_size,
+                **(
+                    {"exhaustive_limit": exhaustive_limit}
+                    if "exhaustive_limit" in compiled.params
+                    else {}
+                ),
+            }
+            return (
+                replace(
+                    compiled,
+                    params=resolved,
+                    expected={**compiled.expected, "sample_size": sample_size},
+                ),
+                resolved,
+                None,
+            )
         if compiled.population_query is None:
             raise GraphCheckError(
                 "engine.sampling_invalid",
@@ -751,22 +939,14 @@ class Engine:
             suite_sha=suite_sha,
             check_id=check.id,
         )
-        requested = (
-            check.spec.with_.get("sample_size")
-            if isinstance(check.spec, ConformanceCheck)
-            else None
-        )
-        if requested is None:
-            requested = compiled.params.get("sample_size")
         sample_size = (
             decision.sample_size if requested is None else min(decision.sample_size, int(requested))
         )
         resolved = {**params, "sample_size": sample_size}
-        compiled_params = {**compiled.params, "sample_size": sample_size}
         return (
             replace(
                 compiled,
-                params=compiled_params,
+                params={**compiled.params, "sample_size": sample_size},
                 expected={**compiled.expected, "sample_size": sample_size},
                 sample_population=population,
             ),
@@ -787,14 +967,13 @@ class Engine:
         self._telemetry_probe_ms = None
         self._telemetry_deadline = None
         self._telemetry_partial_codes = []
-        self._active_check_sequence = None
-        self._active_check = None
+        self._active_check_context.set(None)
 
     def _resolve_target_with_events(
         self,
         target: RunTarget | None,
         deadline: float,
-    ) -> RunTarget:
+    ) -> ResultsTarget:
         if target is not None:
             major, minor = version_major_minor(target.server_version)
             if self._telemetry is not None and self._telemetry.enabled:
@@ -810,7 +989,7 @@ class Engine:
                     error_code=None,
                 )
             self._telemetry_probe_ms = 0
-            return target
+            return ResultsTarget.model_validate(target.model_dump())
 
         probe_started = self._timing_start()
         try:
@@ -916,10 +1095,20 @@ class Engine:
         *,
         role: QueryRole,
         timeout_s: float,
+        policy=None,
+        stop_when=None,
+        executor: ReadOnlyExecutor | None = None,
     ):
         started = self._timing_start()
+        active_executor = executor or self.executor
         try:
-            execution = self.executor.execute(query, params, timeout_s=timeout_s)
+            execution = active_executor.execute(
+                query,
+                params,
+                timeout_s=timeout_s,
+                policy=policy,
+                stop_when=stop_when,
+            )
         except Exception as exc:
             duration_ms = self._timing_finish(started) or 0
             raw_code = exc.error.code if isinstance(exc, GraphCheckError) else None
@@ -939,17 +1128,21 @@ class Engine:
             error_code=None,
             read_guard_outcome=(
                 ReadGuardOutcome.ALLOWED
-                if callable(getattr(self.client, "run_read_result", None))
+                if callable(getattr(active_executor.client, "run_read_result", None))
                 else ReadGuardOutcome.NOT_RUN
             ),
             server_available_after_ms=execution.server_available_after_ms,
             server_consumed_after_ms=execution.server_consumed_after_ms,
+            read_guard_ms=execution.read_guard_ms,
+            read_guard_cache_hit=execution.read_guard_cache_hit,
             notification_count=execution.notification_count,
         )
-        if self._active_check_sequence is not None and execution.read_guard_ms is not None:
-            self._telemetry_read_guard_ms_by_check.setdefault(
-                self._active_check_sequence, []
-            ).append(execution.read_guard_ms)
+        active_check = self._active_check_context.get()
+        if active_check is not None and execution.read_guard_ms is not None:
+            with self._telemetry_state_lock:
+                self._telemetry_read_guard_ms_by_check.setdefault(active_check[0], []).append(
+                    execution.read_guard_ms
+                )
         return execution
 
     def _emit_query(
@@ -962,33 +1155,39 @@ class Engine:
         read_guard_outcome: ReadGuardOutcome,
         server_available_after_ms: int | None = None,
         server_consumed_after_ms: int | None = None,
+        read_guard_ms: int | None = None,
+        read_guard_cache_hit: bool | None = None,
         notification_count: int | None = None,
     ) -> None:
         if self._telemetry is None or not self._telemetry.enabled:
             return
-        check_sequence = None if role is QueryRole.TARGET_PROBE else self._active_check_sequence
-        check = None if check_sequence is None else self._active_check
-        if check_sequence is not None:
-            self._telemetry_query_durations_by_check.setdefault(check_sequence, []).append(
-                duration_ms
+        active_check = None if role is QueryRole.TARGET_PROBE else self._active_check_context.get()
+        check_sequence = None if active_check is None else active_check[0]
+        check = None if active_check is None else active_check[1]
+        with self._telemetry_state_lock:
+            if check_sequence is not None:
+                self._telemetry_query_durations_by_check.setdefault(check_sequence, []).append(
+                    duration_ms
+                )
+                if role is QueryRole.SAMPLING_POPULATION:
+                    self._telemetry_sampled_checks.add(check_sequence)
+            self._telemetry_query_durations.append(duration_ms)
+            self._telemetry.emit(
+                QueryFinished,
+                check_sequence=check_sequence,
+                pattern=None if check is None else safe_pattern(check.pattern),
+                template=None if check is None else _telemetry_template(check),
+                query_role=role,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                server_available_after_ms=server_available_after_ms,
+                server_consumed_after_ms=server_consumed_after_ms,
+                read_guard_outcome=read_guard_outcome,
+                read_guard_ms=read_guard_ms,
+                read_guard_cache_hit=read_guard_cache_hit,
+                notification_count=notification_count,
+                error_code=error_code,
             )
-            if role is QueryRole.SAMPLING_POPULATION:
-                self._telemetry_sampled_checks.add(check_sequence)
-        self._telemetry_query_durations.append(duration_ms)
-        self._telemetry.emit(
-            QueryFinished,
-            check_sequence=check_sequence,
-            pattern=None if check is None else safe_pattern(check.pattern),
-            template=None if check is None else _telemetry_template(check),
-            query_role=role,
-            outcome=outcome,
-            duration_ms=duration_ms,
-            server_available_after_ms=server_available_after_ms,
-            server_consumed_after_ms=server_consumed_after_ms,
-            read_guard_outcome=read_guard_outcome,
-            notification_count=notification_count,
-            error_code=error_code,
-        )
 
     def _emit_check_processed(
         self,
@@ -1140,7 +1339,7 @@ class Engine:
             return None
         return _duration_ms(started, self._monotonic())
 
-    def _probe_target(self, deadline: float) -> RunTarget:
+    def _probe_target(self, deadline: float) -> ResultsTarget:
         probe = getattr(self.client, "probe", None)
         if not callable(probe):
             raise GraphCheckError(
@@ -1149,10 +1348,21 @@ class Engine:
                 "Pass `target=` or use the Neo4jClient from the C2 connector.",
             )
         timeout_s = _remaining(deadline, self._monotonic())
-        result = probe(timeout_s=timeout_s) if _accepts_timeout(probe) else probe()
+        result = probe(timeout_s=timeout_s) if self._probe_accepts_timeout else probe()
         _remaining(deadline, self._monotonic())
         target = result[0] if isinstance(result, tuple) else result
-        return RunTarget.model_validate(target)
+        validated = ResultsTarget.model_validate(
+            target.model_dump() if isinstance(target, RunTarget) else target
+        )
+        if isinstance(result, tuple) and len(result) > 2:
+            counts = result[2]
+            validated = validated.model_copy(
+                update={
+                    "nodes": getattr(counts, "nodes", validated.nodes),
+                    "relationships": getattr(counts, "relationships", validated.relationships),
+                }
+            )
+        return validated
 
     def _results(
         self,
@@ -1430,6 +1640,59 @@ def _remaining(deadline: float, now: float) -> float:
             "Narrow the selection, enable sampling, or increase the external job budget.",
         )
     return remaining
+
+
+def _evidence_required(compiled: CompiledCheck, rows: Sequence[Mapping[str, object]]) -> bool:
+    condition = compiled.evidence_condition
+    if condition is None:
+        raise GraphCheckError(
+            "engine.evidence_plan_invalid",
+            f"Check {compiled.check.id!r} has an evidence query without a typed condition.",
+            "Fix the compiler so conditional evidence is driven by an exact aggregate field.",
+        )
+    if len(rows) != 1:
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned {len(rows)} measurement rows, expected 1.",
+            "Fix the measurement query so it returns one typed aggregate row.",
+        )
+    value = rows[0].get(condition.field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned an invalid {condition.field!r} aggregate.",
+            "Fix the measurement query so the evidence condition receives a finite number.",
+        )
+    return value > condition.value if condition.operator == "gt" else value < condition.value
+
+
+def _merge_evidence(
+    compiled: CompiledCheck,
+    measurement: ExecutionResult,
+    evidence: ExecutionResult,
+) -> ExecutionResult:
+    if len(evidence.rows) != 1 or "evidence" not in evidence.rows[0]:
+        raise GraphCheckError(
+            "engine.invalid_query_result",
+            f"Check {compiled.check.id!r} returned an invalid bounded evidence result.",
+            "Fix the evidence query so it returns one row containing `evidence`.",
+        )
+    rows = [{**measurement.rows[0], "evidence": evidence.rows[0]["evidence"]}]
+    columns = tuple(dict.fromkeys((*measurement.columns, "evidence")))
+    read_guard_values = [
+        value for value in (measurement.read_guard_ms, evidence.read_guard_ms) if value is not None
+    ]
+    return replace(
+        measurement,
+        rows=rows,
+        columns=columns,
+        notification_count=(
+            None
+            if measurement.notification_count is None and evidence.notification_count is None
+            else (measurement.notification_count or 0) + (evidence.notification_count or 0)
+        ),
+        read_guard_ms=sum(read_guard_values) if read_guard_values else None,
+    )
 
 
 def _unexpected_error(stage: str, exc: Exception) -> CheckError:

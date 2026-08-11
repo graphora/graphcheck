@@ -36,8 +36,13 @@ locations, but never include matched property values or claim complete PII disco
 ## Requirements
 
 - Python 3.12 or 3.13
-- A reachable Neo4j database
+- Neo4j Python driver 5.20 through 6.x
+- Neo4j Server 5.26 LTS or a tested calendar-version release
+- Cypher 5, or Cypher 25 on the tested calendar-version server
 - [`uv`](https://docs.astral.sh/uv/) for the repository workflow shown below
+
+Neo4j Server 4.4 is legacy and unsupported. The exact tested combinations and the temporary
+Cypher 5 sampling path are documented in the [compatibility matrix](docs/compatibility.md).
 
 APOC is probed and reported by `graphcheck init` and `graphcheck debug`. A missing optional
 capability blocks only checks that declare it; those checks are recorded as unsupported instead of
@@ -200,10 +205,75 @@ baseline JSON from `<artifacts>/baselines/`, which is `.graphcheck/baselines/` b
 - `baseline: release-2026-07` resolves `release-2026-07.json`.
 - `baseline: latest` selects the lexicographically newest `.json` filename.
 
-The current CLI consumes compatible baseline/profile JSON but does not capture baselines itself. A
-missing, invalid, or incomplete requested measurement is an explicit check error, never a pass. See
+`graphcheck profile` captures timestamped baselines in that directory. A missing, invalid, or
+incomplete requested measurement is an explicit check error, never a pass. See
 [SPEC-04](docs/specs/SPEC-04%20Engine.md#baselines) for the accepted baseline shapes and resolution
 rules.
+
+## Generate check suggestions
+
+`graphcheck generate` turns the latest baseline profile and optional, explicitly named domain
+documents into non-deterministic check suggestions. The command discloses the destination and exact
+data categories before calling the configured provider. It never sends graph records, property
+values, credentials, target metadata, fingerprints, or profiler failure text.
+
+Generation is opt-in. Add one of these strict blocks to `graphcheck.yml`:
+
+```yaml
+generate:
+  provider: google
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: google
+  model: gemma-4-26b-a4b-it
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: openai
+  model: gpt-5-mini
+  api_key_env: OPENAI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: ollama
+  model: qwen3:8b
+  api_key_env: null
+  base_url: http://localhost:11434/v1
+  temperature: 0
+```
+
+Google, Anthropic, and OpenAI require a populated environment variable named by `api_key_env`.
+Google's [Gemini structured-output models](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#model-support)
+and [hosted Gemma models](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api) use the
+[Gemini API](https://ai.google.dev/gemini-api/docs/pricing) subject to Google's current quotas and
+data terms. Models named `gemini-*` use native structured output and the full GraphCheck proposal
+contract. Other Google model names retain the conservative Gemma tool path: conformance targets
+completeness/uniqueness, competency expectations target returned columns, and drift targets
+labeled node counts. Gemma publishes a valid partial first batch without a slower correction, so
+`written` may be below `requested`. Ollama requires an explicit `base_url` and may omit the key.
+Then run:
+
+```console
+graphcheck generate
+graphcheck generate --from .graphcheck/baselines/20260724T120000.000000.json \
+  --docs docs/domain-rules.md --count 5
+graphcheck generate --json
+```
+
+Documents must be regular UTF-8 files, are sent verbatim, and are limited to 256 KiB each and 1 MiB
+in total. Generated suites carry `generated: true` at both file and check level, so the engine
+validates but skips them without querying Neo4j. Review identifiers, Cypher, expectations,
+thresholds, and cost before removing both applicable markers to activate a check.
 
 ## Reliability and safety
 
@@ -235,16 +305,21 @@ inventory.
 
 ## Configuration reference
 
-`graphcheck.yml` has three strict fields:
+`graphcheck.yml` has three required strict fields plus optional `concurrency` and `generate`
+settings:
 
 ```yaml
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
+concurrency: 1
 ```
 
 Relative `checks` and `artifacts` paths are resolved from the project root. Suite discovery is
-recursive and includes `.yml` and `.yaml` files.
+recursive and includes `.yml` and `.yaml` files. Every discovered suite is read and validated
+directly on each command before suite-id filtering; GraphCheck does not create a suite-discovery
+cache file. `concurrency` is a positive worker limit; the default is `1`, and
+`graphcheck run --concurrency N` overrides the project value.
 
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 
@@ -268,6 +343,8 @@ uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 Real-Neo4j integration tests are opt-in with `GRAPHCHECK_NEO4J_INTEGRATION=1`; the testcontainers
 suite covers the connector and engine against supported Neo4j versions. The customer-scale
 performance test is separately opt-in and requires a preloaded graph of at least 10 million nodes.
+See [Performance measurements](docs/performance.md) for the repeatable CLI, allocation, plan, and
+customer-scale baseline commands and JSON record format.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch workflow, definition of done, and decision
 rights.
