@@ -108,7 +108,40 @@ profiles:
 ```
 
 `password_env` overrides a literal `password` when the variable is set. If the environment variable
-is absent, GraphCheck falls back to `password` when one is configured.
+is absent, GraphCheck falls back to `password` when one is configured. For the quickest local
+setup, edit the generated inline `password` value. For CI or shared environments, remove the inline
+value, keep `password_env`, and export that variable in the process that runs GraphCheck.
+
+On Neo4j Enterprise, the account must be a dedicated, server-enforced read-only audit credential.
+During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
+privileges and permits only database access, graph reads, the default non-mutating `LOAD ON ALL
+DATA` grant, and non-boosted procedure/function execution. Graph writes, boosted execution,
+schema/database/DBMS administration, and elevated built-in roles are rejected as
+`neo4j.credential_not_read_only`. If Enterprise cannot return the reported privileges, GraphCheck
+fails closed as `neo4j.credential_read_only_unverified`.
+
+Neo4j Community has no roles and gives every user implied administrator privileges, so it cannot
+provide a server-enforced read-only credential. GraphCheck explicitly supports Community by
+skipping the unavailable Enterprise RBAC gate. In both editions, every customer-authored query is
+separately planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`, so a write-capable
+query is rejected without modifying the graph. Driver read routing alone is not an authorization
+boundary.
+
+On Neo4j Enterprise, an administrator can provision the audit role for database `neo4j` with:
+
+```cypher
+CREATE ROLE graphcheck_auditor IF NOT EXISTS;
+GRANT ACCESS ON DATABASE neo4j TO graphcheck_auditor;
+GRANT MATCH {*} ON GRAPH neo4j ELEMENTS * TO graphcheck_auditor;
+GRANT ROLE graphcheck_auditor TO graphcheck_user;
+```
+
+Create `graphcheck_user` separately with your organization’s password policy, and grant no write,
+boosted execution, schema, database, DBMS-admin, or broader inherited role.
+
+Use `bolt://host:7687` for a direct non-TLS local server. Use `neo4j+s://host:7687` for routing with
+CA-validated TLS (including the URI supplied by Aura), or `neo4j+ssc://host:7687` only when the
+deployment intentionally uses a self-signed certificate. The URI scheme must match the server.
 
 Verify connectivity, server metadata, visibility, graph counts, and check capability requirements:
 
@@ -116,6 +149,9 @@ Verify connectivity, server metadata, visibility, graph counts, and check capabi
 graphcheck debug
 graphcheck debug --json
 ```
+
+On failure, both forms print a stable error code, a plain-language diagnostic, and an exact `Fix:`;
+`graphcheck run` preserves the same diagnostic in `results.json` and the HTML report.
 
 ### 3. Add a first suite
 
@@ -278,6 +314,8 @@ thresholds, and cost before removing both applicable markers to activate a check
 ## Reliability and safety
 
 - Neo4j execution is read-only and fails closed unless the planner classifies a statement as read.
+- The connection preflight fails if Neo4j reports a graph-write grant or write-capable built-in
+  role for the audit credential, or if GraphCheck cannot inspect the user's reported privileges.
 - Built-in Cypher keeps labels, relationship types, property names, regexes, thresholds, and values
   in parameters rather than interpolating user data into query text.
 - One broken query or evaluator error is isolated to its check unless fail-fast or the run deadline

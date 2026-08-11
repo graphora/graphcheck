@@ -443,10 +443,23 @@ def _run_diagnostics(results: Results) -> str:
                 "was unexpected.",
             )
         )
-    return "".join(
+    return _run_diagnostic(results) + "".join(
         '<div class="callout callout-diagnostic">'
         f"<strong>{_escape(title)}</strong><p>{_escape(message)}</p></div>"
         for title, message in messages
+    )
+
+
+def _run_diagnostic(results: Results) -> str:
+    if results.run.error is None:
+        return ""
+    error = results.run.error
+    return (
+        '<section class="callout callout-error run-diagnostic" aria-label="Run diagnostic">'
+        "<h2>Action required</h2>"
+        f"<p>{_escape(error.message)}</p>"
+        f"<p>💡 <strong>Fix:</strong> {_escape(error.fix)}</p>"
+        "</section>"
     )
 
 

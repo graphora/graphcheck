@@ -78,6 +78,135 @@ def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
     assert captured["max_transaction_retry_time"] == 0.0
 
 
+def _credential_probe_client(rows, *, edition="enterprise"):
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="auditor", password="pw", database="neo4j"
+    )
+    client._probe_edition = edition
+    client.run_read = lambda query: rows
+    return client
+
+
+def test_read_only_credential_probe_accepts_explicit_read_only_model():
+    _credential_probe_client(
+        [
+            {
+                "access": "GRANTED",
+                "action": "ACCESS",
+                "graph": "neo4j",
+                "resource": "database",
+                "segment": "database",
+            },
+            {
+                "access": "GRANTED",
+                "action": "MATCH",
+                "graph": "neo4j",
+                "resource": "all_properties",
+                "segment": "NODE(*)",
+            },
+            {
+                "access": "GRANTED",
+                "action": "execute",
+                "graph": "*",
+                "resource": "database",
+                "segment": "PROCEDURE(*)",
+            },
+            {
+                "access": "GRANTED",
+                "action": "load",
+                "graph": "*",
+                "resource": "all_data",
+                "segment": "ALL DATA",
+                "role": "PUBLIC",
+            },
+        ]
+    ).verify_read_only_credential()
+
+
+@pytest.mark.parametrize("action", ["CREATE", "WRITE", "ALL_GRAPH_PRIVILEGES"])
+def test_read_only_credential_probe_rejects_granted_write_privilege(action):
+    client = _credential_probe_client([{"access": "GRANTED", "action": action, "graph": "neo4j"}])
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert "dedicated Neo4j user" in caught.value.error.fix
+
+
+def test_read_only_credential_probe_rejects_write_capable_builtin_role():
+    client = _credential_probe_client(
+        [
+            {
+                "access": "GRANTED",
+                "action": "ACCESS",
+                "graph": "*",
+                "resource": "database",
+                "segment": "database",
+                "role": "admin",
+            }
+        ]
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert "ROLE ADMIN" in caught.value.error.message
+
+
+@pytest.mark.parametrize(
+    ("action", "resource", "segment"),
+    [
+        ("execute_boosted", "database", "PROCEDURE(*)"),
+        ("execute", "database", "BOOSTED PROCEDURE(*)"),
+        ("dbms_actions", "database", "database"),
+        ("index", "database", "database"),
+        ("constraint", "database", "database"),
+        ("token", "database", "database"),
+        ("transaction_management", "database", "USER(*)"),
+        ("load", "cidr", "CIDR(10.0.0.0/8)"),
+    ],
+)
+def test_read_only_credential_probe_rejects_boosted_and_administrative_grants(
+    action, resource, segment
+):
+    client = _credential_probe_client(
+        [
+            {
+                "access": "GRANTED",
+                "action": action,
+                "graph": "*",
+                "resource": resource,
+                "segment": segment,
+                "role": "custom_role",
+            }
+        ]
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert segment.upper() in caught.value.error.message
+
+
+def test_read_only_credential_probe_accepts_community_without_rbac_query():
+    client = _credential_probe_client([], edition="community")
+    client.run_read = lambda query: pytest.fail("Community must not inspect Enterprise RBAC")
+
+    client.verify_read_only_credential()
+
+
+def test_read_only_credential_probe_fails_closed_without_privilege_evidence():
+    with pytest.raises(GraphCheckError) as caught:
+        _credential_probe_client([]).verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_read_only_unverified"
+    assert "inspect its own privileges" in caught.value.error.fix
+
+
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
 def test_driver_rejects_invalid_workload_concurrency(invalid):
     with pytest.raises(ValueError, match="max_concurrency"):
@@ -811,7 +940,14 @@ def test_completed_probe_is_cached_for_one_client():
     second = client.probe()
 
     assert second is first
-    assert calls == ["server", "apoc", "read", "counts", "tokens", "count-store"]
+    assert calls == [
+        "server",
+        "apoc",
+        "read",
+        "counts",
+        "tokens",
+        "count-store",
+    ]
     assert client.last_probe_metrics == ProbeMetrics(0, 0, True)
 
 
@@ -958,6 +1094,51 @@ def test_debug_trace_closes_client(monkeypatch):
     assert closed is True
 
 
+def test_debug_trace_rejects_write_capable_credential_and_closes_client(monkeypatch):
+    closed = False
+
+    class FakeClient:
+        def __init__(self, profile):
+            pass
+
+        def probe(self):
+            return (
+                RunTarget(
+                    database="neo4j",
+                    server_version="5.26.0",
+                    edition="enterprise",
+                    fingerprint="fp",
+                    capabilities=Capabilities(apoc=False, count_store=True),
+                ),
+                Visibility(True, True, True),
+                Counts(0, 0),
+            )
+
+        def verify_read_only_credential(self):
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "Credential has WRITE.",
+                "Use a read-only credential.",
+            )
+
+        def close(self):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("graphcheck.neo4j_adapter.Neo4jClient", FakeClient)
+
+    with pytest.raises(GraphCheckError) as caught:
+        debug_trace(
+            "local",
+            ConnectionProfile(
+                uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+            ),
+        )
+
+    assert caught.value.error.code == "neo4j.credential_not_read_only"
+    assert closed is True
+
+
 def test_init_trace_uses_apoc_probe(monkeypatch):
     closed = False
 
@@ -1009,6 +1190,67 @@ def test_init_trace_uses_apoc_probe(monkeypatch):
 )
 def test_map_neo4j_error_codes(exc, code):
     assert map_neo4j_error(exc).error.code == code
+
+
+def test_tls_handshake_error_names_uri_fix():
+    failure = type("ServiceUnavailable", (Exception,), {})(
+        "SSL certificate verify failed while establishing encrypted connection"
+    )
+    profile = ConnectionProfile(
+        uri="neo4j+s://db.example:7687", user="auditor", password="pw", database="neo4j"
+    )
+
+    mapped = map_neo4j_error(failure, profile)
+
+    assert mapped.error.code == "neo4j.tls_mismatch"
+    assert "neo4j+s://" in mapped.error.fix
+    assert "bolt://" in mapped.error.fix
+
+
+def test_wrong_database_diagnostic_names_selected_database():
+    failure = type(
+        "ClientError", (Exception,), {"code": "Neo.ClientError.Database.DatabaseNotFound"}
+    )("database not found")
+    profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="auditor", password="pw", database="missingdb"
+    )
+
+    mapped = map_neo4j_error(failure, profile)
+
+    assert mapped.error.code == "neo4j.database_not_found"
+    assert "missingdb" in mapped.error.message
+    assert "database" in mapped.error.fix
+
+
+def test_procedure_not_found_is_not_misclassified_as_database_not_found():
+    failure = type(
+        "ClientError",
+        (Exception,),
+        {"code": "Neo.ClientError.Procedure.ProcedureNotFound"},
+    )("There is no procedure with the name `apoc.version` registered for this database instance.")
+    failure.__cause__ = Exception("The procedure apoc.version() was not found.")
+
+    mapped = map_neo4j_error(failure)
+
+    assert mapped.error.code == "neo4j.query_failed"
+    assert _is_apoc_absent_error(mapped)
+
+
+def test_database_unavailable_driver_code_maps_to_wrong_database():
+    failure = type(
+        "TransientError",
+        (Exception,),
+        {"code": "Neo.TransientError.General.DatabaseUnavailable"},
+    )("database unavailable")
+
+    assert map_neo4j_error(failure).error.code == "neo4j.database_not_found"
+
+
+def test_apoc_unavailable_wording_is_not_mapped_to_wrong_database():
+    mapped = map_neo4j_error(Exception("Procedure apoc.version is unavailable in this database"))
+
+    assert mapped.error.code == "neo4j.query_failed"
+    assert _is_apoc_absent_error(mapped) is True
 
 
 def test_transaction_timeout_error_has_an_actionable_timeout_fix():

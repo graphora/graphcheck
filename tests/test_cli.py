@@ -127,6 +127,37 @@ def test_debug_json_reports_profile_error(tmp_path, monkeypatch):
     assert '"code": "project.missing"' in result.stdout
 
 
+def test_debug_wrong_uri_scheme_names_fix_without_traceback(tmp_path, monkeypatch):
+    write_default_project(tmp_path)
+    (tmp_path / "profiles.yml").write_text(
+        "default: local\nprofiles:\n  local:\n    uri: http://localhost:7474\n"
+        "    user: neo4j\n    password: pw\n    database: neo4j\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug"])
+
+    assert result.exit_code == 1
+    assert "profile.uri_invalid" in result.output
+    assert "Fix:" in result.output
+    assert "neo4j+s://" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_debug_unexpected_failure_is_structured_without_traceback(tmp_path, monkeypatch):
+    write_default_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: 1 / 0)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 1
+    assert '"code": "debug.internal_error"' in result.stdout
+    assert '"fix":' in result.stdout
+    assert "Traceback" not in result.stdout
+
+
 def _trace():
     return DebugTrace(
         profile="local",
