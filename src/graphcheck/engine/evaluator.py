@@ -136,7 +136,7 @@ class VerdictEvaluator:
                 observed_rows=observed_rows,
             )
         if pattern is Pattern.DRIFT:
-            return self._drift(compiled, rows, baseline, graph_empty=graph_empty)
+            return self._drift(compiled, rows, baseline)
         raise GraphCheckError(
             "engine.evaluation_unsupported",
             f"No evaluator exists for pattern {pattern!s}.",
@@ -416,8 +416,6 @@ class VerdictEvaluator:
         compiled: CompiledCheck,
         rows: Sequence[Mapping[str, Any]],
         baseline: BaselineValue | None,
-        *,
-        graph_empty: bool,
     ) -> Evaluation:
         spec = compiled.check.spec
         if not isinstance(spec, DriftCheck):
@@ -429,7 +427,7 @@ class VerdictEvaluator:
                 "Pin the requested baseline and run the suite again.",
             )
         row = _single_summary_row(compiled, rows)
-        _require_schema(compiled, row, graph_empty=graph_empty)
+        _require_schema(compiled, row, graph_empty=False)
         current = _number(row, "current", compiled)
         previous = baseline.value
         if spec.metric == "property_coverage" and (

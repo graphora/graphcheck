@@ -95,6 +95,31 @@ conformance:
     assert check.measured["population"] == 0
 
 
+def test_empty_graph_drift_keeps_missing_schema_strict(neo4j_profile):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={"latest": {"node_count": {"label=Customer": 100}}},
+        ).run_yaml(
+            """
+suite: missing-drift-schema
+drift:
+  - id: customer-count
+    metric: node_count
+    target: {label: Customer}
+    baseline: latest
+    tolerance: {max_delta: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    assert results.run.target.nodes == 0
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "engine.schema_reference_missing"
+
+
 def test_populated_graph_with_unfamiliar_schema_is_errored(neo4j_profile):
     driver = GraphDatabase.driver(
         neo4j_profile.uri,

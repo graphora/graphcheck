@@ -54,8 +54,8 @@ Every model forbids unknown keys (`extra="forbid"`).
    | Order | Condition | Exit |
    | --- | --- | --- |
    | 1 | `run.status:failed` | **3** |
-   | 2 | any `verdict:fail`, or (`errored` and `severity:error`) | **1** |
-   | 3 | `run.status:partial`; or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
+   | 2 | any `verdict:fail`, or (`errored` and `severity:error`) except an `engine.timeout` on a partial run | **1** |
+   | 3 | `run.status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
    | 4 | otherwise (`complete`, ≥ 1 executed, all `pass`/`skipped`) | **0** |
 
 2. **Evidence is mandatory on `fail` and `warn`.** `compiled_query` is present once compiled, `null` if the check errored before compiling; it keeps `$param` placeholders — literal values live only in `params`.

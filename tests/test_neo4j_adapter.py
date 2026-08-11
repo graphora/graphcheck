@@ -1923,7 +1923,7 @@ def test_unknown_relationship_type_notification_is_a_query_error():
     assert "OWNZ" in caught.value.error.message
 
 
-def test_missing_schema_notifications_are_non_blocking_for_a_probed_empty_graph():
+def test_missing_schema_notifications_can_be_explicitly_allowed_by_the_engine():
     from graphcheck.neo4j_adapter import _raise_for_missing_schema_reference
 
     _raise_for_missing_schema_reference(
@@ -1933,7 +1933,7 @@ def test_missing_schema_notifications_are_non_blocking_for_a_probed_empty_graph(
                 "description": "The label is not in the database: Customer",
             },
         ),
-        graph_empty=True,
+        allow_missing_schema=True,
     )
 
 

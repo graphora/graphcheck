@@ -13,7 +13,7 @@ from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.engine import Engine as CoreEngine
 from graphcheck.engine import EngineConfig
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import Counts, QueryResult
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 from graphcheck.project import write_default_project
@@ -980,11 +980,20 @@ competency:
                 **kwargs,
             )
 
+    class DeadlineClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            self.read_calls.append((query, params, timeout_s))
+            raise GraphCheckTimeoutError(
+                "neo4j.query_failed",
+                "Neo4j timed out the in-flight query.",
+                "Narrow the check or increase the run time budget.",
+            )
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.engine.Engine", DeadlineEngine)
     monkeypatch.setattr(
         "graphcheck.cli.Neo4jClient",
-        lambda profile: FakeClient([QueryResult([{"value": 1}], ("value",), ())]),
+        lambda profile: DeadlineClient(),
     )
 
     result = runner.invoke(app, ["run"])
@@ -992,6 +1001,8 @@ competency:
     payload = _payload(tmp_path)
     assert result.exit_code == payload["run"]["exit_code"] == 2
     assert payload["run"]["status"] == "partial"
+    assert payload["checks"][0]["verdict"] == "errored"
+    assert payload["checks"][0]["error"]["code"] == "engine.timeout"
     assert "1-second run budget was exhausted" in payload["run"]["partial_reason"]
     assert "Fix: select fewer checks" in result.stdout
     assert "Partial reason" in _report(tmp_path)

@@ -307,6 +307,27 @@ def test_missing_schema_reference_is_vacuously_measured_for_globally_empty_graph
     }
 
 
+def test_missing_drift_schema_reference_remains_an_error_for_globally_empty_graph():
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(
+            _drift({"max_delta": 0}),
+            [
+                {
+                    "schema_ok": False,
+                    "missing_labels": ["Customer"],
+                    "missing_relationship_types": [],
+                    "current": 100,
+                    "population": 0,
+                    "evidence": [],
+                }
+            ],
+            baseline=BaselineValue(100),
+            graph_empty=True,
+        )
+
+    assert caught.value.error.code == "engine.schema_reference_missing"
+
+
 def test_compiled_summary_must_explicitly_report_schema_status():
     row = _completeness_row()
     row.pop("schema_ok")
