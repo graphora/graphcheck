@@ -24,7 +24,14 @@ def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
     assert payload["run"]["id"] == "redacted_20260706T090241000000Z"
     assert payload["totals"] == source_payload["totals"]
     assert payload["score"] == source_payload["score"]
-    assert payload["suites"] == source_payload["suites"]
+    assert [suite["totals"] for suite in payload["suites"]] == [
+        suite["totals"] for suite in source_payload["suites"]
+    ]
+    assert payload["run"]["selection"]["suites"] == ["suite-1"]
+    assert payload["suites"][0]["id"] == "suite-1"
+    assert payload["suites"][0]["source_sha"] == REDACTION_MASK
+    assert {check["suite_id"] for check in payload["checks"]} == {"suite-1"}
+    assert [check["id"] for check in payload["checks"]] == ["check-1", "check-2", "check-3"]
     assert [check["verdict"] for check in payload["checks"]] == [
         check["verdict"] for check in source_payload["checks"]
     ]
@@ -48,6 +55,22 @@ def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
     assert "4:abc:12" not in results_json(redacted)
     assert source.checks[0].params == {"customer_id": "CUST-1042"}
     assert verify_redacted_results(payload) == redacted
+
+
+def test_redaction_aliases_sensitive_identifier_and_scans_the_final_artifact():
+    payload = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+    payload["checks"][0]["id"] = "CUST-1042"
+
+    redacted = redact_results(payload)
+    exported = results_json(redacted)
+    html = render_html_report(redacted)
+
+    assert redacted.checks[0].id == "check-1"
+    assert redacted.checks[0].suite_id == redacted.suites[0].id
+    assert redacted.suites[0].id == redacted.run.selection.suites[0]
+    assert verify_redacted_results(redacted) == redacted
+    assert "CUST-1042" not in exported
+    assert "CUST-1042" not in html
 
 
 def test_redaction_verifier_rejects_an_unmasked_value():
@@ -76,6 +99,7 @@ def test_redaction_verifier_rejects_an_unmasked_value():
 @pytest.mark.parametrize(
     ("path", "value", "match"),
     [
+        (("checks", 0, "id"), "CUST-1042", r"checks\[0\]\.id"),
         (("checks", 0, "name"), "CUST-1042", r"checks\[0\]\.name"),
         (("checks", 0, "provenance"), "CUST-1042", r"checks\[0\]\.provenance"),
         (("run", "id"), "patient-prod_20260706T090241000000Z", r"run\.id"),
@@ -184,7 +208,7 @@ def test_html_report_reflects_verified_redaction_without_raw_literals():
     assert 'id="toggle-details-btn"' not in html
     check_name = f"<h3>{REDACTION_MASK}</h3>"
     pattern = '<span class="check-pattern">Pattern: <code>competency-shape</code></span>'
-    check_id = '<code class="check-id">customer-360::cq-001</code>'
+    check_id = '<code class="check-id">suite-1::check-1</code>'
     assert html.index(check_name) < html.index(pattern) < html.index(check_id)
     assert "CUST-1042" not in html
     assert "4:abc:12" not in html

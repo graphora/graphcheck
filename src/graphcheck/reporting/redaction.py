@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from graphcheck.contracts.results import RedactionPolicy, Results, parse_utc_tim
 from graphcheck.reporting.writer import load_results
 
 REDACTION_MASK = "[REDACTED]"
+_ALIAS_PATTERN = re.compile(r"(?:suite|check|tag)-[1-9][0-9]*\Z")
 
 
 def _mask_values(value: object) -> Any:
@@ -16,6 +18,145 @@ def _mask_values(value: object) -> Any:
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_mask_values(item) for item in value]
     return REDACTION_MASK
+
+
+def _string_literals(value: object) -> set[str]:
+    if isinstance(value, Mapping):
+        return set().union(*(_string_literals(item) for item in value.values()), set())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return set().union(*(_string_literals(item) for item in value), set())
+    return {value} if isinstance(value, str) and value else set()
+
+
+def _sensitive_source_literals(payload: dict[str, Any]) -> set[str]:
+    run = payload["run"]
+    values: list[object] = [
+        run["partial_reason"],
+        run["selection"]["suites"],
+        run["selection"]["tags"],
+        run["error"],
+    ]
+    if run["target"] is not None:
+        values.extend((run["target"]["database"], run["target"]["fingerprint"]))
+    values.extend((suite["id"], suite["source_sha"]) for suite in payload["suites"])
+    for check in payload["checks"]:
+        values.extend(
+            (
+                check["id"],
+                check["suite_id"],
+                check["name"],
+                check["provenance"],
+                check["compiled_query"],
+                check["params"],
+                check["measured"],
+                check["expected"],
+                check["evidence"],
+                check["error"],
+            )
+        )
+    return _string_literals(values)
+
+
+def _aliases(values: list[str], prefix: str, sensitive: set[str]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    candidate = 1
+    for value in values:
+        if value in aliases:
+            continue
+        while f"{prefix}-{candidate}" in sensitive:
+            candidate += 1
+        aliases[value] = f"{prefix}-{candidate}"
+        candidate += 1
+    return aliases
+
+
+def _alias_identifiers(payload: dict[str, Any], sensitive: set[str]) -> None:
+    selection = payload["run"]["selection"]
+    suite_values = [
+        *selection["suites"],
+        *(suite["id"] for suite in payload["suites"]),
+        *(check["suite_id"] for check in payload["checks"]),
+    ]
+    suite_aliases = _aliases(suite_values, "suite", sensitive)
+    tag_aliases = _aliases(selection["tags"], "tag", sensitive)
+    selection["suites"] = [suite_aliases[value] for value in selection["suites"]]
+    selection["tags"] = [tag_aliases[value] for value in selection["tags"]]
+    for suite in payload["suites"]:
+        suite["id"] = suite_aliases[suite["id"]]
+        suite["source_sha"] = REDACTION_MASK
+    check_aliases = _aliases([check["id"] for check in payload["checks"]], "check", sensitive)
+    for check in payload["checks"]:
+        check["suite_id"] = suite_aliases[check["suite_id"]]
+        check["id"] = check_aliases[check["id"]]
+    if target := payload["run"]["target"]:
+        target["database"] = REDACTION_MASK
+        target["fingerprint"] = REDACTION_MASK
+
+
+def _is_safe_literal_path(path: tuple[str | int, ...]) -> bool:
+    if path in {
+        ("schema_version",),
+        ("run", "id"),
+        ("run", "started_at"),
+        ("run", "finished_at"),
+        ("run", "graphcheck_version"),
+        ("run", "pack_version"),
+        ("run", "status"),
+        ("run", "redaction", "policy"),
+        ("run", "target", "server_version"),
+        ("run", "target", "edition"),
+        ("run", "error", "code"),
+        ("score", "method"),
+    }:
+        return True
+    if (
+        len(path) == 3
+        and path[0] == "checks"
+        and path[2]
+        in {
+            "pattern",
+            "severity",
+            "verdict",
+            "skip_reason",
+            "started_at",
+        }
+    ):
+        return True
+    if len(path) == 4 and path[0] == "checks" and path[2:] == ("error", "code"):
+        return True
+    return (
+        len(path) == 6
+        and path[0] == "checks"
+        and isinstance(path[1], int)
+        and path[2:4] == ("evidence", "elements")
+        and isinstance(path[4], int)
+        and path[5] == "kind"
+    )
+
+
+def _verify_no_sensitive_literals(
+    value: object,
+    sensitive: set[str],
+    path: tuple[str | int, ...] = (),
+) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _verify_no_sensitive_literals(item, sensitive, (*path, str(key)))
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _verify_no_sensitive_literals(item, sensitive, (*path, index))
+        return
+    if (
+        isinstance(value, str)
+        and value != REDACTION_MASK
+        and value in sensitive
+        and not _is_safe_literal_path(path)
+    ):
+        location = "".join(f"[{item}]" if isinstance(item, int) else f".{item}" for item in path)
+        raise ValueError(
+            f"redaction verification failed: sensitive source literal at {location.lstrip('.')}"
+        )
 
 
 def redacted_run_id(finished_at: str) -> str:
@@ -36,8 +177,10 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
 
     source = load_results(data)
     payload = source.model_dump(mode="python", by_alias=True, exclude_none=False)
+    sensitive = _sensitive_source_literals(payload)
     payload["run"]["redaction"] = {"policy": RedactionPolicy.MASK, "applied": True}
     payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"])
+    _alias_identifiers(payload, sensitive)
     if payload["run"]["partial_reason"] is not None:
         payload["run"]["partial_reason"] = REDACTION_MASK
     _mask_error(payload["run"]["error"])
@@ -63,6 +206,9 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
         _mask_error(check["error"])
     redacted = Results.model_validate(payload)
     verify_redacted_results(redacted)
+    _verify_no_sensitive_literals(
+        redacted.model_dump(mode="python", by_alias=True, exclude_none=False), sensitive
+    )
     return redacted
 
 
@@ -77,6 +223,11 @@ def _verify_masked(value: object, path: str) -> None:
         return
     if value != REDACTION_MASK:
         raise ValueError(f"redaction verification failed: unmasked value at {path}")
+
+
+def _verify_alias(value: str, prefix: str, path: str) -> None:
+    if not _ALIAS_PATTERN.fullmatch(value) or not value.startswith(f"{prefix}-"):
+        raise ValueError(f"redaction verification failed: unmasked identifier at {path}")
 
 
 def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Results:
@@ -95,8 +246,20 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
     if results.run.error is not None:
         _verify_masked(results.run.error.message, "run.error.message")
         _verify_masked(results.run.error.fix, "run.error.fix")
+    for index, suite_id in enumerate(results.run.selection.suites):
+        _verify_alias(suite_id, "suite", f"run.selection.suites[{index}]")
+    for index, tag in enumerate(results.run.selection.tags):
+        _verify_alias(tag, "tag", f"run.selection.tags[{index}]")
+    if results.run.target is not None:
+        _verify_masked(results.run.target.database, "run.target.database")
+        _verify_masked(results.run.target.fingerprint, "run.target.fingerprint")
+    for index, suite in enumerate(results.suites):
+        _verify_alias(suite.id, "suite", f"suites[{index}].id")
+        _verify_masked(suite.source_sha, f"suites[{index}].source_sha")
     for index, check in enumerate(results.checks):
         prefix = f"checks[{index}]"
+        _verify_alias(check.id, "check", f"{prefix}.id")
+        _verify_alias(check.suite_id, "suite", f"{prefix}.suite_id")
         _verify_masked(check.name, f"{prefix}.name")
         if check.provenance is not None:
             _verify_masked(check.provenance, f"{prefix}.provenance")
