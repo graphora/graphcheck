@@ -391,6 +391,9 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
+    assert '<section class="callout callout-error run-diagnostic"' in html
+    assert "<h2>Action required</h2>" in html
+    assert "<strong>Fix:</strong> Check the password in profiles.yml" in html
     assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
     assert 'id="checks-empty-message"' in html
     assert "No checks to explore." in html

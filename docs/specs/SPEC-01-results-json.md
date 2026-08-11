@@ -64,7 +64,8 @@ Every model forbids unknown keys (`extra="forbid"`).
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
 6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. Rounding applies to the exact rational value using **half-to-even**, without an intermediate floating-point value. Weights are locked. The overall score is computed directly from all checks, never by averaging rounded suite scores. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
 7. **Redaction** enum `none | mask | hash` is frozen. Normal runs emit
-   `{policy:"none", applied:false}`. `graphcheck run --redacted` and `graphcheck redact` emit
+   `{policy:"none", applied:false}`. `graphcheck run --redact` (alias `--redacted`) and
+   `graphcheck redact` emit
    `{policy:"mask", applied:true}` after replacing compiled query text, all `params`, `expected`,
    and `measured` leaves, evidence messages and element IDs/labels/types, check names and
    provenance, partial reasons, error messages/fixes, source hashes, and target identifiers with

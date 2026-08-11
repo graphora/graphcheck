@@ -6,7 +6,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
-- Verified mask-redacted exports through `graphcheck run --redacted` and `graphcheck redact`, with
+- Verified mask-redacted exports through `graphcheck run --redact` (alias `--redacted`) and
+  `graphcheck redact`, with
   fail-closed literal-surface verification and preserved result contract structure.
 - Closed redacted-export leaks through diagnostics, partial reasons, authored check metadata, and
   target-derived run IDs.

@@ -1558,6 +1558,7 @@ def run_command(
     ),
     redacted: bool = typer.Option(
         False,
+        "--redact",
         "--redacted",
         help="Mask parameter, expected, query, and evidence literal values in exported artifacts.",
     ),

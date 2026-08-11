@@ -163,7 +163,7 @@ graphcheck run --profile staging
 graphcheck run --suite customer-health
 graphcheck run --select tag:production
 graphcheck run --suite customer-health --select tag:production --fail-fast
-graphcheck run --redacted
+graphcheck run --redact
 ```
 
 `--suite` and `--select` are repeatable. Repeated tag selectors use OR semantics. `--fail-fast`
@@ -184,7 +184,8 @@ interaction script and has no external assets or network calls, so it can be ope
 offline. The run-id directory preserves history; `latest` is a consistently published convenience
 copy of the newest run.
 
-Use `graphcheck run --redacted` when the generated artifacts will be shared. Mask mode preserves
+Use `graphcheck run --redact` (`--redacted` remains an alias) when the generated artifacts will be
+shared. Mask mode preserves
 verdicts, scores, run-level counts, keys, and container structure while replacing query text,
 parameter, expected, and measured literals; check names and provenance; partial reasons; diagnostic
 messages and fixes; source hashes and target identifiers; and evidence messages/element values with

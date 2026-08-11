@@ -224,7 +224,8 @@ competency:
     assert [check["id"] for check in payload["checks"]] == ["production"]
 
 
-def test_run_redacted_writes_only_verified_masked_literals(tmp_path, monkeypatch):
+@pytest.mark.parametrize("redact_option", ["--redact", "--redacted"])
+def test_run_redact_writes_only_verified_masked_literals(tmp_path, monkeypatch, redact_option):
     _project(
         tmp_path,
         {
@@ -243,7 +244,7 @@ competency:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
 
-    result = runner.invoke(app, ["run", "--redacted"])
+    result = runner.invoke(app, ["run", redact_option])
 
     assert result.exit_code == 0
     exported = (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(
