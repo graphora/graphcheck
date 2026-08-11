@@ -187,8 +187,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
   to `graphcheck debug`; debug preserves the same error shape in human and JSON output.
 - Init, debug, and run now share a credential preflight. Community Edition follows an explicit
   planner-guarded policy because it has no RBAC, while Enterprise permits only database access,
-  graph reads, and non-boosted procedure/function execution and fails closed when privilege
-  evidence is unavailable.
+  graph reads, the default non-mutating `LOAD ON ALL DATA` grant, and non-boosted
+  procedure/function execution and fails closed when privilege evidence is unavailable.
 - Neo4j error mapping now considers driver error codes, nested causes, and the selected profile to
   distinguish authentication, reachability, TLS, permission, query, and database failures and to
   provide profile-specific remediation.
@@ -255,6 +255,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Closed the custom-role privilege bypass by inspecting privilege action, resource, and segment and
   rejecting boosted execution plus graph-write, schema, database, transaction-management, and
   DBMS-administrative grants instead of relying on built-in role names alone.
+- Accepted Neo4j's default `PUBLIC`-role `LOAD ON ALL DATA` privilege as non-mutating while still
+  rejecting scoped `LOAD ON CIDR` grants, preventing valid restricted Enterprise credentials from
+  failing every supported Neo4j/Cypher integration lane.
 - Run preflight now rejects unsafe or unverifiable Enterprise credentials before any checks execute
   and preserves the resulting error and fix in `results.json`, console output, and the HTML report.
 - Corrected Neo4j 5/Cypher 5 and current Neo4j/Cypher 25 diagnostics so missing or unavailable APOC

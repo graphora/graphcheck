@@ -114,10 +114,11 @@ value, keep `password_env`, and export that variable in the process that runs Gr
 
 On Neo4j Enterprise, the account must be a dedicated, server-enforced read-only audit credential.
 During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
-privileges and permits only database access, graph reads, and non-boosted procedure/function
-execution. Graph writes, boosted execution, schema/database/DBMS administration, and elevated
-built-in roles are rejected as `neo4j.credential_not_read_only`. If Enterprise cannot return the
-reported privileges, GraphCheck fails closed as `neo4j.credential_read_only_unverified`.
+privileges and permits only database access, graph reads, the default non-mutating `LOAD ON ALL
+DATA` grant, and non-boosted procedure/function execution. Graph writes, boosted execution,
+schema/database/DBMS administration, and elevated built-in roles are rejected as
+`neo4j.credential_not_read_only`. If Enterprise cannot return the reported privileges, GraphCheck
+fails closed as `neo4j.credential_read_only_unverified`.
 
 Neo4j Community has no roles and gives every user implied administrator privileges, so it cannot
 provide a server-enforced read-only credential. GraphCheck explicitly supports Community by

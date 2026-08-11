@@ -88,7 +88,7 @@ def _credential_probe_client(rows, *, edition="enterprise"):
     return client
 
 
-def test_read_only_credential_probe_accepts_access_and_match_only():
+def test_read_only_credential_probe_accepts_explicit_read_only_model():
     _credential_probe_client(
         [
             {
@@ -111,6 +111,14 @@ def test_read_only_credential_probe_accepts_access_and_match_only():
                 "graph": "*",
                 "resource": "database",
                 "segment": "PROCEDURE(*)",
+            },
+            {
+                "access": "GRANTED",
+                "action": "load",
+                "graph": "*",
+                "resource": "all_data",
+                "segment": "ALL DATA",
+                "role": "PUBLIC",
             },
         ]
     ).verify_read_only_credential()
@@ -158,6 +166,7 @@ def test_read_only_credential_probe_rejects_write_capable_builtin_role():
         ("constraint", "database", "database"),
         ("token", "database", "database"),
         ("transaction_management", "database", "USER(*)"),
+        ("load", "cidr", "CIDR(10.0.0.0/8)"),
     ],
 )
 def test_read_only_credential_probe_rejects_boosted_and_administrative_grants(

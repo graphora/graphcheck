@@ -36,6 +36,8 @@ def _is_allowed_read_only_privilege(row: Mapping[str, object]) -> bool:
         return resource == "DATABASE" and segment == "DATABASE"
     if action in READ_ONLY_GRAPH_PRIVILEGE_ACTIONS:
         return resource in {"ALL PROPERTIES", "GRAPH", "PROPERTY"}
+    if action == "LOAD":
+        return segment == "ALL DATA"
     return (
         action == "EXECUTE"
         and resource == "DATABASE"

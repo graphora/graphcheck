@@ -66,9 +66,10 @@ Rules:
    the CA-validated TLS/routing form.
 7. On Enterprise, the selected credential is a dedicated, server-enforced read-only audit
    credential. Init, debug, and CLI run inspect `SHOW USER PRIVILEGES` and allow only database
-   access, graph reads, and non-boosted procedure/function execution. Graph writes, boosted
-   execution, schema/database/DBMS administration, and write-capable built-in roles fail as
-   `neo4j.credential_not_read_only`; missing privilege evidence fails closed as
+   access, graph reads, the default non-mutating `LOAD ON ALL DATA` grant, and non-boosted
+   procedure/function execution. Graph writes, boosted execution, schema/database/DBMS
+   administration, and write-capable built-in roles fail as `neo4j.credential_not_read_only`;
+   missing privilege evidence fails closed as
    `neo4j.credential_read_only_unverified`. Community has no RBAC and all users have implied
    administrator privileges, so its edition policy skips this unavailable gate and retains the
    per-query `EXPLAIN` read guard.
