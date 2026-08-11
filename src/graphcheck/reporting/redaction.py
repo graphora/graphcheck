@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from graphcheck.contracts.results import RedactionPolicy, Results
+from graphcheck.contracts.results import RedactionPolicy, Results, parse_utc_timestamp
 from graphcheck.reporting.writer import load_results
 
 REDACTION_MASK = "[REDACTED]"
@@ -18,13 +18,33 @@ def _mask_values(value: object) -> Any:
     return REDACTION_MASK
 
 
+def redacted_run_id(finished_at: str) -> str:
+    """Return a target-neutral identifier for a redacted artifact."""
+
+    timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"redacted_{timestamp}"
+
+
+def _mask_error(error: dict[str, Any] | None) -> None:
+    if error is not None:
+        error["message"] = REDACTION_MASK
+        error["fix"] = REDACTION_MASK
+
+
 def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
     """Return a validated mask-redacted copy of a results export."""
 
     source = load_results(data)
     payload = source.model_dump(mode="python", by_alias=True, exclude_none=False)
     payload["run"]["redaction"] = {"policy": RedactionPolicy.MASK, "applied": True}
+    payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"])
+    if payload["run"]["partial_reason"] is not None:
+        payload["run"]["partial_reason"] = REDACTION_MASK
+    _mask_error(payload["run"]["error"])
     for check in payload["checks"]:
+        check["name"] = REDACTION_MASK
+        if check["provenance"] is not None:
+            check["provenance"] = REDACTION_MASK
         if check["compiled_query"] is not None:
             check["compiled_query"] = REDACTION_MASK
         if check["params"] is not None:
@@ -40,6 +60,7 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
                     element["labels"] = [REDACTION_MASK for _ in element["labels"]]
                 if element["type"] is not None:
                     element["type"] = REDACTION_MASK
+        _mask_error(check["error"])
     redacted = Results.model_validate(payload)
     verify_redacted_results(redacted)
     return redacted
@@ -67,8 +88,18 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
         or not results.run.redaction.applied
     ):
         raise ValueError("redaction verification failed: run.redaction is not applied mask mode")
+    if results.run.id != redacted_run_id(results.run.finished_at):
+        raise ValueError("redaction verification failed: run.id is not target-neutral")
+    if results.run.partial_reason is not None:
+        _verify_masked(results.run.partial_reason, "run.partial_reason")
+    if results.run.error is not None:
+        _verify_masked(results.run.error.message, "run.error.message")
+        _verify_masked(results.run.error.fix, "run.error.fix")
     for index, check in enumerate(results.checks):
         prefix = f"checks[{index}]"
+        _verify_masked(check.name, f"{prefix}.name")
+        if check.provenance is not None:
+            _verify_masked(check.provenance, f"{prefix}.provenance")
         if check.compiled_query is not None:
             _verify_masked(check.compiled_query, f"{prefix}.compiled_query")
         if check.params is not None:
@@ -85,4 +116,7 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
                     _verify_masked(element.labels, f"{element_prefix}.labels")
                 if element.type is not None:
                     _verify_masked(element.type, f"{element_prefix}.type")
+        if check.error is not None:
+            _verify_masked(check.error.message, f"{prefix}.error.message")
+            _verify_masked(check.error.fix, f"{prefix}.error.fix")
     return results

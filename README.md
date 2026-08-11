@@ -186,9 +186,10 @@ copy of the newest run.
 
 Use `graphcheck run --redacted` when the generated artifacts will be shared. Mask mode preserves
 verdicts, scores, run-level counts, keys, and container structure while replacing query text,
-parameter, expected, and measured literals, plus evidence messages/element values, with
-`[REDACTED]`. Every mask-mode JSON and HTML write is verified before export. To create a safe
-sidecar from an existing run:
+parameter, expected, and measured literals; check names and provenance; partial reasons; diagnostic
+messages and fixes; and evidence messages/element values with `[REDACTED]`. Redacted artifacts use a
+target-neutral `redacted_<timestamp>` run ID. Every mask-mode JSON and HTML write verifies all of
+these surfaces and the neutral ID before export. To create a safe sidecar from an existing run:
 
 Redacted HTML reports omit all target metadata and graph counts. Check cards show the pattern under
 the check name and omit the details/evidence toggle and its Expected, Measured, and Compiled Cypher

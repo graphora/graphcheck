@@ -8,6 +8,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - Verified mask-redacted exports through `graphcheck run --redacted` and `graphcheck redact`, with
   fail-closed literal-surface verification and preserved result contract structure.
+- Closed redacted-export leaks through diagnostics, partial reasons, authored check metadata, and
+  target-derived run IDs.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.

@@ -66,10 +66,12 @@ Every model forbids unknown keys (`extra="forbid"`).
 7. **Redaction** enum `none | mask | hash` is frozen. Normal runs emit
    `{policy:"none", applied:false}`. `graphcheck run --redacted` and `graphcheck redact` emit
    `{policy:"mask", applied:true}` after replacing compiled query text, all `params`, `expected`,
-   and `measured` leaves, evidence messages, and evidence element IDs/labels/types with
-   `[REDACTED]`. Keys, containers, verdicts, scores, and run-level counts are preserved. The
-   canonical JSON and HTML writers verify every artifact declaring mask mode and refuse an export
-   containing an unmasked value on those literal surfaces. `hash` remains reserved.
+   and `measured` leaves, evidence messages and element IDs/labels/types, check names and
+   provenance, partial reasons, and error messages/fixes with `[REDACTED]`. Redacted run IDs are
+   target-neutral and derived only from the finish timestamp. Keys, containers, stable structural
+   identifiers and error codes, verdicts, scores, and run-level counts are preserved. The canonical
+   JSON and HTML writers verify every artifact declaring mask mode and refuse an export containing
+   an unmasked value on those literal surfaces or a non-neutral run ID. `hash` remains reserved.
 
 Evidence pointer `kind` is `node`, `rel`, or `aggregate`. An `aggregate` pointer identifies a
 canonical metric/target scope such as `node_count:label=Customer`; it is not a Neo4j element ID.
