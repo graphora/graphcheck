@@ -8,6 +8,7 @@ from graphcheck.application.run import (
     RunRequest,
     execute_run,
 )
+from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import builtin_pack_catalog
 from graphcheck.project import (
     find_project_root,
@@ -39,13 +40,30 @@ def list_checks() -> dict[str, list[dict[str, Any]]]:
 
 def get_results(run_id: str) -> Any:
     """
-    Load a GraphCheck results.json file.
+    Load a GraphCheck results.json file safely.
     """
+    if not run_id or "/" in run_id or "\\" in run_id or ".." in run_id:
+        raise GraphCheckError(
+            code="mcp.invalid_run_id",
+            message="The supplied run ID is invalid.",
+            fix="Provide a run ID returned by GraphCheck without path separators or '..'.",
+        )
+
     root = find_project_root()
     config = load_project_config(root)
     artifacts = project_path(root, config.artifacts)
+    runs_dir = (artifacts / "runs").resolve()
 
-    results_path = artifacts / "runs" / run_id / "results.json"
+    results_path = (runs_dir / run_id / "results.json").resolve()
+
+    try:
+        results_path.relative_to(runs_dir)
+    except ValueError as exc:
+        raise GraphCheckError(
+            code="mcp.invalid_run_id",
+            message="The supplied run ID resolves outside the GraphCheck runs directory.",
+            fix="Provide a valid GraphCheck run ID.",
+        ) from exc
 
     return load_results(results_path)
 

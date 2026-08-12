@@ -4,6 +4,8 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from graphcheck.mcp.server import CheckListResponse
+
 
 @pytest.mark.anyio
 async def test_mcp_agent_surface():
@@ -26,9 +28,18 @@ async def test_mcp_agent_surface():
         assert "run_suite" in names
         assert "get_results" in names
 
+        list_checks_tool = next(tool for tool in tools.tools if tool.name == "list_checks")
+
+        assert list_checks_tool.output_schema is not None
+
         result = await session.call_tool(
             "list_checks",
             {},
         )
 
         assert result is not None
+        assert result.structured_content is not None
+
+        response = CheckListResponse.model_validate(result.structured_content)
+
+        assert response.checks

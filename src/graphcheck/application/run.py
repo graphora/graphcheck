@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from graphcheck.application.artifacts import write_run_artifacts
+from graphcheck.application.artifacts import (
+    RenderObserver,
+    write_run_artifacts,
+)
 from graphcheck.application.paths import project_path
 from graphcheck.application.suites import load_suite_inputs
 from graphcheck.connection_profiles import (
@@ -14,6 +20,7 @@ from graphcheck.contracts.results import CheckError, Results
 from graphcheck.engine import (
     DirectoryBaselineProvider,
     Engine,
+    EngineConfig,
     failed_results,
 )
 from graphcheck.errors import GraphCheckError
@@ -22,6 +29,7 @@ from graphcheck.project import (
     find_project_root,
     load_project_config,
 )
+from graphcheck.telemetry.events import EngineEventSink
 
 
 @dataclass(slots=True)
@@ -30,17 +38,26 @@ class RunRequest:
     suite_ids: list[str]
     tags: list[str]
     fail_fast: bool
+    concurrency: int | None = None
+    verify_read_only_credential: bool = False
 
 
 @dataclass(slots=True)
 class RunOutcome:
     results: Results
-    results_path: Path
-    report_path: Path
+    results_path: Path | None
+    report_path: Path | None
+    artifact_error: Exception | None = None
 
 
 def execute_run(
     request: RunRequest,
+    *,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    event_sink: EngineEventSink | None = None,
+    render_observer: RenderObserver | None = None,
+    client_factory: Callable[[object, int], Neo4jClient] | None = None,
+    artifact_writer: Callable[..., tuple[Path, Path]] = write_run_artifacts,
 ) -> RunOutcome:
     """
     Execute a GraphCheck run independently of the CLI or MCP.
@@ -57,9 +74,20 @@ def execute_run(
         request.profile,
     )
 
-    client = Neo4jClient(selected_profile)
+    client: Neo4jClient | None = None
 
     try:
+        max_concurrency = request.concurrency or int(config.concurrency)
+
+        factory = client_factory or _new_neo4j_client
+        client = factory(
+            selected_profile,
+            max_concurrency,
+        )
+
+        if request.verify_read_only_credential:
+            _verify_cli_audit_credential(client)
+
         suite_inputs = load_suite_inputs(
             checks_dir,
             request.suite_ids,
@@ -69,6 +97,9 @@ def execute_run(
             baselines=DirectoryBaselineProvider(
                 artifacts / "baselines",
             ),
+            config=EngineConfig(max_concurrency=max_concurrency),
+            progress_callback=progress_callback,
+            event_sink=event_sink,
         ).run(
             suite_inputs,
             tags=request.tags,
@@ -76,9 +107,10 @@ def execute_run(
             selection_suites=request.suite_ids or None,
         )
 
-        results_path, report_path = write_run_artifacts(
+        results_path, report_path = artifact_writer(
             results,
             runs_dir,
+            render_observer=render_observer,
         )
 
         return RunOutcome(
@@ -95,10 +127,19 @@ def execute_run(
             fail_fast=request.fail_fast,
         )
 
-        results_path, report_path = write_run_artifacts(
-            results,
-            runs_dir,
-        )
+        try:
+            results_path, report_path = artifact_writer(
+                results,
+                runs_dir,
+                render_observer=render_observer,
+            )
+        except Exception as artifact_exc:
+            return RunOutcome(
+                results=results,
+                results_path=None,
+                report_path=None,
+                artifact_error=artifact_exc,
+            )
 
         return RunOutcome(
             results=results,
@@ -120,10 +161,19 @@ def execute_run(
             fail_fast=request.fail_fast,
         )
 
-        results_path, report_path = write_run_artifacts(
-            results,
-            runs_dir,
-        )
+        try:
+            results_path, report_path = artifact_writer(
+                results,
+                runs_dir,
+                render_observer=render_observer,
+            )
+        except Exception as artifact_exc:
+            return RunOutcome(
+                results=results,
+                results_path=None,
+                report_path=None,
+                artifact_error=artifact_exc,
+            )
 
         return RunOutcome(
             results=results,
@@ -132,4 +182,31 @@ def execute_run(
         )
 
     finally:
-        client.close()
+        if client is not None:
+            with suppress(Exception):
+                client.close()
+
+
+def _new_neo4j_client(profile, max_concurrency: int):
+    """Construct the workload-aware Neo4j client while retaining simple test doubles."""
+    parameters = inspect.signature(Neo4jClient).parameters.values()
+    accepts_setting = any(
+        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    return (
+        Neo4jClient(profile, max_concurrency=max_concurrency)
+        if accepts_setting
+        else Neo4jClient(profile)
+    )
+
+
+def _verify_cli_audit_credential(client: object) -> None:
+    probe = getattr(client, "probe", None)
+    verify = getattr(client, "verify_read_only_credential", None)
+
+    if callable(probe):
+        probe()
+
+    if callable(verify):
+        verify()

@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from graphcheck.mcp.server import run as run_mcp_server
 from graphcheck import __version__
 from graphcheck.telemetry.consent import (
     disable_telemetry,
@@ -1569,11 +1568,13 @@ def _open_html_report(path: Path) -> None:
         raise ReportHistoryError(f"Could not open {path} in the default browser.")
     typer.secho(f"Opened {path}", fg=typer.colors.CYAN)
 
+
 @mcp_app.command("serve")
 def mcp_serve() -> None:
     """Start the GraphCheck MCP server."""
-    run_mcp_server()
-    
+    _call("graphcheck.mcp.server", "run")
+
+
 @app.command("run")
 @_telemetry_command(CommandName.RUN)
 def run_command(
@@ -1601,8 +1602,9 @@ def run_command(
     ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
+    from graphcheck.application.run import RunRequest, execute_run
     from graphcheck.contracts.results import CheckError
-    from graphcheck.engine import DirectoryBaselineProvider, Engine, EngineConfig, failed_results
+    from graphcheck.engine import failed_results
     from graphcheck.errors import GraphCheckError
     from graphcheck.project import ARTIFACTS_DIR, load_project_config
 
@@ -1610,9 +1612,20 @@ def run_command(
     root: Path | None = None
     runs_dir: Path | None = None
     tags: list[str] = []
-    client: Neo4jClient | None = None
+    results_path: Path | None = None
+    report_path: Path | None = None
     setup_started = time.monotonic()
     telemetry = _command_telemetry()
+
+    artifact_started = time.monotonic()
+    render_times: list[int] = []
+    render_failed = False
+
+    def observe_render(duration_ms: int, succeeded: bool) -> None:
+        nonlocal render_failed
+        render_times.append(duration_ms)
+        render_failed = render_failed or not succeeded
+
     try:
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
@@ -1624,26 +1637,64 @@ def run_command(
             _project_path(root, config.checks),
             requested_suites,
         )
-        profiles = load_profiles(root)
-        _, selected_profile = select_profile(profiles, profile)
-        max_concurrency = concurrency or int(config.concurrency)
-        client = _new_neo4j_client(selected_profile, max_concurrency)
-        _verify_cli_audit_credential(client)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
+
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
-            results = Engine(
-                client,
-                baselines=DirectoryBaselineProvider(artifacts / "baselines"),
-                config=EngineConfig(max_concurrency=max_concurrency),
+            outcome = execute_run(
+                RunRequest(
+                    profile=profile,
+                    suite_ids=requested_suites,
+                    tags=tags,
+                    fail_fast=fail_fast,
+                    concurrency=concurrency,
+                    verify_read_only_credential=True,
+                ),
                 progress_callback=progress_callback,
                 event_sink=telemetry.event_sink if telemetry is not None else None,
-            ).run(
-                suite_inputs,
-                tags=tags,
-                fail_fast=fail_fast,
-                selection_suites=requested_suites or None,
+                render_observer=observe_render if telemetry is not None else None,
+                client_factory=_new_neo4j_client,
+                artifact_writer=_write_run_artifacts,
             )
+
+        results = outcome.results
+        results_path = outcome.results_path
+        report_path = outcome.report_path
+
+        if outcome.artifact_error is not None:
+            if telemetry is not None:
+                telemetry.render_ms = sum(render_times) if render_times else None
+                telemetry.mark_artifacts(
+                    artifact_started,
+                    results=ArtifactOutcome.ERROR,
+                    report=ArtifactOutcome.ERROR,
+                    exclude_ms=sum(render_times),
+                )
+                telemetry.fail(
+                    ProcessOutcome.UNEXPECTED_ERROR,
+                    CliFailureStage.ARTIFACT_WRITE,
+                    SafeErrorCode.ARTIFACT_WRITE_FAILED,
+                )
+
+            if results.run.error is not None:
+                _print_setup_error(results.run.error)
+
+            typer.secho(
+                f"run.artifact_failed: Could not write run artifacts: {outcome.artifact_error}",
+                fg=typer.colors.RED,
+                bold=True,
+                err=True,
+            )
+            typer.secho(
+                "Fix: Check the configured artifacts path and filesystem permissions.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(3)
+
+    except typer.Exit:
+        raise
+
     except GraphCheckError as exc:
         if telemetry is not None:
             if telemetry.setup_ms is None:
@@ -1662,6 +1713,7 @@ def run_command(
             tags=tags,
             fail_fast=fail_fast,
         )
+
     except Exception as exc:
         if telemetry is not None:
             if telemetry.setup_ms is None:
@@ -1697,16 +1749,54 @@ def run_command(
             tags=tags,
             fail_fast=fail_fast,
         )
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception as exc:  # a close failure must not discard a completed run artifact
-                typer.secho(
-                    f"Warning: Neo4j driver cleanup failed: {exc}",
-                    fg=typer.colors.YELLOW,
-                    err=True,
+
+    if results_path is None:
+        assert runs_dir is not None
+
+        try:
+            results_path, report_path = _write_run_artifacts(
+                results,
+                runs_dir,
+                render_observer=observe_render if telemetry is not None else None,
+            )
+        except Exception as artifact_exc:
+            if telemetry is not None:
+                telemetry.render_ms = sum(render_times) if render_times else None
+                telemetry.mark_artifacts(
+                    artifact_started,
+                    results=ArtifactOutcome.ERROR,
+                    report=ArtifactOutcome.ERROR,
+                    exclude_ms=sum(render_times),
                 )
+                telemetry.fail(
+                    ProcessOutcome.UNEXPECTED_ERROR,
+                    (
+                        CliFailureStage.REPORT_RENDER
+                        if render_failed
+                        else CliFailureStage.ARTIFACT_WRITE
+                    ),
+                    (
+                        SafeErrorCode.REPORT_RENDER_FAILED
+                        if render_failed
+                        else SafeErrorCode.ARTIFACT_WRITE_FAILED
+                    ),
+                )
+
+            if results.run.error is not None:
+                _print_setup_error(results.run.error)
+
+            typer.secho(
+                f"run.artifact_failed: Could not write run artifacts: {artifact_exc}",
+                fg=typer.colors.RED,
+                bold=True,
+                err=True,
+            )
+            typer.secho(
+                "Fix: Check the configured artifacts path and filesystem permissions.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(3) from artifact_exc
 
     if (
         results.run.status.value == "failed"
@@ -1719,58 +1809,6 @@ def run_command(
             results.run.error.code if results.run.error is not None else None,
         )
 
-    artifact_started = time.monotonic()
-    render_times: list[int] = []
-    render_failed = False
-
-    def observe_render(duration_ms: int, succeeded: bool) -> None:
-        nonlocal render_failed
-        render_times.append(duration_ms)
-        render_failed = render_failed or not succeeded
-
-    try:
-        assert runs_dir is not None
-        results_path, report_path = _write_run_artifacts(
-            results,
-            runs_dir,
-            render_observer=observe_render if telemetry is not None else None,
-        )
-    except Exception as exc:
-        if telemetry is not None:
-            telemetry.render_ms = sum(render_times) if render_times else None
-            telemetry.mark_artifacts(
-                artifact_started,
-                results=ArtifactOutcome.ERROR,
-                report=ArtifactOutcome.ERROR,
-                exclude_ms=sum(render_times),
-            )
-            telemetry.fail(
-                ProcessOutcome.UNEXPECTED_ERROR,
-                (
-                    CliFailureStage.REPORT_RENDER
-                    if render_failed
-                    else CliFailureStage.ARTIFACT_WRITE
-                ),
-                (
-                    SafeErrorCode.REPORT_RENDER_FAILED
-                    if render_failed
-                    else SafeErrorCode.ARTIFACT_WRITE_FAILED
-                ),
-            )
-        if results.run.error is not None:
-            _print_setup_error(results.run.error)
-        typer.secho(
-            f"run.artifact_failed: Could not write run artifacts: {exc}",
-            fg=typer.colors.RED,
-            bold=True,
-            err=True,
-        )
-        typer.secho(
-            "Fix: Check the configured artifacts path and filesystem permissions.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
-        raise typer.Exit(3) from exc
     if telemetry is not None:
         telemetry.render_ms = sum(render_times)
         telemetry.mark_artifacts(

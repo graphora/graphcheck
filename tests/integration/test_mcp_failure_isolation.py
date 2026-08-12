@@ -18,19 +18,34 @@ async def test_mcp_failure_isolation():
     ):
         await session.initialize()
 
-        # First call succeeds
+        tools = await session.list_tools()
+
+        list_checks_tool = next(tool for tool in tools.tools if tool.name == "list_checks")
+
+        assert list_checks_tool.output_schema is not None
+
+        # First call succeeds.
         result1 = await session.call_tool("list_checks", {})
         assert result1 is not None
+        assert result1.is_error is False
+        assert result1.structured_content is not None
+        assert "checks" in result1.structured_content
 
-        # Call a tool that does not exist
+        # Trigger a real GraphCheck tool failure with an invalid run ID.
         result = await session.call_tool(
-            "tool_that_does_not_exist",
-            {},
+            "get_results",
+            {"run_id": "../../outside"},
         )
 
         assert result.is_error is True
-        assert "Unknown tool" in result.content[0].text
+        assert result.content
+        assert "The supplied run ID is invalid." in result.content[0].text
+        assert "outside" not in result.content[0].text
 
-        # Server should still work afterwards
+        # Server should still work afterwards.
         result2 = await session.call_tool("list_checks", {})
+
         assert result2 is not None
+        assert result2.is_error is False
+        assert result2.structured_content is not None
+        assert "checks" in result2.structured_content
