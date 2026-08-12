@@ -36,8 +36,13 @@ locations, but never include matched property values or claim complete PII disco
 ## Requirements
 
 - Python 3.12 or 3.13
-- A reachable Neo4j database
+- Neo4j Python driver 5.20 through 6.x
+- Neo4j Server 5.26 LTS or a tested calendar-version release
+- Cypher 5, or Cypher 25 on the tested calendar-version server
 - [`uv`](https://docs.astral.sh/uv/) for the repository workflow shown below
+
+Neo4j Server 4.4 is legacy and unsupported. The exact tested combinations and the temporary
+Cypher 5 sampling path are documented in the [compatibility matrix](docs/compatibility.md).
 
 APOC is probed and reported by `graphcheck init` and `graphcheck debug`. A missing optional
 capability blocks only checks that declare it; those checks are recorded as unsupported instead of
@@ -103,7 +108,40 @@ profiles:
 ```
 
 `password_env` overrides a literal `password` when the variable is set. If the environment variable
-is absent, GraphCheck falls back to `password` when one is configured.
+is absent, GraphCheck falls back to `password` when one is configured. For the quickest local
+setup, edit the generated inline `password` value. For CI or shared environments, remove the inline
+value, keep `password_env`, and export that variable in the process that runs GraphCheck.
+
+On Neo4j Enterprise, the account must be a dedicated, server-enforced read-only audit credential.
+During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
+privileges and permits only database access, graph reads, the default non-mutating `LOAD ON ALL
+DATA` grant, and non-boosted procedure/function execution. Graph writes, boosted execution,
+schema/database/DBMS administration, and elevated built-in roles are rejected as
+`neo4j.credential_not_read_only`. If Enterprise cannot return the reported privileges, GraphCheck
+fails closed as `neo4j.credential_read_only_unverified`.
+
+Neo4j Community has no roles and gives every user implied administrator privileges, so it cannot
+provide a server-enforced read-only credential. GraphCheck explicitly supports Community by
+skipping the unavailable Enterprise RBAC gate. In both editions, every customer-authored query is
+separately planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`, so a write-capable
+query is rejected without modifying the graph. Driver read routing alone is not an authorization
+boundary.
+
+On Neo4j Enterprise, an administrator can provision the audit role for database `neo4j` with:
+
+```cypher
+CREATE ROLE graphcheck_auditor IF NOT EXISTS;
+GRANT ACCESS ON DATABASE neo4j TO graphcheck_auditor;
+GRANT MATCH {*} ON GRAPH neo4j ELEMENTS * TO graphcheck_auditor;
+GRANT ROLE graphcheck_auditor TO graphcheck_user;
+```
+
+Create `graphcheck_user` separately with your organization’s password policy, and grant no write,
+boosted execution, schema, database, DBMS-admin, or broader inherited role.
+
+Use `bolt://host:7687` for a direct non-TLS local server. Use `neo4j+s://host:7687` for routing with
+CA-validated TLS (including the URI supplied by Aura), or `neo4j+ssc://host:7687` only when the
+deployment intentionally uses a self-signed certificate. The URI scheme must match the server.
 
 Verify connectivity, server metadata, visibility, graph counts, and check capability requirements:
 
@@ -111,6 +149,9 @@ Verify connectivity, server metadata, visibility, graph counts, and check capabi
 graphcheck debug
 graphcheck debug --json
 ```
+
+On failure, both forms print a stable error code, a plain-language diagnostic, and an exact `Fix:`;
+`graphcheck run` preserves the same diagnostic in `results.json` and the HTML report.
 
 ### 3. Add a first suite
 
@@ -216,6 +257,22 @@ Generation is opt-in. Add one of these strict blocks to `graphcheck.yml`:
 
 ```yaml
 generate:
+  provider: google
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
+  provider: google
+  model: gemma-4-26b-a4b-it
+  api_key_env: GEMINI_API_KEY
+  temperature: 0
+```
+
+```yaml
+generate:
   provider: openai
   model: gpt-5-mini
   api_key_env: OPENAI_API_KEY
@@ -231,8 +288,16 @@ generate:
   temperature: 0
 ```
 
-Anthropic and OpenAI require a populated environment variable named by `api_key_env`. Ollama
-requires an explicit `base_url` and may omit the key. Then run:
+Google, Anthropic, and OpenAI require a populated environment variable named by `api_key_env`.
+Google's [Gemini structured-output models](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#model-support)
+and [hosted Gemma models](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api) use the
+[Gemini API](https://ai.google.dev/gemini-api/docs/pricing) subject to Google's current quotas and
+data terms. Models named `gemini-*` use native structured output and the full GraphCheck proposal
+contract. Other Google model names retain the conservative Gemma tool path: conformance targets
+completeness/uniqueness, competency expectations target returned columns, and drift targets
+labeled node counts. Gemma publishes a valid partial first batch without a slower correction, so
+`written` may be below `requested`. Ollama requires an explicit `base_url` and may omit the key.
+Then run:
 
 ```console
 graphcheck generate
@@ -249,6 +314,8 @@ thresholds, and cost before removing both applicable markers to activate a check
 ## Reliability and safety
 
 - Neo4j execution is read-only and fails closed unless the planner classifies a statement as read.
+- The connection preflight fails if Neo4j reports a graph-write grant or write-capable built-in
+  role for the audit credential, or if GraphCheck cannot inspect the user's reported privileges.
 - Built-in Cypher keeps labels, relationship types, property names, regexes, thresholds, and values
   in parameters rather than interpolating user data into query text.
 - One broken query or evaluator error is isolated to its check unless fail-fast or the run deadline
@@ -276,16 +343,21 @@ inventory.
 
 ## Configuration reference
 
-`graphcheck.yml` has three required strict fields and an optional `generate` block:
+`graphcheck.yml` has three required strict fields plus optional `concurrency` and `generate`
+settings:
 
 ```yaml
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
+concurrency: 1
 ```
 
 Relative `checks` and `artifacts` paths are resolved from the project root. Suite discovery is
-recursive and includes `.yml` and `.yaml` files.
+recursive and includes `.yml` and `.yaml` files. Every discovered suite is read and validated
+directly on each command before suite-id filtering; GraphCheck does not create a suite-discovery
+cache file. `concurrency` is a positive worker limit; the default is `1`, and
+`graphcheck run --concurrency N` overrides the project value.
 
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 
@@ -309,6 +381,8 @@ uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
 Real-Neo4j integration tests are opt-in with `GRAPHCHECK_NEO4J_INTEGRATION=1`; the testcontainers
 suite covers the connector and engine against supported Neo4j versions. The customer-scale
 performance test is separately opt-in and requires a preloaded graph of at least 10 million nodes.
+See [Performance measurements](docs/performance.md) for the repeatable CLI, allocation, plan, and
+customer-scale baseline commands and JSON record format.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch workflow, definition of done, and decision
 rights.

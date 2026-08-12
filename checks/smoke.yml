@@ -1,0 +1,7 @@
+suite: graphcheck-action-smoke
+defaults: { severity: error, tags: [smoke] }
+competency:
+  - id: smoke-connection-alive
+    question: "Is the Neo4j connection alive and query-able?"
+    query: "RETURN 1 AS ok"
+    expect: { rows: { min: 1 }, columns: [ok] }

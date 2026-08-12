@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -7,15 +8,20 @@ from graphcheck.telemetry.events import Pattern, SafeErrorCode, Template
 from graphcheck.telemetry.policy import (
     CONSENT_VERSION,
     ConsentSource,
+    OsFamily,
     assert_private_payload,
     disable_telemetry,
     enable_telemetry,
+    os_family,
+    os_version,
+    python_minor,
     reset_installation_id,
     resolve_consent,
     safe_error_code,
     safe_exception_type,
     safe_pattern,
     safe_template,
+    version_major_minor,
 )
 
 FIRST_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -108,6 +114,42 @@ def test_custom_exception_with_allowlisted_name_remains_unknown():
 
     assert safe_exception_type(RuntimeError("stdlib")).value == "RuntimeError"
     assert safe_exception_type(custom_runtime_error("custom")).value == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("system", "expected"),
+    [
+        ("Windows", OsFamily.WINDOWS),
+        ("Darwin", OsFamily.MACOS),
+        ("Linux", OsFamily.LINUX),
+        ("FreeBSD", OsFamily.OTHER),
+    ],
+)
+def test_os_family_is_coarse_and_allowlisted(system, expected):
+    assert os_family(system) is expected
+
+
+@pytest.mark.parametrize(
+    ("system", "version", "expected"),
+    [
+        ("Windows", "11", "11"),
+        ("Darwin", "15.4.1", "15.4"),
+        ("Linux", "6.8.0-64-generic", "6.8"),
+        ("FreeBSD", "14.2-RELEASE", "14.2"),
+        ("Linux", "private-custom-kernel", "unknown"),
+    ],
+)
+def test_os_version_excludes_build_and_distribution_details(system, version, expected):
+    assert os_version(system, version) == expected
+
+
+def test_python_version_is_limited_to_major_and_minor():
+    assert python_minor(SimpleNamespace(major=3, minor=13, micro=7)) == "3.13"
+
+
+def test_server_version_parsing_keeps_calver_year_and_month_separate():
+    assert version_major_minor("5.26.28") == (5, 26)
+    assert version_major_minor("2026.06.0") == (2026, 6)
 
 
 def test_privacy_assertion_rejects_content_fields_and_values():

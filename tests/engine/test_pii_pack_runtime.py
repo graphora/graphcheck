@@ -99,11 +99,13 @@ def test_pii_checks_compile_from_public_suite_yaml_as_parameterized_sampled_quer
 
     assert compiled.check.spec.check == check
     assert compiled.sampled is True
-    assert compiled.population_query
+    assert compiled.sampling_preflight is False
+    assert compiled.population_query is None
     assert _parameter_names(compiled.query) == compiled.params.keys()
     assert "sample_size" in compiled.params
     for name in ("sample_hash_a", "sample_hash_b", "sample_hash_c", "sample_hash_d"):
         assert name in compiled.params
+        assert name.replace("sample_hash_", "sample_gate_hash_") in compiled.params
     assert "sample_population" not in compiled.params
     assert "completeness_notice" in compiled.expected
     assert compiled.evidence_kinds == ("node",)
@@ -136,11 +138,36 @@ def test_pii_query_sampling_order_is_seeded_and_deterministic(check):
     assert tuple(first.params[name] for name in hash_names) != tuple(
         changed.params[name] for name in hash_names
     )
-    assert "WITH n, property, raw ORDER BY id(n), property" in first.query
+    assert first.query.startswith("CYPHER 5\n")
+    assert "WITH population, n, property, raw ORDER BY elementId(n), property" in first.query
     assert "_gc_node_properties[_gc_property_index] AS occurrence" in first.query
     assert "+ _gc_property_index) % 2147483647" in first.query
     assert "$sample_hash_a * (_gc_occurrence_key)" in first.query
+    assert "$sample_gate_hash_a * (_gc_occurrence_key)" in first.query
+    assert "WITH population, n, property, raw, _gc_occurrence_key" in first.query
     assert "$sample_population AS population" not in first.query
+
+
+@pytest.mark.parametrize("check", ["pii_name_match", "pii_value_match"])
+def test_label_scoped_pii_uses_a_native_label_and_no_obsolete_label_parameter(check):
+    compiled = _compiled(check, {"label": "Customer`Archive"})
+
+    assert "MATCH (n:`Customer``Archive`)" in compiled.query
+    assert "$label" not in compiled.query
+    assert "label" not in compiled.params
+    assert compiled.params["required_labels"] == ["Customer`Archive"]
+
+
+def test_configured_pii_properties_use_native_access_while_names_remain_values():
+    compiled = _compiled(
+        "pii_value_match",
+        {"properties": ["email address", "tax`id"]},
+    )
+
+    assert "n.`email address`" in compiled.query
+    assert "n.`tax``id`" in compiled.query
+    assert "n[property]" not in compiled.query
+    assert compiled.params["properties"] == ["email address", "tax`id"]
 
 
 def test_unknown_pii_pattern_fails_loudly_at_compilation():
@@ -309,7 +336,6 @@ def test_name_match_samples_nonmatching_properties_without_false_findings():
 def test_engine_runs_pii_sampling_end_to_end_and_emits_estimate_metadata():
     client = Client(
         [
-            RichResult([{"population": 100}], ("population",)),
             RichResult(
                 [
                     _summary(
@@ -348,16 +374,15 @@ conformance:
     assert check.estimate.sample_size == 2
     assert check.estimate.ci is not None
     assert "sample_population" not in check.params
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
 
 
-def test_engine_errors_when_pii_population_changes_after_sampling_preflight():
+def test_engine_uses_the_pii_query_population_without_a_separate_preflight():
     candidates = [
         {"evidence": _pointer(f"n-{index}", "Customer"), "property": "email"} for index in range(5)
     ]
     client = Client(
         [
-            RichResult([{"population": 5}], ("population",)),
             RichResult(
                 [_summary(population=10, candidates=candidates)],
                 ("schema_ok", "population", "sample_size", "candidates"),
@@ -373,15 +398,15 @@ conformance:
 
     results = Engine(client).run_yaml(suite, target=TARGET)
 
-    assert results.checks[0].verdict is Verdict.ERRORED
-    assert results.checks[0].error.code == "engine.invalid_query_result"
-    assert "population disagrees" in results.checks[0].error.message
+    assert results.checks[0].verdict is Verdict.FAIL
+    assert results.checks[0].estimate.population == 10
+    assert results.checks[0].estimate.sample_size == 5
+    assert len(client.calls) == 1
 
 
-def test_missing_pii_label_and_population_timeout_are_errored_not_passed():
+def test_missing_pii_label_and_query_timeout_are_errored_not_passed():
     missing_label_client = Client(
         [
-            RichResult([{"population": 0}], ("population",)),
             RichResult(
                 [
                     _summary(
@@ -416,7 +441,6 @@ conformance:
 def test_broken_pii_query_is_errored_not_passed():
     client = Client(
         [
-            RichResult([{"population": 10}], ("population",)),
             GraphCheckError("neo4j.query_failed", "broken PII query", "fix the query"),
         ]
     )

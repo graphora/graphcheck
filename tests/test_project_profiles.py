@@ -30,6 +30,9 @@ def test_profiles_default_to_local(tmp_path: Path):
     assert name == "local"
     assert profile.uri == "bolt://localhost:7687"
     assert profile.password == "graphora"
+    help_text = (tmp_path / "profiles.yml").read_text(encoding="utf-8")
+    assert "dedicated read-only" in help_text
+    assert "neo4j+s://" in help_text
 
 
 def test_missing_profiles_is_loud(tmp_path: Path):
@@ -128,6 +131,19 @@ def test_project_config_rejects_unknown_keys():
         ProjectConfig(project="x", checks="checks", artifacts=".graphcheck", bogus=True)
 
 
+@pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "2"])
+def test_project_config_rejects_invalid_concurrency(invalid):
+    from graphcheck.project import ProjectConfig
+
+    with pytest.raises(ValidationError, match="concurrency"):
+        ProjectConfig(
+            project="x",
+            checks="checks",
+            artifacts=".graphcheck",
+            concurrency=invalid,
+        )
+
+
 def test_find_project_root_accepts_file_path(tmp_path: Path):
     write_default_project(tmp_path)
     suite = tmp_path / "checks" / "suite.yml"
@@ -136,7 +152,9 @@ def test_find_project_root_accepts_file_path(tmp_path: Path):
     assert find_project_root(suite) == tmp_path
 
 
-def test_find_project_root_missing_is_loud(tmp_path: Path):
+def test_find_project_root_missing_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("graphcheck.project.PROJECT_FILE", f".missing-{tmp_path.name}.yml")
+
     with pytest.raises(GraphCheckError) as caught:
         find_project_root(tmp_path)
 
@@ -153,6 +171,7 @@ def test_load_project_config_reads_yaml(tmp_path: Path):
     assert config.project == "graphcheck"
     assert config.checks == "checks"
     assert config.artifacts == ".graphcheck"
+    assert config.concurrency == 1
 
 
 def test_load_project_config_rejects_invalid_yaml(tmp_path: Path):
@@ -196,3 +215,41 @@ def test_profile_without_password_or_env_is_loud(tmp_path: Path):
         select_profile(load_profiles(tmp_path))
 
     assert caught.value.error.code == "profile.password_missing"
+    assert "password_env" in caught.value.error.fix
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "bolt://localhost:7687",
+        "bolt+s://db.example:7687",
+        "bolt+ssc://db.example:7687",
+        "neo4j://db.example:7687",
+        "neo4j+s://db.example:7687",
+        "neo4j+ssc://db.example:7687",
+    ],
+)
+def test_profile_accepts_supported_bolt_uri_schemes(tmp_path: Path, uri: str):
+    (tmp_path / "profiles.yml").write_text(
+        "default: local\nprofiles:\n  local:\n"
+        f"    uri: {uri}\n    user: neo4j\n    password: pw\n    database: neo4j\n",
+        encoding="utf-8",
+    )
+
+    assert select_profile(load_profiles(tmp_path))[1].uri == uri
+
+
+@pytest.mark.parametrize("uri", ["http://localhost:7474", "localhost:7687", "bolt://"])
+def test_profile_rejects_wrong_or_incomplete_uri_with_fix(tmp_path: Path, uri: str):
+    (tmp_path / "profiles.yml").write_text(
+        "default: local\nprofiles:\n  local:\n"
+        f"    uri: {uri}\n    user: neo4j\n    password: pw\n    database: neo4j\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GraphCheckError) as caught:
+        select_profile(load_profiles(tmp_path))
+
+    assert caught.value.error.code == "profile.uri_invalid"
+    assert "bolt://" in caught.value.error.fix
+    assert "neo4j+s://" in caught.value.error.fix

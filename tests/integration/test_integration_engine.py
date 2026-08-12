@@ -144,9 +144,9 @@ conformance:
 """
         ).checks[0]
         compiled = CypherCompiler().compile(loaded)
-        node_id = client.run_read("MATCH (n:GraphCheckPiiFixture) RETURN id(n) AS node_id")[0][
-            "node_id"
-        ]
+        node_id = client.run_read(
+            "CYPHER 5 MATCH (n:GraphCheckPiiFixture) RETURN id(n) AS node_id"
+        )[0]["node_id"]
         occurrence_base = (node_id % CYPHER_SAMPLE_MODULUS) * _SAMPLE_NODE_MULTIPLIER
 
         def sample_key(property_index, sample_seed):

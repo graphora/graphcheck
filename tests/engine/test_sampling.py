@@ -143,6 +143,15 @@ def test_cypher_cubic_hash_does_not_bias_positions_in_a_dense_id_range():
         assert count / sum(selected.values()) == pytest.approx(0.1, abs=0.02)
 
 
+def test_seeded_hash_gate_is_near_uniform_across_many_seeds():
+    threshold = CYPHER_SAMPLE_MODULUS // 10
+    included = sum(
+        cypher_hash_value(42, cypher_hash_parameters(seed)) < threshold for seed in range(1000)
+    )
+
+    assert 75 <= included <= 125
+
+
 def test_cypher_hash_expression_uses_only_parameterized_safe_horner_products():
     expression = cypher_hash_expression("candidate")
 

@@ -377,6 +377,65 @@
       "title": "RedactionPolicy",
       "type": "string"
     },
+    "ResultsTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "database": {
+          "title": "Database",
+          "type": "string"
+        },
+        "edition": {
+          "title": "Edition",
+          "type": "string"
+        },
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "nodes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nodes"
+        },
+        "relationships": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationships"
+        },
+        "server_version": {
+          "title": "Server Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "database",
+        "server_version",
+        "edition",
+        "fingerprint",
+        "capabilities"
+      ],
+      "title": "ResultsTarget",
+      "type": "object"
+    },
     "Run": {
       "additionalProperties": false,
       "properties": {
@@ -437,7 +496,7 @@
         "target": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RunTarget"
+              "$ref": "#/$defs/ResultsTarget"
             },
             {
               "type": "null"
@@ -470,39 +529,6 @@
       ],
       "title": "RunStatus",
       "type": "string"
-    },
-    "RunTarget": {
-      "additionalProperties": false,
-      "properties": {
-        "capabilities": {
-          "$ref": "#/$defs/Capabilities"
-        },
-        "database": {
-          "title": "Database",
-          "type": "string"
-        },
-        "edition": {
-          "title": "Edition",
-          "type": "string"
-        },
-        "fingerprint": {
-          "title": "Fingerprint",
-          "type": "string"
-        },
-        "server_version": {
-          "title": "Server Version",
-          "type": "string"
-        }
-      },
-      "required": [
-        "database",
-        "server_version",
-        "edition",
-        "fingerprint",
-        "capabilities"
-      ],
-      "title": "RunTarget",
-      "type": "object"
     },
     "Score": {
       "additionalProperties": false,

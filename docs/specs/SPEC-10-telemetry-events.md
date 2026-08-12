@@ -138,6 +138,8 @@ Emitted after each database operation known to the engine. There is intentionall
 | `server_available_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `server_consumed_after_ms` | non-negative integer or null | Neo4j result timing, when available. |
 | `read_guard_outcome` | `allowed`, `rejected`, `error`, or `not_run` | Result of the read-only guard. |
+| `read_guard_ms` | non-negative integer or null | Read-guard time for either a cache hit or miss. |
+| `read_guard_cache_hit` | boolean or null | Whether a successful guard used this client's cache. |
 | `notification_count` | non-negative integer or null | Count only. |
 | `error_code` | safe error code or null | Stable allowlisted code. |
 
@@ -317,6 +319,7 @@ One event emitted at the outermost CLI boundary for every opted-in command invoc
 | `interactive` | boolean | Whether standard input/output were interactive. |
 | `ci` | boolean | Derived from a fixed allowlist of common CI indicator variables; variable values are excluded. |
 | `os_family` | `windows`, `macos`, `linux`, or `other` | Coarse operating-system family. |
+| `os_version` | string | OS major or major/minor only, for example `"11"` or `"6.8"`; `"unknown"` when unavailable. macOS uses the product version, Linux uses the kernel version, and exact builds, distribution details, suffixes, and architecture are excluded. |
 | `python_minor` | string | Major and minor only, for example `"3.12"`. |
 | `graphcheck_version` | string | Released GraphCheck version. |
 | `safe_error_code` | safe error code or null | Stable classification; null on success. |
@@ -392,7 +395,7 @@ The adapter adds:
 
 | Field | Rule |
 | --- | --- |
-| `telemetry_schema_version` | Initially `"1.0"`. |
+| `telemetry_schema_version` | `"1.1"` after adding coarse `os_version`; versioned independently of engine events and consent. |
 | `consent_version` | Version of the consent text accepted by the user. |
 | `graphcheck_version` | Released GraphCheck version. |
 | `distinct_id` | Persisted installation UUID after `telemetry enable`. Under process-only `GRAPHCHECK_TELEMETRY=1` with no stored opt-in, a fresh per-process UUID is generated and never persisted. |
@@ -449,7 +452,9 @@ PostHog project not to retain or derive location data from it.
    ID breaks linkage to earlier events.
 9. Renewed consent is required **only when `consent_version` changes** — that is, when a materially
    expanded data category is introduced. Ordinary upgrades and schema evolution within the existing
-   allowlisted categories keep the stored opt-in and do not silently expand consent.
+   allowlisted categories keep the stored opt-in and do not silently expand consent. Schema `1.1`
+   adds only a major/minor `os_version` within the already disclosed coarse runtime-environment
+   category; exact build, distribution, suffix, and architecture data remain prohibited.
 10. The telemetry control command must not itself emit telemetry for `preview`, `disable`, `status`,
     or `reset-id`. Only `enable` may emit a single `graphcheck_command_completed` — the invocation at
     which consent is first granted.
@@ -748,7 +753,8 @@ are intentionally absent from telemetry.
 13. Correlation tests assert every event of one invocation shares `telemetry_command_id`, and that
     `telemetry_run_id` links `graphcheck_command_completed` to its engine run.
 14. Allowlist tests assert that unknown actions, templates, error codes, exception types, and stages
-    map to `unknown`/`custom`, and that no coarse cardinality bucket appears in any payload.
+    map to `unknown`/`custom`, that OS/Python versions remain coarse, and that no coarse cardinality
+    bucket appears in any payload.
 15. A `graphcheck_profile_completed` test covers complete, partial, and error outcomes — including a
     setup failure before profiling starts — asserts profiler-specific stages and `partial_reason`,
     exercises the per-stage timings, and asserts no profiled graph content leaves the process.

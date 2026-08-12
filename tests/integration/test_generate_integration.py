@@ -39,8 +39,10 @@ class FakeClient:
 
 
 class NoReadConnector:
-    def __getattr__(self, name: str):
-        raise AssertionError(f"generated suite attempted connector access through {name}")
+    def _fail(self, *args, **kwargs):
+        raise AssertionError("generated suite attempted a connector read")
+
+    run_read_result = run_read_result_bounded = run_read = _fail
 
 
 def _project(root: Path, baseline: BaselineProfile) -> None:

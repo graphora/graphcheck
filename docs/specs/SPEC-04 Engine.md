@@ -191,9 +191,16 @@ The default engine configuration is:
 | --- | --- | --- |
 | Internal run budget | `295` seconds | Leaves serialization/reporting margin inside five minutes |
 | Evidence cap | `100` unique pointers | Must be a positive integer |
+| Competency result-row limit | `100,000` rows | Positive safety ceiling for complete assertions |
+| Eager competency evaluation | `false` | Temporary rollback switch for bounded rollout |
+| Check concurrency | `1` worker | Positive integer; CLI overrides project config |
 | Exhaustive sampling limit | `100,000` elements | At or below this population, policy execution is exact |
 | Default sample size | `10,000` elements | Used above the exhaustive limit unless a check overrides it |
 | Sampling seed | `0` | Non-negative integer or non-blank string |
+
+Effective concurrency is `--concurrency`, then `graphcheck.yml concurrency`, then the engine
+default. Non-fail-fast checks use at most that many workers; fail-fast remains sequential. The
+default stays at one because higher scan concurrency is workload/server dependent.
 
 ## Run lifecycle
 
@@ -207,10 +214,10 @@ For each run the engine:
 5. iterates the selected checks in suite/file order;
 6. skips effective `generated:true` checks as `skipped:generated` without querying C2;
 7. compiles the check and resolves any graph-relative competency parameters;
-8. performs the population preflight and deterministic sample decision when the compiler marks the
-   check sampled;
+8. resolves the deterministic sample cap and any compiler-requested population preflight;
 9. resolves the requested C4 baseline before executing drift Cypher;
-10. executes the parameterized query through the read-only executor with the remaining deadline;
+10. executes the measurement query with the remaining deadline and, when its typed aggregate
+    condition requires it, executes bounded evidence in the same read transaction;
 11. evaluates rows/column metadata, maps the boolean evaluation through declared severity, and
     constructs the frozen SPEC-01 check result; and
 12. derives per-suite/run totals, score, status, partial reason, finish time, and exit code.
@@ -241,17 +248,24 @@ sampled
 population_query / population_params / sample_population
 ```
 
-`query` is the executable Cypher retained in `results.json`; it keeps `$parameter` placeholders.
-`params` holds literal values. `expected` is the normalized assertion rendered into SPEC-01.
-Sampling-only fields are null/false for exhaustive non-sampled checks.
+`query` is the executable Cypher retained in `results.json`; data values remain `$parameter`
+placeholders while validated schema identifiers are escaped into Cypher grammar positions.
+`params` holds referenced literal values and separate schema-diagnostic lists. `expected` is the
+normalized assertion rendered into SPEC-01. Sampling-only fields are null/false for exhaustive
+non-sampled checks.
 
 ### Parameter safety
 
-Built-in templates do not interpolate labels, relationship types, property names, regexes, allowed
-values, thresholds, or pinned values. Dynamic schema tokens are compared through expressions such
-as `$label IN labels(n)`, `type(r) = $relationship_type`, and `n[$property]`. The only syntax chosen
-by a conformance callback is relationship direction, selected from C3's closed
-`out | in | any` enum and mapped to fixed query fragments.
+Built-in templates compile validated labels, relationship types, and property names into native
+Cypher tokens so Neo4j's planner can see them. A shared helper rejects blank/control-containing
+identifiers and backtick-escapes each accepted identifier as one grammar token, including embedded
+backticks. Optional labels/types compile to distinct native-token and generic query variants.
+Schema names remain separately parameterized in required-schema lists for missing-schema
+diagnostics.
+
+Regexes, allowed values, thresholds, sample controls, IDs, and pinned values are never interpolated.
+Relationship direction is selected from C3's closed `out | in | any` enum and mapped to fixed query
+fragments. Customer-authored competency Cypher is not rewritten.
 
 Competency Cypher is customer-authored and preserved after surrounding whitespace is removed. The
 compiler lexically identifies `$name` parameters outside quoted strings, backtick identifiers, line
@@ -303,8 +317,11 @@ checks have executable Cypher callbacks; `dangling_rels` is a declared capabilit
 | `pii_name_match` | Sampled property-key occurrences match selected installed personal-data aliases |
 | `pii_value_match` | Sampled string values fully match selected regexes and required Luhn/Verhoeff checksums |
 
-All observable conformance templates return exactly one summary row with a non-negative
-`violation_count`, a population, scalar measurements where applicable, and capped pointer evidence.
+All observable conformance templates return exactly one measurement row with a non-negative
+`violation_count`, a population, and scalar measurements where applicable. Core predicate,
+degree, completeness, and uniqueness plans carry a separate bounded evidence query. It executes
+only when a typed exact aggregate indicates a finding, within the same read transaction and graph
+snapshot as measurement. Passing checks never execute that path.
 `completeness` additionally returns `conforming_count` and a ratio `coverage`. Internally inconsistent
 summary arithmetic is `engine.invalid_query_result`, never a finding or pass.
 
@@ -316,8 +333,7 @@ Directly invoking the compiler callback fails closed with `engine.check_unobserv
 returning a misleading zero violations.
 
 PII checks return a population, sample size, and candidate rows with node pointers. The main query
-recomputes its eligible population in the same Neo4j snapshot as selection; disagreement with the
-preflight is an error rather than stale confidence metadata. Value matching admits only string
+computes its eligible population in the same Neo4j snapshot as selection. Value matching admits only string
 properties through null-safe conversion predicates, so arrays and other supported Neo4j property
 types cannot crash the query. The evaluator groups findings by installed pattern, node labels, and
 property key. It never serializes raw matched values. Empty/malformed samples, missing pointers,
@@ -348,10 +364,11 @@ this fallback because its compiled query can identify the concrete elements miss
 
 ## Read-only execution
 
-`ReadOnlyExecutor` prefers C2's rich `run_read_result(query, params, timeout_s=...)` interface because
-it preserves raw Neo4j nodes, relationships, paths, result columns, and notifications. It falls back
-to SPEC-03 `run_read` for compatible connectors. Missing both APIs produces
-`engine.connector_invalid` for the attempted check.
+`ReadOnlyExecutor` prefers C2's bounded rich result interface for competency queries and the eager
+rich `run_read_result(query, params, timeout_s=...)` interface for other callers. Both preserve raw
+Neo4j nodes, relationships, paths, result columns, and notifications. It falls back to SPEC-03
+`run_read` for compatible connectors. Missing both APIs produces `engine.connector_invalid` for the
+attempted check.
 
 C1 does not attempt to parse or block write keywords. C2 creates every session with
 `neo4j.READ_ACCESS` for routing, then submits `EXPLAIN <query>` and executes the original statement
@@ -364,6 +381,20 @@ Every target probe, token lookup, population preflight, and check query receives
 remaining run budget when the connector method accepts `timeout_s`. Timeout, broken Cypher, auth,
 permission, missing database, and query exceptions retain C2's structured `{code,message,fix}`
 shape.
+
+Competency assertions combine into one incremental consumption policy. `empty:true` fails on the
+first row; `empty:false` passes on the first row when no stricter assertion remains. A row maximum
+or exact count fails on its first excess row, while a row minimum may pass as soon as it is met.
+Uniqueness fails on the first duplicate but requires exhaustion to pass; `unique:false` does the
+inverse. `contains` may pass after every pinned value is seen; `equals` always requires exhaustion.
+Multiple assertions stop only when their conjunction is decisive.
+
+An early decisive result is explicitly incomplete. Its measurements omit exact `rows` and instead
+record `observed_rows_at_least`. Assertions requiring exhaustion must complete within
+`result_row_limit`; exceeding it raises `engine.result_limit_exceeded` and can never pass. Frozen-row
+hashing runs only for requested uniqueness, and regression projection runs only for `contains` or
+`equals`. Evidence pointers are deduplicated while retained storage stays capped throughout
+collection.
 
 ## Verdict evaluation
 
@@ -471,8 +502,9 @@ conformance or competency findings; those remain `engine.evidence_missing`.
 
 Sampling applies only to compiler plans explicitly marked sampled: `hub_outlier`,
 `pii_name_match`, and `pii_value_match`. The plan must agree with the installed manifest declaration.
-Before the main query, the engine executes a population query that must return exactly one
-non-negative integer `population`.
+Plans may execute a population preflight or compute the exact population inside the sampled query.
+Hub and PII plans use the latter so population, selection, and estimate metadata share one snapshot
+and avoid a duplicate runner round trip.
 
 The per-check seed is SHA-256 over domain-separated, length-prefixed components:
 
@@ -489,13 +521,14 @@ the exhaustive limit or configured sample size; otherwise it selects the configu
 A check-level sample size may only reduce that decision. The effective sample is capped by both the
 global policy decision and population; a check can never raise the global safety ceiling.
 
-The sampled core and PII queries order candidates by a stable seed-derived cubic hash over a prime
-integer field. The four SHA-derived coefficients form a four-wise-independent ranking family;
+The sampled core and PII queries apply a second seed-derived hash gate before ordering a reduced
+candidate set by a stable cubic hash over a prime integer field. The four SHA-derived coefficients
+form a four-wise-independent ranking family;
 unlike an affine rotation, it does not systematically over-select the edges of dense ID ranges.
 PII first filters eligible properties, sorts the keys on each node, assigns a stable
-property-occurrence index, and combines that index with the node id before hashing. Properties on
-the same node therefore receive distinct, seed-dependent positions instead of sharing one
-node-level key. The sampling module also exposes a deterministic uniform Floyd selector using
+property-occurrence index, and combines that index with the node id before gating and ranking.
+Properties on the same node therefore receive distinct, defensible selection probabilities instead
+of sharing one node-level gate. The sampling module also exposes a deterministic uniform Floyd selector using
 `O(sample_size)` memory for callers with a canonical indexed population; the database-backed plans
 do not pretend to consume unused Floyd indices.
 
@@ -536,7 +569,7 @@ matching C4's timestamp-sortable filename convention. Invalid referenced JSON is
 | Duplicate suite id or target-probe failure | No checks execute | Run status `failed`, exit 3 |
 
 The engine's monotonic deadline includes target probing, token resolution, sampling preflight,
-baseline work, and query execution. When the deadline is exhausted, the active check is errored if
+baseline work, queued worker time, measurement, and conditional evidence. When the deadline is exhausted, the active check is errored if
 it was attempted and every later selected check is `skipped:not_run`. Checks remaining after the
 budget are never silently omitted.
 
@@ -577,6 +610,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.baseline_missing` / `engine.baseline_invalid` | Required baseline measurement is absent or invalid |
 | `engine.baseline_partial_missing` | Partial baseline did not collect the requested measurement |
 | `engine.connector_invalid` | C2-compatible read method is absent |
+| `engine.result_limit_exceeded` | A completeness-required result exceeded its row safety ceiling |
 | `engine.schema_reference_missing` | Label/relationship type/property does not exist on the target |
 | `engine.invalid_query_result` | Query returned a malformed or inconsistent evaluator shape |
 | `engine.evidence_missing` | Row-level failed assertion has no real graph pointer |
@@ -620,9 +654,11 @@ through a real C2 session on supported server versions.
 The opt-in performance test requires a preloaded target of at least 10 million nodes through
 `GRAPHCHECK_PERFORMANCE_URI` and `GRAPHCHECK_PERFORMANCE_PASSWORD`. It runs 30 representative
 competency, drift, core conformance, hub sampling, and PII sampling checks; it requires no errors or
-skips and a complete result in under five minutes. Findings are allowed because the target is a
-customer-scale graph, not a synthetic all-pass fixture. The default 295-second engine budget
-reserves the remaining wall time for artifact serialization/reporting.
+skips and a complete result. It records overall, per-check-family, and per-query timings with
+concurrency and environment metadata, but does not enforce a cross-machine timing threshold.
+Findings are allowed because the target is a customer-scale graph, not a synthetic all-pass fixture.
+The default 295-second engine budget reserves the remaining wall time for artifact
+serialization/reporting.
 
 ## Deferred v0 integration
 
@@ -642,6 +678,7 @@ both preflight paths without a CLI-maintained requirement table.
   the run command.
 - `tests/engine/` and `tests/property/` — unit and property-based coverage.
 - `tests/integration/test_integration_engine.py` — opt-in real-Neo4j engine coverage.
-- `tests/performance/test_engine_budget.py` — opt-in 10M-node/30-check budget contract.
+- `tests/performance/` — repeatable cold CLI, allocation, plan-support, and opt-in
+  10M-node/30-check measurement baselines.
 - `tests/test_run_cli.py` — selection, artifacts, summary, connection/configuration, and exit-code
   coverage.

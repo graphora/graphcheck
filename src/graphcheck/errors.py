@@ -40,14 +40,30 @@ def profile_not_found(name: str) -> GraphCheckError:
 def profile_password_missing(profile: str, env_var: str | None = None) -> GraphCheckError:
     if env_var is None:
         message = f"Profile {profile!r} has no resolved password."
-        fix = "Add password or password_env to profiles.yml."
+        fix = (
+            "Add `password: <value>` to the profile, or add `password_env: NEO4J_PASSWORD` "
+            "and set that environment variable, then run `graphcheck debug` again."
+        )
     else:
         message = (
             f"Profile {profile!r} references ${env_var}, but that environment variable is not set."
         )
-        fix = f"Set {env_var}, or add a password value to profiles.yml."
+        fix = (
+            f"Set {env_var} in this shell, or add `password: <value>` to the profile as a "
+            "fallback, then run `graphcheck debug` again."
+        )
     return GraphCheckError(
         "profile.password_missing",
         message,
         fix,
+    )
+
+
+def profile_uri_invalid(uri: str) -> GraphCheckError:
+    scheme = uri.partition(":")[0] or "missing"
+    return GraphCheckError(
+        "profile.uri_invalid",
+        f"The selected profile uses unsupported or incomplete Neo4j URI scheme {scheme!r}.",
+        "Set `uri` to a complete Bolt URI using `bolt://` for a direct local connection or "
+        "`neo4j+s://` for a CA-signed TLS/routing endpoint, then run `graphcheck debug` again.",
     )

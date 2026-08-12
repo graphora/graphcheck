@@ -1,0 +1,33 @@
+name: GraphCheck
+
+on:
+  pull_request:
+
+jobs:
+  graphcheck:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/${{ secrets.NEO4J_PASSWORD }}
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "wget -O /dev/null -q http://localhost:7474 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GraphCheck from source
+        run: pip install .
+      - uses: ./.github/actions/graphcheck-action
+        with:
+          profile: ci
+          uri: bolt://localhost:7687
+          user: neo4j
+          version: ''        # skip PyPI install; use the source build above
+          suite: graphcheck-action-smoke
+        env:
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}

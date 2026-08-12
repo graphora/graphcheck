@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
+from typing import Literal
 
 from graphcheck.contracts.check import (
     CompetencyCheck,
@@ -11,8 +12,18 @@ from graphcheck.contracts.check import (
     LoadedCheck,
 )
 from graphcheck.contracts.results import Pattern
+from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
+
+
+@dataclass(frozen=True)
+class EvidenceCondition:
+    """Typed aggregate condition for conditional evidence execution."""
+
+    field: str
+    operator: Literal["gt", "lt"]
+    value: int | float
 
 
 @dataclass(frozen=True)
@@ -26,11 +37,15 @@ class CompiledCheck:
     name: str
     evidence_cap: int
     sampled: bool = False
+    sampling_preflight: bool = True
     population_query: str | None = None
     population_params: dict[str, object] | None = None
     sample_population: int | None = None
     evidence_kinds: tuple[str, ...] = ()
     evidence_id_fields: tuple[str, ...] = ()
+    evidence_query: str | None = None
+    evidence_params: dict[str, object] | None = None
+    evidence_condition: EvidenceCondition | None = None
 
 
 @dataclass(frozen=True)
@@ -42,8 +57,12 @@ class ConformancePlan:
     expected: dict[str, object]
     name: str
     sampled: bool = False
+    sampling_preflight: bool = True
     population_query: str | None = None
     population_params: dict[str, object] | None = None
+    evidence_query: str | None = None
+    evidence_params: dict[str, object] | None = None
+    evidence_condition: EvidenceCondition | None = None
 
 
 ConformanceCompiler = Callable[[dict[str, object], int, int], ConformancePlan]
@@ -87,13 +106,11 @@ all(name IN $required_labels WHERE name IN _gc_labels)
 
 
 def _node_pointer(variable: str) -> str:
-    # id() works on every supported Neo4j 4.4/5.x server. It is deprecated on 5.x,
-    # but elementId() is unavailable on 4.4, so v0 serializes the stable string form.
-    return f"{{kind: 'node', id: toString(id({variable})), labels: labels({variable})}}"
+    return f"{{kind: 'node', id: elementId({variable}), labels: labels({variable})}}"
 
 
 def _rel_pointer(variable: str) -> str:
-    return f"{{kind: 'rel', id: toString(id({variable})), type: type({variable})}}"
+    return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
 
 
 @register_conformance_compiler("completeness")
@@ -117,6 +134,8 @@ def _compile_completeness(
         )
     label = label_value.strip()
     property_name = property_value.strip()
+    node = node_pattern("n", label)
+    property_ref = property_access("n", property_name)
     threshold = float(config.get("threshold", 1.0))
     if not 0.0 <= threshold <= 1.0:
         raise GraphCheckError(
@@ -129,19 +148,12 @@ def _compile_completeness(
         f"""
         {_SCHEMA_CATALOG}
         CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n)
+          MATCH {node}
           RETURN count(n) AS population,
-                 sum(CASE WHEN n[$property] IS NOT NULL THEN 1 ELSE 0 END)
+                 sum(CASE WHEN {property_ref} IS NOT NULL THEN 1 ELSE 0 END)
                    AS conforming_count,
-                 sum(CASE WHEN n[$property] IS NULL THEN 1 ELSE 0 END)
+                 sum(CASE WHEN {property_ref} IS NULL THEN 1 ELSE 0 END)
                    AS violation_count
-        }}
-        CALL {{
-          MATCH (n)
-          WHERE $label IN labels(n) AND n[$property] IS NULL
-          WITH n ORDER BY id(n) LIMIT $evidence_cap
-          RETURN collect({_node_pointer("n")}) AS evidence
         }}
         RETURN {_SCHEMA_PROJECTION},
                population,
@@ -149,20 +161,29 @@ def _compile_completeness(
                violation_count,
                CASE WHEN population = 0 THEN 1.0
                     ELSE toFloat(conforming_count) / population END AS coverage,
-               evidence
+               [] AS evidence
+        """
+    ).strip()
+    evidence_query = dedent(
+        f"""
+        MATCH {node}
+        WHERE {property_ref} IS NULL
+        WITH n ORDER BY elementId(n) LIMIT $evidence_cap
+        RETURN collect({_node_pointer("n")}) AS evidence
         """
     ).strip()
     return ConformancePlan(
         query=query,
         params={
-            "label": label,
-            "property": property_name,
             "evidence_cap": evidence_cap,
             "required_labels": [label],
             "required_relationship_types": [],
         },
         expected={"threshold": threshold},
         name=f"{label}.{property_name} is present",
+        evidence_query=evidence_query,
+        evidence_params={"evidence_cap": evidence_cap},
+        evidence_condition=EvidenceCondition("coverage", "lt", threshold),
     )
 
 
@@ -252,20 +273,30 @@ class CypherCompiler:
                 f"but template {definition.template!r} compiled sampled={plan.sampled!r}.",
                 "Make the pack YAML sampling declaration match its registered compiler.",
             )
+        params = _query_params(plan.query, plan.params)
+        evidence_params = (
+            _query_params(plan.evidence_query, plan.evidence_params or plan.params)
+            if plan.evidence_query is not None
+            else None
+        )
         return CompiledCheck(
             check=check,
             query=plan.query,
-            params=dict(plan.params),
+            params=params,
             expected=dict(plan.expected),
             name=plan.name,
             evidence_cap=self.evidence_cap,
             sampled=plan.sampled,
+            sampling_preflight=plan.sampling_preflight,
             population_query=plan.population_query,
             population_params=(
                 dict(plan.population_params) if plan.population_params is not None else None
             ),
             evidence_kinds=definition.evidence_elements,
             evidence_id_fields=definition.evidence_id_fields,
+            evidence_query=plan.evidence_query,
+            evidence_params=evidence_params,
+            evidence_condition=plan.evidence_condition,
         )
 
     def missing_capabilities(self, check: LoadedCheck, target: object) -> tuple[str, ...]:
@@ -351,21 +382,18 @@ class CypherCompiler:
         if label is not None and (not isinstance(label, str) or not label.strip()):
             raise _bad_target(spec.metric, "target.label must be a non-blank string")
         required_labels = [label] if label is not None else []
-        predicate = "WHERE $label IN labels(n)" if label is not None else ""
+        match = node_pattern("n", label)
         query = dedent(
             f"""
             {_SCHEMA_CATALOG}
             CALL {{
-              MATCH (n)
-              {predicate}
+              MATCH {match}
               RETURN count(n) AS current
             }}
             RETURN {_SCHEMA_PROJECTION}, current, current AS population, [] AS evidence
             """
         ).strip()
         return query, {
-            **({"label": label} if label is not None else {}),
-            "evidence_cap": self.evidence_cap,
             "required_labels": required_labels,
             "required_relationship_types": [],
         }
@@ -378,21 +406,18 @@ class CypherCompiler:
         if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
             raise _bad_target(spec.metric, "target.type must be a non-blank string")
         required_types = [rel_type] if rel_type is not None else []
-        predicate = "WHERE type(r) = $relationship_type" if rel_type is not None else ""
+        relationship = relationship_pattern("r", rel_type)
         query = dedent(
             f"""
             {_SCHEMA_CATALOG}
             CALL {{
-              MATCH ()-[r]->()
-              {predicate}
+              MATCH ()-{relationship}->()
               RETURN count(r) AS current
             }}
             RETURN {_SCHEMA_PROJECTION}, current, current AS population, [] AS evidence
             """
         ).strip()
         return query, {
-            **({"relationship_type": rel_type} if rel_type is not None else {}),
-            "evidence_cap": self.evidence_cap,
             "required_labels": [],
             "required_relationship_types": required_types,
         }
@@ -411,24 +436,18 @@ class CypherCompiler:
         if label is not None:
             if not isinstance(label, str) or not label.strip():
                 raise _bad_target(spec.metric, "target.label must be a non-blank string")
-            match = "MATCH (element)\n              WHERE $label IN labels(element)"
-            missing = (
-                "MATCH (element)\n"
-                "              WHERE $label IN labels(element) "
-                "AND element[$property] IS NULL"
-            )
+            match = f"MATCH {node_pattern('element', label)}"
+            property_ref = property_access("element", property_name)
+            missing = f"{match}\n              WHERE {property_ref} IS NULL"
             pointer = _node_pointer("element")
             required_labels = [label]
             required_types: list[object] = []
         else:
             if not isinstance(rel_type, str) or not rel_type.strip():
                 raise _bad_target(spec.metric, "target.type must be a non-blank string")
-            match = "MATCH ()-[element]->()\n              WHERE type(element) = $relationship_type"
-            missing = (
-                "MATCH ()-[element]->()\n"
-                "              WHERE type(element) = $relationship_type "
-                "AND element[$property] IS NULL"
-            )
+            match = f"MATCH ()-{relationship_pattern('element', rel_type)}->()"
+            property_ref = property_access("element", property_name)
+            missing = f"{match}\n              WHERE {property_ref} IS NULL"
             pointer = _rel_pointer("element")
             required_labels = []
             required_types = [rel_type]
@@ -438,11 +457,11 @@ class CypherCompiler:
             CALL {{
               {match}
               RETURN count(element) AS population,
-                     count(element[$property]) AS present
+                     count({property_ref}) AS present
             }}
             CALL {{
               {missing}
-              WITH element ORDER BY id(element) LIMIT $evidence_cap
+              WITH element ORDER BY elementId(element) LIMIT $evidence_cap
               RETURN collect({pointer}) AS evidence
             }}
             RETURN {_SCHEMA_PROJECTION}, population, present,
@@ -452,9 +471,6 @@ class CypherCompiler:
             """
         ).strip()
         return query, {
-            "label": label,
-            "relationship_type": rel_type,
-            "property": property_name,
             "evidence_cap": self.evidence_cap,
             "required_labels": required_labels,
             "required_relationship_types": required_types,
@@ -509,6 +525,19 @@ def _parameter_names(query: str) -> set[str]:
                 continue
         index += 1
     return names
+
+
+def _query_params(query: str, params: dict[str, object]) -> dict[str, object]:
+    names = _parameter_names(query)
+    missing = sorted(names - params.keys())
+    if missing:
+        rendered = ", ".join(f"${name}" for name in missing)
+        raise GraphCheckError(
+            "engine.parameter_missing",
+            f"Compiled query has no value for {rendered}.",
+            "Fix the compiler so every Cypher parameter has a value.",
+        )
+    return {name: params[name] for name in params if name in names}
 
 
 def _invalid_loaded_check(check: LoadedCheck, expected: str) -> GraphCheckError:

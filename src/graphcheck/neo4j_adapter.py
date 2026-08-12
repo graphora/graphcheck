@@ -3,17 +3,52 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
-from collections.abc import Mapping
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 import neo4j
 from neo4j import GraphDatabase
 
-from graphcheck.connection_profiles import ConnectionProfile
+from graphcheck import __version__
+from graphcheck.connection_profiles import ConnectionProfile, validate_profile_uri
 from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
+
+READ_GUARD_CACHE_CAPACITY = 256
+WRITE_CAPABLE_BUILTIN_ROLES = frozenset({"ADMIN", "ARCHITECT", "EDITOR", "PUBLISHER"})
+READ_ONLY_GRAPH_PRIVILEGE_ACTIONS = frozenset({"MATCH", "READ", "TRAVERSE"})
+
+
+def _privilege_field(row: Mapping[str, object], name: str) -> str:
+    return str(row.get(name, "")).replace("_", " ").upper()
+
+
+def _is_allowed_read_only_privilege(row: Mapping[str, object]) -> bool:
+    action = _privilege_field(row, "action")
+    resource = _privilege_field(row, "resource")
+    segment = _privilege_field(row, "segment")
+    if action == "ACCESS":
+        return resource == "DATABASE" and segment == "DATABASE"
+    if action in READ_ONLY_GRAPH_PRIVILEGE_ACTIONS:
+        return resource in {"ALL PROPERTIES", "GRAPH", "PROPERTY"}
+    if action == "LOAD":
+        return segment == "ALL DATA"
+    return (
+        action == "EXECUTE"
+        and resource == "DATABASE"
+        and segment.startswith(("FUNCTION(", "PROCEDURE("))
+    )
+
+
+def _privilege_description(row: Mapping[str, object]) -> str:
+    action = _privilege_field(row, "action") or "UNKNOWN"
+    segment = _privilege_field(row, "segment")
+    return f"{action} {segment}".strip()
 
 
 @dataclass(frozen=True)
@@ -27,6 +62,22 @@ class Visibility:
     can_connect: bool
     can_read: bool
     can_show_procedures: bool
+
+
+@dataclass(frozen=True)
+class ProbeMetrics:
+    round_trips: int
+    elapsed_ms: int
+    cache_hit: bool
+    request_durations_ms: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class SupportVersions:
+    graphcheck: str
+    neo4j_driver: str
+    neo4j_server: str
+    cypher: str
 
 
 @dataclass(frozen=True)
@@ -54,9 +105,11 @@ class DebugTrace:
     visibility: Visibility
     counts: Counts
     blocked_checks: tuple[BlockedCheck, ...] = ()
+    probe_metrics: ProbeMetrics | None = None
+    versions: SupportVersions | None = None
 
     def as_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "ok": True,
             "profile": self.profile,
             "target": self.target.model_dump(),
@@ -68,6 +121,20 @@ class DebugTrace:
             "counts": {"nodes": self.counts.nodes, "relationships": self.counts.relationships},
             "blocked_checks": [blocked.as_json() for blocked in self.blocked_checks],
         }
+        if self.probe_metrics is not None:
+            payload["probe"] = {
+                "round_trips": self.probe_metrics.round_trips,
+                "elapsed_ms": self.probe_metrics.elapsed_ms,
+                "cache_hit": self.probe_metrics.cache_hit,
+            }
+        if self.versions is not None:
+            payload["versions"] = {
+                "graphcheck": self.versions.graphcheck,
+                "neo4j_driver": self.versions.neo4j_driver,
+                "neo4j_server": self.versions.neo4j_server,
+                "cypher": self.versions.cypher,
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -80,21 +147,228 @@ class QueryResult:
     server_available_after_ms: int | None = None
     server_consumed_after_ms: int | None = None
     read_guard_ms: int | None = None
+    read_guard_cache_hit: bool | None = None
+    complete: bool = True
+    observed_rows: int = 0
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
+class ResultPolicy:
+    """Bound retained rows while making incomplete consumption explicit."""
+
+    max_rows: int | None = None
+    require_complete: bool = False
+
+    def __post_init__(self) -> None:
+        if self.max_rows is not None and (
+            isinstance(self.max_rows, bool)
+            or not isinstance(self.max_rows, int)
+            or self.max_rows < 1
+        ):
+            raise ValueError("max_rows must be a positive integer or None")
+
+
+@dataclass(frozen=True)
+class ReadGuardCacheInfo:
+    """Query-free, per-client read-classification cache metrics."""
+
+    max_size: int
+    size: int
+    in_flight: int
+    hits: int
+    misses: int
+
+
+class _ReadClassificationCache:
+    def __init__(self, max_size: int) -> None:
+        self._max_size = max_size
+        self._entries: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._inflight: dict[tuple[str, str], threading.Event] = {}
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+        self._closed = False
+
+    def ensure_read(
+        self,
+        session: object,
+        query: str,
+        params: dict[str, object],
+        *,
+        database: str,
+        deadline: float | None,
+        attach_timeout: bool,
+    ) -> bool:
+        key = (database, query)
+        while True:
+            with self._lock:
+                if key in self._entries:
+                    self._entries.move_to_end(key)
+                    self._hits += 1
+                    return True
+                if self._closed:
+                    pending, owner = None, True
+                    self._misses += 1
+                else:
+                    pending = self._inflight.get(key)
+                    owner = pending is None
+                    if owner:
+                        pending = threading.Event()
+                        self._inflight[key] = pending
+                        self._misses += 1
+            if owner:
+                break
+            assert pending is not None
+            pending.wait(_remaining_timeout(deadline))
+
+        try:
+            _assert_server_classified_read(
+                session,
+                query,
+                params,
+                timeout_s=_remaining_timeout(deadline),
+                attach_timeout=attach_timeout,
+            )
+        except BaseException:
+            if pending is not None:
+                with self._lock:
+                    if self._inflight.get(key) is pending:
+                        self._inflight.pop(key)
+                    pending.set()
+            raise
+        if pending is not None:
+            with self._lock:
+                if not self._closed and self._inflight.get(key) is pending:
+                    self._entries[key] = None
+                    self._entries.move_to_end(key)
+                    if len(self._entries) > self._max_size:
+                        self._entries.popitem(last=False)
+                    self._inflight.pop(key)
+                pending.set()
+        return False
+
+    def info(self) -> ReadGuardCacheInfo:
+        with self._lock:
+            return ReadGuardCacheInfo(
+                max_size=self._max_size,
+                size=len(self._entries),
+                in_flight=len(self._inflight),
+                hits=self._hits,
+                misses=self._misses,
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._entries.clear()
+            pending = tuple(self._inflight.values())
+            self._inflight.clear()
+            self._hits = self._misses = 0
+            for event in pending:
+                event.set()
+
+
+class _EarlyResultStop(Exception):
+    def __init__(self, result: QueryResult) -> None:
+        self.result = result
 
 
 class Neo4jClient:
-    def __init__(self, profile: ConnectionProfile) -> None:
+    def __init__(
+        self,
+        profile: ConnectionProfile,
+        *,
+        max_concurrency: int = 1,
+        read_guard_cache_capacity: int = READ_GUARD_CACHE_CAPACITY,
+    ) -> None:
+        validate_profile_uri(profile.uri)
+        if (
+            isinstance(max_concurrency, bool)
+            or not isinstance(max_concurrency, int)
+            or max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
+        if (
+            isinstance(read_guard_cache_capacity, bool)
+            or not isinstance(read_guard_cache_capacity, int)
+            or read_guard_cache_capacity < 1
+        ):
+            raise ValueError("read_guard_cache_capacity must be a positive integer")
         self._profile = profile
-        self._driver = GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password))
+        self._read_classifications = _ReadClassificationCache(read_guard_cache_capacity)
+        self._probe_lock = threading.Lock()
+        self._probe_inflight: threading.Event | None = None
+        self._probe_result: tuple[RunTarget, Visibility, Counts] | None = None
+        self._probe_request_durations_ms: list[int] | None = None
+        self._last_probe_metrics: ProbeMetrics | None = None
+        self._probe_cypher_version: str | None = None
+        self._probe_edition: str | None = None
+        try:
+            self._driver = GraphDatabase.driver(
+                profile.uri,
+                auth=(profile.user, profile.password),
+                max_connection_pool_size=max_concurrency,
+                connection_timeout=10.0,
+                connection_acquisition_timeout=10.0,
+                fetch_size=1000,
+                max_transaction_retry_time=0.0,
+            )
+        except Exception as exc:
+            raise map_neo4j_error(exc, profile) from exc
 
     def close(self) -> None:
+        self._read_classifications.close()
+        with self._probe_lock:
+            self._probe_result = None
+            self._probe_cypher_version = None
+            self._probe_edition = None
+            if self._probe_inflight is not None:
+                self._probe_inflight.set()
+                self._probe_inflight = None
         self._driver.close()
+
+    @property
+    def read_guard_cache_info(self) -> ReadGuardCacheInfo:
+        return self._read_classifications.info()
+
+    @property
+    def last_probe_metrics(self) -> ProbeMetrics | None:
+        return self._last_probe_metrics
+
+    @property
+    def probe_cypher_version(self) -> str | None:
+        return self._probe_cypher_version
+
+    @contextmanager
+    def read_transaction(self, *, timeout_s: float | None = None):
+        """Yield a planner-verified reader whose queries share one read snapshot."""
+
+        deadline = _timeout_deadline(timeout_s)
+        try:
+            with (
+                self._driver.session(
+                    database=self._profile.database,
+                    default_access_mode=neo4j.READ_ACCESS,
+                ) as session,
+                session.begin_transaction(timeout=_remaining_timeout(deadline)) as transaction,
+            ):
+                yield _TransactionReader(
+                    transaction,
+                    self._profile.database,
+                    deadline,
+                    self._read_classifications,
+                )
+        except GraphCheckError:
+            raise
+        except Exception as exc:
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def verify(self) -> None:
         try:
             self._driver.verify_connectivity()
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def run_read(
         self,
@@ -131,6 +405,26 @@ class Neo4jClient:
 
         return self._run_read_result(query, params, timeout_s=timeout_s, verify_read=True)
 
+    def run_read_result_bounded(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        policy: ResultPolicy,
+        timeout_s: float | None = None,
+        stop_when: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> QueryResult:
+        """Run a planner-verified read without retaining more rows than ``policy`` allows."""
+
+        return self._run_read_result(
+            query,
+            params,
+            timeout_s=timeout_s,
+            verify_read=True,
+            policy=policy,
+            stop_when=stop_when,
+        )
+
     def _run_read_result(
         self,
         query: str,
@@ -138,6 +432,8 @@ class Neo4jClient:
         *,
         timeout_s: float | None,
         verify_read: bool,
+        policy: ResultPolicy | None = None,
+        stop_when: Callable[[dict[str, Any]], bool] | None = None,
     ) -> QueryResult:
         try:
             deadline = _timeout_deadline(timeout_s)
@@ -146,13 +442,16 @@ class Neo4jClient:
             ) as session:
                 values = params or {}
                 read_guard_ms: int | None = None
+                read_guard_cache_hit: bool | None = None
                 if verify_read:
                     guard_started = time.monotonic()
-                    _assert_server_classified_read(
+                    read_guard_cache_hit = _ensure_server_classified_read(
                         session,
                         query,
                         values,
-                        timeout_s=_remaining_timeout(deadline),
+                        cache=self._read_classifications,
+                        database=self._profile.database,
+                        deadline=deadline,
                     )
                     read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
                 driver_query = (
@@ -162,13 +461,47 @@ class Neo4jClient:
                 )
                 result = session.run(driver_query, values)
                 columns = _result_columns(result)
-                rows = [_raw_record(record) for record in result]
+                rows: list[dict[str, Any]] = []
+                observed_rows = 0
+                complete = True
+                for record in result:
+                    observed_rows += 1
+                    row = _raw_record(record)
+                    limit_reached = (
+                        policy is not None
+                        and policy.max_rows is not None
+                        and len(rows) >= policy.max_rows
+                    )
+                    if limit_reached:
+                        complete = False
+                        _cancel_result(result)
+                        if policy.require_complete:
+                            raise _result_limit_exceeded(policy.max_rows)
+                        break
+                    rows.append(row)
+                    if stop_when is not None and stop_when(row):
+                        complete = False
+                        _cancel_result(result)
+                        break
                 if not columns and rows:
                     # Lightweight test doubles and third-party wrappers sometimes expose only an
                     # iterator. Real Neo4j Results always provide keys().
                     columns = tuple(rows[0])
+                if not complete:
+                    raise _EarlyResultStop(
+                        QueryResult(
+                            rows=rows,
+                            columns=columns,
+                            notifications=(),
+                            read_guard_ms=read_guard_ms,
+                            read_guard_cache_hit=read_guard_cache_hit,
+                            complete=False,
+                            observed_rows=observed_rows,
+                            limit=policy.max_rows if policy is not None else None,
+                        )
+                    )
                 consume = getattr(result, "consume", None)
-                summary = consume() if callable(consume) else None
+                summary = consume() if complete and callable(consume) else None
                 notifications = _summary_notifications(summary)
                 _raise_for_missing_schema_reference(notifications)
                 return QueryResult(
@@ -178,11 +511,17 @@ class Neo4jClient:
                     server_available_after_ms=_summary_timing(summary, "result_available_after"),
                     server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
                     read_guard_ms=read_guard_ms,
+                    read_guard_cache_hit=read_guard_cache_hit,
+                    complete=complete,
+                    observed_rows=observed_rows,
+                    limit=policy.max_rows if policy is not None else None,
                 )
+        except _EarlyResultStop as stopped:
+            return stopped.result
         except GraphCheckError:
             raise
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def explain_read(
         self,
@@ -195,20 +534,75 @@ class Neo4jClient:
             with self._driver.session(
                 database=self._profile.database, default_access_mode=neo4j.READ_ACCESS
             ) as session:
-                text = f"EXPLAIN {query}"
+                text = _explain_query(query)
                 driver_query = (
                     neo4j.Query(text, timeout=timeout_s) if timeout_s is not None else text
                 )
                 result = session.run(driver_query, params or {})
                 return result.consume().plan
         except Exception as exc:
-            raise map_neo4j_error(exc) from exc
+            raise map_neo4j_error(exc, self._profile) from exc
 
     def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, Visibility, Counts]:
         deadline = _timeout_deadline(timeout_s)
+        probe_lock = self._ensure_probe_state()
+        while True:
+            with probe_lock:
+                if self._probe_result is not None:
+                    self._last_probe_metrics = ProbeMetrics(0, 0, True)
+                    return self._probe_result
+                owner = self._probe_inflight is None
+                if owner:
+                    self._probe_inflight = threading.Event()
+                pending = self._probe_inflight
+            if owner:
+                break
+            assert pending is not None
+            if not pending.wait(_remaining_timeout(deadline)):
+                _remaining_timeout(deadline)
+
+        started = time.monotonic()
+        self._probe_request_durations_ms = []
+        try:
+            result = self._probe_live(deadline)
+            metrics = ProbeMetrics(
+                round_trips=len(self._probe_request_durations_ms),
+                elapsed_ms=max(0, round((time.monotonic() - started) * 1000)),
+                cache_hit=False,
+                request_durations_ms=tuple(self._probe_request_durations_ms),
+            )
+            with probe_lock:
+                self._probe_result = result
+                self._last_probe_metrics = metrics
+            return result
+        finally:
+            self._probe_request_durations_ms = None
+            with probe_lock:
+                pending = self._probe_inflight
+                self._probe_inflight = None
+                if pending is not None:
+                    pending.set()
+
+    def _ensure_probe_state(self) -> threading.Lock:
+        if not hasattr(self, "_probe_lock"):
+            self._probe_lock = threading.Lock()
+            self._probe_inflight = None
+            self._probe_result = None
+            self._probe_request_durations_ms = None
+            self._last_probe_metrics = None
+            self._probe_cypher_version = None
+            self._probe_edition = None
+        return self._probe_lock
+
+    def _probe_live(self, deadline: float | None) -> tuple[RunTarget, Visibility, Counts]:
         # The first bounded metadata query establishes connectivity. Calling
         # verify_connectivity() here would add an unbounded Bolt round trip outside this deadline.
         version, edition = _call_with_timeout(self._server_info, deadline)
+        _ensure_supported_server(version)
+        self._probe_edition = edition
+        self._probe_cypher_version = _call_with_timeout(
+            lambda **kwargs: self._cypher_version(version, **kwargs), deadline
+        )
         can_show_procedures = True
         apoc = False
         try:
@@ -259,6 +653,63 @@ class Neo4jClient:
         _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts
 
+    def verify_read_only_credential(self, *, timeout_s: float | None = None) -> None:
+        """Enforce Enterprise RBAC; Community relies on the per-query planner guard."""
+
+        edition = self._probe_edition
+        if edition is None:
+            _, edition = self._server_info(timeout_s=timeout_s)
+        if edition == "community":
+            return
+
+        try:
+            rows = _run_read_with_timeout(
+                self,
+                "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment, role "
+                "RETURN access, action, graph, resource, segment, role",
+                timeout_s,
+            )
+        except GraphCheckError as exc:
+            raise GraphCheckError(
+                "neo4j.credential_read_only_unverified",
+                "Neo4j could not return the configured user's reported privileges.",
+                "Use Neo4j Enterprise with a native user that can inspect its own privileges and "
+                "has only ACCESS and MATCH, then run `graphcheck debug` again.",
+            ) from exc
+        if not rows:
+            raise GraphCheckError(
+                "neo4j.credential_read_only_unverified",
+                "Neo4j did not return the configured user's reported privileges.",
+                "Allow the user to inspect its own privileges, or use a native Neo4j user with "
+                "only ACCESS and MATCH, then run `graphcheck debug` again.",
+            )
+        disallowed_grants = sorted(
+            {
+                _privilege_description(row)
+                for row in rows
+                if str(row.get("access", "")).upper() == "GRANTED"
+                and not _is_allowed_read_only_privilege(row)
+            }
+        )
+        write_roles = sorted(
+            {
+                str(row.get("role", "")).upper()
+                for row in rows
+                if str(row.get("role", "")).upper() in WRITE_CAPABLE_BUILTIN_ROLES
+            }
+        )
+        if disallowed_grants or write_roles:
+            details = [*disallowed_grants, *(f"ROLE {role}" for role in write_roles)]
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "The configured Neo4j credential has privileges outside the allowed read-only "
+                "model "
+                f"({', '.join(details)}) and is not server-enforced read-only.",
+                "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE), "
+                "update `user` and its password in profiles.yml, then run `graphcheck debug` "
+                "again.",
+            )
+
     def _server_info(self, *, timeout_s: float | None = None) -> tuple[str, str]:
         rows = _run_read_with_timeout(
             self,
@@ -273,6 +724,26 @@ class Neo4jClient:
                 "Check that the configured user can execute dbms.components().",
             )
         return str(rows[0]["version"]), str(rows[0]["edition"]).lower()
+
+    def _cypher_version(self, server_version: str, *, timeout_s: float | None = None) -> str:
+        if not _supports_cypher_25(server_version):
+            return "5"
+        try:
+            rows = _timed_probe_request(
+                self,
+                lambda: self.run_read(
+                    "SHOW DATABASES YIELD name, defaultLanguage "
+                    "WHERE name = $database RETURN defaultLanguage",
+                    {"database": self._profile.database},
+                    **({"timeout_s": timeout_s} if timeout_s is not None else {}),
+                ),
+            )
+        except GraphCheckError as exc:
+            if exc.error.code in {"neo4j.permission_denied", "neo4j.query_failed"}:
+                return "unknown"
+            raise
+        value = str(rows[0].get("defaultLanguage", "")).upper() if rows else ""
+        return "25" if value.endswith("25") else "5" if value.endswith("5") else "unknown"
 
     def _apoc_usable(self, *, timeout_s: float | None = None) -> bool:
         deadline = _timeout_deadline(timeout_s)
@@ -366,18 +837,14 @@ class Neo4jClient:
         return names
 
     def _counts(self, *, timeout_s: float | None = None) -> Counts:
-        deadline = _timeout_deadline(timeout_s)
-        nodes = _run_read_with_timeout(
+        rows = _run_read_with_timeout(
             self,
-            "MATCH (n) RETURN count(n) AS count",
-            _remaining_timeout(deadline),
-        )[0]["count"]
-        relationships = _run_read_with_timeout(
-            self,
-            "MATCH ()-[r]->() RETURN count(r) AS count",
-            _remaining_timeout(deadline),
-        )[0]["count"]
-        return Counts(nodes=int(nodes), relationships=int(relationships))
+            "CALL { MATCH (n) RETURN count(n) AS nodes } "
+            "CALL { MATCH ()-[r]->() RETURN count(r) AS relationships } "
+            "RETURN nodes, relationships",
+            timeout_s,
+        )
+        return Counts(nodes=int(rows[0]["nodes"]), relationships=int(rows[0]["relationships"]))
 
     def _schema_tokens(
         self, *, timeout_s: float | None = None
@@ -411,17 +878,88 @@ class Neo4jClient:
 
     def _count_store_usable(self, *, timeout_s: float | None = None) -> bool:
         try:
-            plan = (
-                self.explain_read("MATCH (n) RETURN count(n) AS count")
-                if timeout_s is None
-                else self.explain_read(
-                    "MATCH (n) RETURN count(n) AS count",
-                    timeout_s=timeout_s,
-                )
+            plan = _timed_probe_request(
+                self,
+                lambda: (
+                    self.explain_read("MATCH (n) RETURN count(n) AS count")
+                    if timeout_s is None
+                    else self.explain_read(
+                        "MATCH (n) RETURN count(n) AS count",
+                        timeout_s=timeout_s,
+                    )
+                ),
             )
         except GraphCheckError:
             return False
         return _plan_has_operator(plan, "NodeCountFromCountStore")
+
+
+class _TransactionReader:
+    """Read-result facade over one explicit Neo4j transaction."""
+
+    def __init__(
+        self,
+        transaction: object,
+        database: str,
+        deadline: float | None,
+        read_classifications: _ReadClassificationCache,
+    ) -> None:
+        self._transaction = transaction
+        self._database = database
+        self._deadline = deadline
+        self._read_classifications = read_classifications
+
+    def run_read_result(
+        self,
+        query: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> QueryResult:
+        values = params or {}
+        local_deadline = _timeout_deadline(timeout_s)
+        deadline = (
+            local_deadline
+            if self._deadline is None
+            else self._deadline
+            if local_deadline is None
+            else min(self._deadline, local_deadline)
+        )
+        try:
+            guard_started = time.monotonic()
+            # Transaction.run rejects neo4j.Query objects; the transaction-level timeout was
+            # already attached by begin_transaction(), so both EXPLAIN and execution stay strings.
+            read_guard_cache_hit = _ensure_server_classified_read(
+                self._transaction,
+                query,
+                values,
+                cache=self._read_classifications,
+                database=self._database,
+                deadline=deadline,
+                attach_timeout=False,
+            )
+            read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
+            result = self._transaction.run(query, values)
+            rows = [_raw_record(record) for record in result]
+            columns = _result_columns(result) or (tuple(rows[0]) if rows else ())
+            consume = getattr(result, "consume", None)
+            summary = consume() if callable(consume) else None
+            notifications = _summary_notifications(summary)
+            _raise_for_missing_schema_reference(notifications)
+            return QueryResult(
+                rows=rows,
+                columns=columns,
+                notifications=notifications,
+                server_available_after_ms=_summary_timing(summary, "result_available_after"),
+                server_consumed_after_ms=_summary_timing(summary, "result_consumed_after"),
+                read_guard_ms=read_guard_ms,
+                read_guard_cache_hit=read_guard_cache_hit,
+                observed_rows=len(rows),
+            )
+        except GraphCheckError:
+            raise
+        except Exception as exc:
+            raise map_neo4j_error(exc) from exc
 
 
 def _timeout_deadline(timeout_s: float | None) -> float | None:
@@ -464,8 +1002,55 @@ def _run_read_with_timeout(
     query: str,
     timeout_s: float | None,
 ) -> list[dict[str, Any]]:
-    return (
-        client.run_read(query) if timeout_s is None else client.run_read(query, timeout_s=timeout_s)
+    return _timed_probe_request(
+        client,
+        lambda: (
+            client.run_read(query)
+            if timeout_s is None
+            else client.run_read(query, timeout_s=timeout_s)
+        ),
+    )
+
+
+def _timed_probe_request(client: Neo4jClient, operation: Callable[[], Any]) -> Any:
+    durations = getattr(client, "_probe_request_durations_ms", None)
+    if durations is None:
+        return operation()
+    started = time.monotonic()
+    try:
+        return operation()
+    finally:
+        durations.append(max(0, round((time.monotonic() - started) * 1000)))
+
+
+def _supports_cypher_25(server_version: str) -> bool:
+    try:
+        year, month = (int(part) for part in server_version.split(".", 2)[:2])
+    except (TypeError, ValueError):
+        return False
+    return (year, month) >= (2025, 6)
+
+
+def _ensure_supported_server(server_version: str) -> None:
+    try:
+        major = int(server_version.split(".", 1)[0])
+    except (AttributeError, ValueError):
+        major = 0
+    if major == 5 or major >= 2025:
+        return
+    raise GraphCheckError(
+        "neo4j.unsupported_version",
+        f"Neo4j Server {server_version} is outside GraphCheck's supported server lines.",
+        "Upgrade to Neo4j Server 5.26 LTS or a documented calendar-version target.",
+    )
+
+
+def _support_versions(client: object, target: RunTarget) -> SupportVersions:
+    return SupportVersions(
+        graphcheck=__version__,
+        neo4j_driver=str(getattr(neo4j, "__version__", "unknown")),
+        neo4j_server=target.server_version,
+        cypher=str(getattr(client, "probe_cypher_version", None) or "unknown"),
     )
 
 
@@ -473,7 +1058,15 @@ def init_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:
         target, visibility, counts = client.probe()
-        return DebugTrace(profile=profile_name, target=target, visibility=visibility, counts=counts)
+        _verify_audit_credential(client)
+        return DebugTrace(
+            profile=profile_name,
+            target=target,
+            visibility=visibility,
+            counts=counts,
+            probe_metrics=getattr(client, "last_probe_metrics", None),
+            versions=_support_versions(client, target),
+        )
     finally:
         client.close()
 
@@ -482,9 +1075,23 @@ def debug_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
     client = Neo4jClient(profile)
     try:
         target, visibility, counts = client.probe()
-        return DebugTrace(profile=profile_name, target=target, visibility=visibility, counts=counts)
+        _verify_audit_credential(client)
+        return DebugTrace(
+            profile=profile_name,
+            target=target,
+            visibility=visibility,
+            counts=counts,
+            probe_metrics=getattr(client, "last_probe_metrics", None),
+            versions=_support_versions(client, target),
+        )
     finally:
         client.close()
+
+
+def _verify_audit_credential(client: object) -> None:
+    verify = getattr(client, "verify_read_only_credential", None)
+    if callable(verify):
+        verify()
 
 
 def error_json(profile_name: str, error: CheckError) -> dict[str, object]:
@@ -509,12 +1116,39 @@ def _raw_record(record: object) -> dict[str, Any]:
     raise TypeError(f"query result record does not expose mapping items: {type(record).__name__}")
 
 
+def _cancel_result(result: object) -> None:
+    """Discard a partial stream without asking the driver to drain it."""
+
+    cancel = getattr(result, "cancel", None) or getattr(result, "_cancel", None)
+    if callable(cancel):
+        cancel()
+
+
+def _result_limit_exceeded(limit: int) -> GraphCheckError:
+    return GraphCheckError(
+        "engine.result_limit_exceeded",
+        f"The query result exceeded the configured safety ceiling of {limit} rows.",
+        "Narrow the query or increase engine.result_row_limit after reviewing its memory cost.",
+    )
+
+
+def _explain_query(query: str) -> str:
+    stripped = query.lstrip()
+    for prefix in ("CYPHER 5", "CYPHER 25"):
+        if stripped == prefix:
+            return f"{prefix} EXPLAIN"
+        if stripped.startswith(f"{prefix}\n") or stripped.startswith(f"{prefix} "):
+            return f"{prefix} EXPLAIN {stripped[len(prefix) :].lstrip()}"
+    return f"EXPLAIN {query}"
+
+
 def _assert_server_classified_read(
     session: object,
     query: str,
     params: dict[str, object],
     *,
     timeout_s: float | None,
+    attach_timeout: bool = True,
 ) -> None:
     """Fail closed unless Neo4j's planner classifies the statement as read-only."""
 
@@ -525,8 +1159,10 @@ def _assert_server_classified_read(
             "The Neo4j session cannot perform the server-side read-only preflight.",
             "Use the supported Neo4j driver and a dedicated read-only database credential.",
         )
-    text = f"EXPLAIN {query}"
-    driver_query = neo4j.Query(text, timeout=timeout_s) if timeout_s is not None else text
+    text = _explain_query(query)
+    driver_query = (
+        neo4j.Query(text, timeout=timeout_s) if attach_timeout and timeout_s is not None else text
+    )
     result = run(driver_query, params)
     consume = getattr(result, "consume", None)
     if not callable(consume):
@@ -550,6 +1186,26 @@ def _assert_server_classified_read(
         "neo4j.read_guard_unavailable",
         f"Neo4j returned unknown query type {query_type!r} for the read-only preflight.",
         "Use a supported Neo4j server/driver and a dedicated read-only database credential.",
+    )
+
+
+def _ensure_server_classified_read(
+    session: object,
+    query: str,
+    params: dict[str, object],
+    *,
+    cache: _ReadClassificationCache,
+    database: str,
+    deadline: float | None,
+    attach_timeout: bool = True,
+) -> bool:
+    return cache.ensure_read(
+        session,
+        query,
+        params,
+        database=database,
+        deadline=deadline,
+        attach_timeout=attach_timeout,
     )
 
 
@@ -640,7 +1296,7 @@ def _raise_for_missing_schema_reference(notifications: tuple[dict[str, Any], ...
             notification.get("description") or notification.get("title") or notification.get("code")
         )
         raise GraphCheckError(
-            "neo4j.query_failed",
+            "engine.schema_reference_missing",
             f"Neo4j query references a {kind} that is not present in the database: {detail}",
             f"Correct the {kind} in the check query, or create/populate it, then rerun.",
         )
@@ -716,13 +1372,21 @@ def _is_apoc_absent_error(exc: GraphCheckError) -> bool:
         or "procedure not found" in message
         or "unknown procedure" in message
         or "not registered" in message
+        or "unavailable" in message
     )
 
 
-def map_neo4j_error(exc: Exception) -> GraphCheckError:
+def map_neo4j_error(exc: Exception, profile: ConnectionProfile | None = None) -> GraphCheckError:
     name = exc.__class__.__name__
+    causes: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        causes.extend((current.__class__.__name__, str(current)))
+        current = current.__cause__ or current.__context__
     message = str(exc)
-    lowered = message.lower()
+    lowered = " ".join(causes).lower()
     neo4j_code = str(getattr(exc, "code", "")).lower()
     if "transactiontimedout" in neo4j_code or ("transaction" in lowered and "timed out" in lowered):
         return GraphCheckTimeoutError(
@@ -730,29 +1394,52 @@ def map_neo4j_error(exc: Exception) -> GraphCheckError:
             "Neo4j timed out the read-only query before it completed.",
             "Narrow the check, enable sampling, or increase the run time budget.",
         )
-    if name in {"AuthError", "TokenExpired"}:
+    if name in {"AuthError", "TokenExpired"} or "security.unauthorized" in neo4j_code:
         return GraphCheckError(
             "neo4j.auth_failed",
             "Neo4j rejected the configured credentials.",
-            "Edit profiles.yml with the password from Neo4j Desktop, then run `graphcheck debug`.",
+            "Update `user` and `password`/`password_env` in profiles.yml, then run "
+            "`graphcheck debug` again.",
+        )
+    tls_tokens = ("ssl", "tls", "certificate", "encrypted connection", "handshake")
+    connection_error = name in {"ServiceUnavailable", "SessionExpired"} or any(
+        token in lowered for token in ("sslerror", "sslcertverificationerror", "boltsecurityerror")
+    )
+    if profile is not None and connection_error and any(token in lowered for token in tls_tokens):
+        return GraphCheckError(
+            "neo4j.tls_mismatch",
+            "The Neo4j endpoint's TLS mode or certificate does not match the configured URI.",
+            "Use `bolt://` for a direct non-TLS local server, `neo4j+s://` for CA-signed TLS, "
+            "or `neo4j+ssc://` for an explicitly trusted self-signed endpoint; then run "
+            "`graphcheck debug` again.",
+        )
+    database_code_error = "database" in neo4j_code and any(
+        token in neo4j_code for token in ("notfound", "unavailable")
+    )
+    if database_code_error or (
+        not neo4j_code
+        and "database" in lowered
+        and ("not found" in lowered or "does not exist" in lowered)
+    ):
+        database = profile.database if profile is not None else "configured"
+        return GraphCheckError(
+            "neo4j.database_not_found",
+            f"Neo4j database {database!r} was not found or is unavailable.",
+            "Set `database` in profiles.yml to an existing online database (often `neo4j`), "
+            "or create/start that database, then run `graphcheck debug` again.",
         )
     if name in {"ServiceUnavailable", "SessionExpired"}:
         return GraphCheckError(
             "neo4j.unreachable",
             "Neo4j is unreachable at the configured Bolt URI.",
-            "Start Neo4j Desktop, check the Bolt URI in profiles.yml, then run `graphcheck debug`.",
-        )
-    if "database" in lowered and ("not found" in lowered or "does not exist" in lowered):
-        return GraphCheckError(
-            "neo4j.database_not_found",
-            "The configured Neo4j database was not found.",
-            "Update the database in profiles.yml, or create/start that database in Neo4j.",
+            "Start Neo4j, verify the host and port in `uri`, then run `graphcheck debug` again.",
         )
     if "security.forbidden" in neo4j_code or "permission" in lowered or "forbidden" in lowered:
         return GraphCheckError(
             "neo4j.permission_denied",
             "Neo4j denied a read or probe query for the configured user.",
-            "Grant read/procedure access to the user, then run `graphcheck debug`.",
+            "Grant the dedicated user ACCESS plus MATCH (or READ/TRAVERSE) on the configured "
+            "database, then run `graphcheck debug` again.",
         )
     return GraphCheckError(
         "neo4j.query_failed",

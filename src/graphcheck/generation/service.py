@@ -17,12 +17,14 @@ from graphcheck.generation.disclosure import GenerateDisclosure
 from graphcheck.generation.prompts import build_correction_request, build_initial_request
 from graphcheck.generation.proposals import (
     ProposalRequest,
+    RawProposal,
     RawProposalBatch,
     ValidatedCandidate,
     serialize_validated_suite,
     validate_candidate,
 )
 from graphcheck.generation.transmission import (
+    GenerateProfileContext,
     GenerateRequest,
     build_profile_context,
     display_path,
@@ -79,7 +81,7 @@ class GenerationStage(StrEnum):
 
 
 class GenerationService:
-    """Own the disclosed, bounded, exactly-two-attempt generation workflow."""
+    """Own the disclosed and bounded generation workflow."""
 
     def __init__(
         self,
@@ -176,10 +178,11 @@ class GenerationService:
                 summaries=summaries,
                 config=generate_config,
                 warning_sink=warning_sink,
+                profile=request_context.profile,
             )
 
         needed = requested_count - len(retained)
-        if needed > 0:
+        if needed > 0 and not (generate_config.uses_google_tool_transport and retained):
             correction = build_correction_request(
                 request_context,
                 needed=requested_count if initial_envelope_invalid else needed,
@@ -230,13 +233,14 @@ class GenerationService:
                     summaries=[],
                     config=generate_config,
                     warning_sink=warning_sink,
+                    profile=request_context.profile,
                 )
 
         if not retained:
             raise GraphCheckError(
                 "generate.no_valid_candidates",
                 "No generated candidate passed GraphCheck validation.",
-                "Review the logged reasons and retry with clearer domain docs or another model.",
+                "Review the warnings above and retry; structural errors may require another model.",
             )
 
         # Prove the complete bytes load before asking the writer to touch the filesystem.
@@ -270,11 +274,14 @@ class GenerationService:
         summaries: list[str],
         config: GenerateConfig,
         warning_sink: Callable[[DroppedCandidate], None] | None,
+        profile: GenerateProfileContext,
     ) -> None:
         retained_ids = {candidate.id for candidate in retained}
         for index, raw in enumerate(batch.candidates):
             candidate_name = f"proposal[{index}]"
             try:
+                if config.provider == "google":
+                    _validate_google_profile_references(raw, profile)
                 candidate = validate_candidate(
                     raw,
                     provider=config.provider,
@@ -314,6 +321,26 @@ class GenerationService:
                 dropped.append(rejection)
                 if warning_sink is not None:
                     warning_sink(rejection)
+
+
+def _validate_google_profile_references(
+    raw: RawProposal,
+    profile: GenerateProfileContext,
+) -> None:
+    labels = {label.name: {prop.name for prop in label.properties} for label in profile.labels}
+    if raw.kind == "conformance":
+        with_ = raw.spec.get("with")
+        label = with_.get("label") if isinstance(with_, dict) else None
+        property_name = with_.get("property") if isinstance(with_, dict) else None
+        if not isinstance(label, str) or label not in labels:
+            raise ValueError("conformance.with.label: not present in baseline profile")
+        if not isinstance(property_name, str) or property_name not in labels[label]:
+            raise ValueError("conformance.with.property: not present for label in baseline profile")
+    elif raw.kind == "drift":
+        target = raw.spec.get("target")
+        label = target.get("label") if isinstance(target, dict) else None
+        if not isinstance(label, str) or label not in labels:
+            raise ValueError("drift.target.label: not present in baseline profile")
 
 
 def _propose(

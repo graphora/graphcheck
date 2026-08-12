@@ -40,7 +40,7 @@ class GeneratedSuiteWriter:
             raise GraphCheckError(
                 "generate.no_valid_candidates",
                 "No valid generated candidates were available to write.",
-                "Review the logged reasons and retry with clearer domain docs or another model.",
+                "Review the warnings above and retry; structural errors may require another model.",
             )
         try:
             self._checks_dir.mkdir(parents=True, exist_ok=True)

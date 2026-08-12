@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import json
+import re
 import shutil
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from graphcheck.contracts.results import (
     CheckResult,
     Results,
+    RunStatus,
     Severity,
     Verdict,
     parse_utc_timestamp,
 )
 from graphcheck.reporting.writer import load_results
+
+SUMMARY_FILENAME = "summary.json"
 
 
 class ReportHistoryError(ValueError):
@@ -20,29 +26,70 @@ class ReportHistoryError(ValueError):
 
 
 @dataclass(frozen=True)
+class ReportSummary:
+    id: str
+    finished_at: str
+    status: RunStatus
+    suite_scores: tuple[tuple[str, int | None], ...]
+
+
+@dataclass(frozen=True, init=False)
 class ReportRun:
     directory: Path
     results_path: Path
     report_path: Path
-    results: Results
+    summary: ReportSummary
     modified_ns: int
+    _results: Results | None = field(default=None, repr=False, compare=False)
+
+    def __init__(
+        self,
+        directory: Path,
+        results_path: Path,
+        report_path: Path,
+        results: Results | None = None,
+        modified_ns: int = 0,
+        *,
+        summary: ReportSummary | None = None,
+    ) -> None:
+        if summary is None:
+            if results is None:
+                raise ValueError("ReportRun requires results or a summary")
+            summary = report_summary(results)
+        object.__setattr__(self, "directory", directory)
+        object.__setattr__(self, "results_path", results_path)
+        object.__setattr__(self, "report_path", report_path)
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "modified_ns", modified_ns)
+        object.__setattr__(self, "_results", results)
 
     @property
     def id(self) -> str:
-        return self.results.run.id
+        return self.summary.id
+
+    @property
+    def results(self) -> Results:
+        if self._results is None:
+            try:
+                loaded = load_results(self.results_path)
+                if report_summary(loaded) != self.summary:
+                    raise ValueError("results.json does not match summary.json")
+                object.__setattr__(self, "_results", loaded)
+            except (OSError, ValueError) as exc:
+                raise ReportHistoryError(
+                    f"Could not read report history from {self.results_path}: {exc}"
+                ) from exc
+        assert self._results is not None
+        return self._results
 
 
 def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
-    """Load and de-duplicate validated run artifacts, newest first."""
+    """Discover compact run summaries and lazily load full selected artifacts."""
     if not runs_dir.is_dir():
         return []
 
     by_id: dict[str, ReportRun] = {}
-    for results_path in runs_dir.rglob("results.json"):
-        relative_parent = results_path.parent.relative_to(runs_dir)
-        if any(part.startswith(".") for part in relative_parent.parts):
-            continue
-        record = _load_report_run(results_path)
+    for record in _direct_report_runs(runs_dir):
         current = by_id.get(record.id)
         if current is None or _preferred_record(record) > _preferred_record(current):
             by_id[record.id] = record
@@ -66,13 +113,13 @@ def format_report_history(records: list[ReportRun]) -> str:
     rows = [
         (
             record.id,
-            record.results.run.finished_at,
-            record.results.run.status.value,
-            _suite_scores(record.results),
+            record.summary.finished_at,
+            record.summary.status.value,
+            _summary_suite_scores(record.summary),
         )
         for record in records
     ]
-    headers = ("RUN ID", "FINISHED AT", "STATUS", "SUITE SCORES")
+    headers = ("REPORT NAME", "FINISHED AT", "STATUS", "SUITE SCORES")
     widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
     lines = [
         _format_row(headers, widths),
@@ -80,6 +127,25 @@ def format_report_history(records: list[ReportRun]) -> str:
     ]
     lines.extend(_format_row(row, widths) for row in rows)
     return "\n".join(lines)
+
+
+def report_name(results: Results) -> str:
+    """Return the filesystem-safe target and basic-ISO report identifier."""
+    database = results.run.target.database if results.run.target is not None else "unknown"
+    target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
+    timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{target}_{timestamp}"
+
+
+def display_run_status(results: Results) -> RunStatus:
+    """Map machine run outcomes to user-facing statuses."""
+    if results.run.error is not None and results.run.error.code == "neo4j.unreachable":
+        return RunStatus.FAILED
+    return (
+        RunStatus.PARTIAL
+        if results.run.status is not RunStatus.COMPLETE or results.totals.errored > 0
+        else RunStatus.COMPLETE
+    )
 
 
 def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
@@ -117,7 +183,8 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
 
     lines = [
         f"Comparing {first.id} -> {second.id}",
-        f"Status: {first.results.run.status.value} -> {second.results.run.status.value}",
+        f"Status: {display_run_status(first.results).value} -> "
+        f"{display_run_status(second.results).value}",
         "Suite scores:",
         *_suite_score_changes(first.results, second.results),
         "",
@@ -168,6 +235,128 @@ def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
     return removed
 
 
+def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
+    """Delete selected logical reports and safely repoint the ``latest`` alias."""
+    requested = tuple(dict.fromkeys(run_id for run_id in run_ids if run_id))
+    if not requested:
+        raise ReportHistoryError("Select at least one report to delete.")
+
+    records = discover_report_runs(runs_dir)
+    by_id = {record.id: record for record in records}
+    missing = [run_id for run_id in requested if run_id not in by_id]
+    if missing:
+        raise ReportHistoryError(f"Report {missing[0]!r} was not found.")
+
+    selected_ids = set(requested)
+    direct_records = _direct_report_runs(runs_dir)
+    targets = [record.directory for record in direct_records if record.id in selected_ids]
+    if not targets:
+        raise ReportHistoryError("No selected report directories were found.")
+
+    resolved_runs = runs_dir.resolve()
+    _validate_removal_targets(resolved_runs, targets)
+    trash = resolved_runs / f".delete-{uuid.uuid4().hex}"
+    trash.mkdir()
+    moved: list[tuple[Path, Path]] = []
+    latest_staging: Path | None = None
+    try:
+        for target in targets:
+            destination = trash / target.name
+            target.replace(destination)
+            moved.append((target, destination))
+        remaining = discover_report_runs(resolved_runs)
+        if remaining and not (resolved_runs / "latest").exists():
+            latest_staging = _stage_latest_alias(resolved_runs, remaining[0])
+            latest_staging.replace(resolved_runs / "latest")
+            latest_staging = None
+    except Exception as exc:
+        if latest_staging is not None and latest_staging.exists():
+            shutil.rmtree(latest_staging)
+        latest = resolved_runs / "latest"
+        if latest.exists() and any(target.name.casefold() == "latest" for target, _ in moved):
+            shutil.rmtree(latest)
+        for target, destination in reversed(moved):
+            if destination.exists():
+                destination.replace(target)
+        if trash.exists():
+            shutil.rmtree(trash)
+        raise ReportHistoryError(f"Could not delete selected reports: {exc}") from exc
+
+    try:
+        shutil.rmtree(trash)
+    except OSError as exc:
+        raise ReportHistoryError(f"Could not finish deleting selected reports: {exc}") from exc
+    return [by_id[run_id] for run_id in requested]
+
+
+def _direct_report_runs(runs_dir: Path) -> list[ReportRun]:
+    if not runs_dir.is_dir():
+        return []
+    resolved_runs = runs_dir.resolve()
+    records: list[ReportRun] = []
+    try:
+        directories = sorted(runs_dir.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise ReportHistoryError(
+            f"Could not enumerate report history in {runs_dir}: {exc}"
+        ) from exc
+    for directory in directories:
+        if not _safe_report_directory(resolved_runs, directory):
+            continue
+        results_path = directory / "results.json"
+        if (
+            not results_path.is_file()
+            or results_path.is_symlink()
+            or results_path.resolve().parent != directory.resolve()
+        ):
+            continue
+        summary_path = results_path.with_name(SUMMARY_FILENAME)
+        record = (
+            _load_summary_run(summary_path, results_path)
+            if summary_path.is_file()
+            and not summary_path.is_symlink()
+            and summary_path.resolve().parent == directory.resolve()
+            else _load_report_run(results_path)
+        )
+        records.append(record)
+    return records
+
+
+def _safe_report_directory(resolved_runs: Path, directory: Path) -> bool:
+    is_junction = getattr(directory, "is_junction", lambda: False)
+    return (
+        directory.is_dir()
+        and not directory.name.startswith(".")
+        and not directory.is_symlink()
+        and not is_junction()
+        and directory.resolve().parent == resolved_runs
+    )
+
+
+def _validate_removal_targets(resolved_runs: Path, targets: list[Path]) -> None:
+    for target in targets:
+        if not _safe_report_directory(resolved_runs, target):
+            raise ReportHistoryError(f"Refusing to delete unexpected path: {target}")
+
+
+def _stage_latest_alias(resolved_runs: Path, source: ReportRun) -> Path:
+    staging = resolved_runs / f".latest.staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        for filename in ("results.json", "report.html", SUMMARY_FILENAME):
+            source_path = source.directory / filename
+            if (
+                source_path.is_file()
+                and not source_path.is_symlink()
+                and source_path.resolve().parent == source.directory.resolve()
+            ):
+                shutil.copy2(source_path, staging / filename)
+    except Exception:
+        shutil.rmtree(staging)
+        raise
+    return staging
+
+
 def _load_report_run(results_path: Path) -> ReportRun:
     try:
         results = load_results(results_path)
@@ -185,25 +374,103 @@ def _load_report_run(results_path: Path) -> ReportRun:
     )
 
 
+def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary = _parse_summary(payload)
+        modified_ns = results_path.stat().st_mtime_ns
+    except (KeyError, OSError, TypeError, ValueError):
+        return _load_report_run(results_path)
+    return ReportRun(
+        directory=results_path.parent,
+        results_path=results_path,
+        report_path=results_path.with_name("report.html"),
+        summary=summary,
+        modified_ns=modified_ns,
+    )
+
+
+def report_summary(results: Results) -> ReportSummary:
+    return ReportSummary(
+        id=results.run.id,
+        finished_at=results.run.finished_at,
+        status=display_run_status(results),
+        suite_scores=tuple(
+            (suite.id, suite.score) for suite in sorted(results.suites, key=lambda suite: suite.id)
+        ),
+    )
+
+
+def report_summary_json(results: Results) -> str:
+    summary = report_summary(results)
+    return (
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "id": summary.id,
+                "finished_at": summary.finished_at,
+                "status": summary.status.value,
+                "suite_scores": [
+                    {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def _parse_summary(payload: object) -> ReportSummary:
+    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+        raise ValueError("invalid report summary schema")
+    run_id = payload["id"]
+    finished_at = payload["finished_at"]
+    if not isinstance(run_id, str) or not isinstance(finished_at, str):
+        raise ValueError("invalid report summary identity")
+    parse_utc_timestamp(finished_at)
+    raw_scores = payload["suite_scores"]
+    if not isinstance(raw_scores, list):
+        raise ValueError("invalid report summary suite scores")
+    scores: list[tuple[str, int | None]] = []
+    for item in raw_scores:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise ValueError("invalid report summary suite score")
+        score = item.get("score")
+        if score is not None and (isinstance(score, bool) or not isinstance(score, int)):
+            raise ValueError("invalid report summary score")
+        scores.append((item["id"], score))
+    return ReportSummary(
+        id=run_id,
+        finished_at=finished_at,
+        status=RunStatus(payload["status"]),
+        suite_scores=tuple(sorted(scores)),
+    )
+
+
 def _preferred_record(record: ReportRun) -> tuple[bool, bool, int, str]:
     return (
-        record.report_path.is_file(),
+        _safe_artifact_file(record.directory, record.report_path),
         record.directory.name.casefold() != "latest",
         record.modified_ns,
         str(record.directory),
     )
 
 
+def _safe_artifact_file(directory: Path, path: Path) -> bool:
+    return path.is_file() and not path.is_symlink() and path.resolve().parent == directory.resolve()
+
+
 def _recency(record: ReportRun) -> tuple[datetime, int, str]:
-    return (parse_utc_timestamp(record.results.run.finished_at), record.modified_ns, record.id)
+    return (parse_utc_timestamp(record.summary.finished_at), record.modified_ns, record.id)
 
 
-def _suite_scores(results: Results) -> str:
-    if not results.suites:
+def _summary_suite_scores(summary: ReportSummary) -> str:
+    if not summary.suite_scores:
         return "n/a"
     return ", ".join(
-        f"{suite.id}={'n/a' if suite.score is None else suite.score}"
-        for suite in sorted(results.suites, key=lambda suite: suite.id)
+        f"{suite_id}={'n/a' if score is None else score}"
+        for suite_id, score in summary.suite_scores
     )
 
 

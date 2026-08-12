@@ -299,11 +299,11 @@ Value-match reports must include location, exposure count, and confidence.
 
 ### Runtime and privacy contract
 
-Both PII checks first execute a population query, derive the per-check seed defined by SPEC-04,
-and select property occurrences in a stable seed-derived order. A stable sorted property index is
-part of the sampling key, so multiple properties on one node are independent occurrences rather
-than tied candidates. The engine runs the exact population when policy/configuration permits; a
-strict subset carries
+Both PII checks compute their exact eligible population in the candidate query, derive the
+per-check seed defined by SPEC-04, apply a deterministic occurrence-level hash gate, and select the
+reduced candidates in a stable seed-derived order. A stable sorted property index is part of both
+the gate and ranking key, so multiple properties on one node are independent occurrences rather
+than tied candidates. An exhaustive outcome is exact; a strict subset carries
 `estimate:{sample_size,population,confidence,ci}` using the 95% Wilson interval. Even a sampled
 zero-match pass retains estimate metadata and the completeness notice.
 
@@ -315,9 +315,8 @@ evidence, console output, JSON, or HTML artifacts.
 
 The value matcher filters to actual string properties with null-safe conversion predicates before
 population counting and sampling. Lists and other valid Neo4j property types are excluded rather
-than causing a conversion error. The main candidate query recomputes the eligible population in its
-own graph snapshot; if it differs from the preflight population, evaluation is errored so the
-sample size and confidence interval never describe stale data.
+than causing a conversion error. Population and selection share one graph snapshot, so the sample
+size and confidence interval describe the algorithm that actually ran.
 
 Every failing PII result contains node evidence pointers. Missing/malformed candidates, a broken
 query, timeout, schema warning, population/result disagreement, invalid checksum metadata, or

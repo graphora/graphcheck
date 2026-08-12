@@ -787,6 +787,26 @@ def test_evaluation_is_independent_of_check_severity():
     assert hard.passed is False
 
 
+def test_competency_skips_row_hashing_and_regression_projection_when_unrequested(
+    monkeypatch,
+):
+    compiled = _competency({"rows": {"exactly": 1}})
+
+    def unexpected_freeze(value):
+        raise AssertionError("shape-only evaluation must not freeze rows")
+
+    monkeypatch.setattr("graphcheck.engine.evaluator._freeze", unexpected_freeze)
+
+    evaluation = evaluate_check(
+        compiled,
+        [{"node_element_id": "n-1"}],
+        columns=["node_element_id"],
+    )
+
+    assert evaluation.passed is True
+    assert "unique" not in evaluation.measured
+
+
 @settings(max_examples=50, deadline=None)
 @given(st.lists(st.integers(min_value=-20, max_value=20), max_size=15))
 def test_evaluation_is_deterministic_and_does_not_mutate_rows(values):
