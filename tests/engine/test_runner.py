@@ -635,6 +635,29 @@ def test_in_flight_budget_timeout_is_partial_exit_two_and_stops_later_work():
     assert len(client.read_calls) == 1
 
 
+def test_server_query_timeout_before_deadline_remains_a_hard_fail_fast_error():
+    timeout = GraphCheckTimeoutError("neo4j.query_failed", "query timed out", "narrow query")
+    client = RichClient([timeout])
+    engine = Engine(
+        client,
+        config=EngineConfig(time_budget_s=10.0),
+        clock=FixedClock(datetime(2026, 7, 13, tzinfo=UTC)),
+        monotonic=lambda: 0.0,
+        id_factory=lambda: "run-query-timeout",
+    )
+
+    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
+
+    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.partial_reason == "fail-fast stopped the run after competencies/first"
+    assert results.run.exit_code == 1
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "neo4j.query_failed"
+    assert results.checks[1].verdict is Verdict.SKIPPED
+    assert results.checks[1].skip_reason is SkipReason.NOT_RUN
+    assert len(client.read_calls) == 1
+
+
 def test_empty_target_drift_with_missing_schema_is_errored_not_passed():
     client = RichClient(
         [

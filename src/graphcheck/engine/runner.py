@@ -832,7 +832,9 @@ class Engine:
             return result, partial_reason, timings
         except GraphCheckError as exc:
             error = exc.error
-            if isinstance(exc, GraphCheckTimeoutError) or error.code == "engine.timeout":
+            if (
+                isinstance(exc, GraphCheckTimeoutError) or error.code == "engine.timeout"
+            ) and self._monotonic() >= deadline:
                 error = error.model_copy(update={"code": "engine.timeout"})
                 deadline_reason = _deadline_reason(self.config.time_budget_s)
                 partial_reason = (

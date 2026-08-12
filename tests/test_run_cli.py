@@ -969,7 +969,7 @@ competency:
             self.client = client
 
         def run(self, suites, **kwargs):
-            ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 1.1, 1.1))
+            ticks = iter((0.0, 0.0, 0.0, 0.0, 1.1, 1.1))
             return CoreEngine(
                 self.client,
                 config=EngineConfig(time_budget_s=1.0),
