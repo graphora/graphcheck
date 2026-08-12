@@ -96,7 +96,6 @@ def _alias_identifiers(payload: dict[str, Any], sensitive: set[str]) -> None:
 def _is_safe_literal_path(path: tuple[str | int, ...]) -> bool:
     if path in {
         ("schema_version",),
-        ("run", "id"),
         ("run", "started_at"),
         ("run", "finished_at"),
         ("run", "graphcheck_version"),
@@ -159,11 +158,25 @@ def _verify_no_sensitive_literals(
         )
 
 
-def redacted_run_id(finished_at: str) -> str:
+def redacted_run_id(finished_at: str, sensitive: set[str] | None = None) -> str:
     """Return a target-neutral identifier for a redacted artifact."""
 
+    sensitive = sensitive or set()
     timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"redacted_{timestamp}"
+    candidate = f"redacted_{timestamp}"
+    if candidate not in sensitive:
+        return candidate
+    collision = 1
+    while f"redacted_collision{collision}_{timestamp}" in sensitive:
+        collision += 1
+    return f"redacted_collision{collision}_{timestamp}"
+
+
+def _is_redacted_run_id(value: str, finished_at: str) -> bool:
+    timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
+    return value == f"redacted_{timestamp}" or bool(
+        re.fullmatch(rf"redacted_collision[1-9][0-9]*_{timestamp}", value)
+    )
 
 
 def _mask_error(error: dict[str, Any] | None) -> None:
@@ -179,7 +192,7 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
     payload = source.model_dump(mode="python", by_alias=True, exclude_none=False)
     sensitive = _sensitive_source_literals(payload)
     payload["run"]["redaction"] = {"policy": RedactionPolicy.MASK, "applied": True}
-    payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"])
+    payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"], sensitive)
     _alias_identifiers(payload, sensitive)
     if payload["run"]["partial_reason"] is not None:
         payload["run"]["partial_reason"] = REDACTION_MASK
@@ -239,7 +252,7 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
         or not results.run.redaction.applied
     ):
         raise ValueError("redaction verification failed: run.redaction is not applied mask mode")
-    if results.run.id != redacted_run_id(results.run.finished_at):
+    if not _is_redacted_run_id(results.run.id, results.run.finished_at):
         raise ValueError("redaction verification failed: run.id is not target-neutral")
     if results.run.partial_reason is not None:
         _verify_masked(results.run.partial_reason, "run.partial_reason")

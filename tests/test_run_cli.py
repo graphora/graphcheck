@@ -109,17 +109,20 @@ def test_artifact_writer_preserves_runs_completed_within_the_same_second(tmp_pat
 def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):
     results = load_results(FIXTURES / "results.complete.json")
     results.run.target.database = "patient-prod"
+    results.checks[0].params["customer_id"] = "redacted_20260706T090241000000Z"
     redacted = cli_module.redact_results(results)
     runs_dir = tmp_path / "runs"
 
     latest_results, latest_report = _write_run_artifacts(redacted, runs_dir)
 
-    run_id = "redacted_20260706T090241000000Z"
+    run_id = "redacted_collision1_20260706T090241000000Z"
     exported = latest_results.read_text(encoding="utf-8")
     html = latest_report.read_text(encoding="utf-8")
     assert (runs_dir / run_id / "results.json").is_file()
     assert load_results(latest_results).run.id == run_id
     assert "patient-prod" not in html
+    assert "redacted_20260706T090241000000Z" not in html
+    assert "redacted_20260706T090241000000Z" not in exported
     assert "patient-prod" not in json.loads(exported)["run"]["id"]
 
 

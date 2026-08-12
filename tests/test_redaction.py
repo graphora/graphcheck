@@ -73,6 +73,22 @@ def test_redaction_aliases_sensitive_identifier_and_scans_the_final_artifact():
     assert "CUST-1042" not in html
 
 
+def test_redaction_avoids_deterministic_run_id_collision_in_json_and_html():
+    payload = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+    sensitive = "redacted_20260706T090241000000Z"
+    payload["checks"][0]["params"]["customer_id"] = sensitive
+
+    redacted = redact_results(payload)
+    exported = results_json(redacted)
+    html = render_html_report(redacted)
+
+    assert redacted.run.id == "redacted_collision1_20260706T090241000000Z"
+    assert redact_results(payload).run.id == redacted.run.id
+    assert verify_redacted_results(redacted) == redacted
+    assert sensitive not in exported
+    assert sensitive not in html
+
+
 def test_redaction_verifier_rejects_an_unmasked_value():
     payload = redact_results(load_results(FIXTURES / "results.complete.json")).model_dump(
         mode="json", by_alias=True
