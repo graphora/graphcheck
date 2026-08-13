@@ -18,6 +18,8 @@ GraphCheck never modifies customer graphs.
 ## Overview
 
 - [README](../README.md): Project overview, goals, installation, quickstart, and usage.
+- [Local Docker Quickstart](docker-quickstart.md): Start a pinned local Neo4j demo, load the
+  canonical fraud-ring fixture, and run the baseline-free example checks.
 
 ---
 

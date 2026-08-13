@@ -25,6 +25,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
   target-derived run IDs.
 - Added relationship-preserving aliases for free-form identifiers and a source-aware final-artifact
   literal scan with an explicit structural allowlist.
+- A purely local Docker Compose quickstart with pinned Neo4j 5.26.28 and automatic loading of the
+  canonical reproducible fraud-ring fixture.
+- Baseline-free fraud-ring conformance checks for the local demo, alongside the existing
+  connection smoke check.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.
