@@ -272,6 +272,7 @@ def _status_overview(
     filtered: bool,
 ) -> str:
     details_rows = _details_rows(checks)
+    diagnostic = _run_diagnostic(results)
 
     target = results.run.target
     if target is None:
@@ -393,6 +394,7 @@ def _status_overview(
         "    </div>"
         "  </div>"
         '  <div class="scrollable-content">'
+        f"    {diagnostic}"
         f'    <div class="suite-status-list">{suite_body}</div>'
         '    <div class="summary-toggle-wrapper">'
         '      <button id="toggle-summary-btn" class="btn-summary-toggle">'
@@ -413,6 +415,19 @@ def _status_overview(
         '  <div class="panel-footer">'
         '    <button id="explore-checks-btn" class="btn-primary">Explore Checks &rarr;</button>'
         "  </div>"
+        "</section>"
+    )
+
+
+def _run_diagnostic(results: Results) -> str:
+    if results.run.error is None:
+        return ""
+    error = results.run.error
+    return (
+        '<section class="callout callout-error run-diagnostic" aria-label="Run diagnostic">'
+        "<h2>Action required</h2>"
+        f"<p>{_escape(error.message)}</p>"
+        f"<p>💡 <strong>Fix:</strong> {_escape(error.fix)}</p>"
         "</section>"
     )
 
