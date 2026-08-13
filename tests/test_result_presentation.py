@@ -5,7 +5,7 @@ import pytest
 
 from graphcheck.cli import _print_run_summary
 from graphcheck.reporting.html import render_html_report
-from graphcheck.reporting.presentation import present_results
+from graphcheck.reporting.presentation import present_check, present_results
 from graphcheck.reporting.writer import load_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
@@ -78,7 +78,13 @@ def test_result_language_is_shared_by_cli_and_html(
     assert presentation.result_sentence == expected
     assert presentation.fully_clean is fully_clean
     assert presentation.coverage_sentence == coverage
-    assert f"Result: {expected}" in stdout
+    cli_expected = (
+        f"{presentation.primary_sentence} Coverage is incomplete due to the following check(s) "
+        "which have not been evaluated:"
+        if results.totals.skipped
+        else expected
+    )
+    assert f"Result: {cli_expected}" in stdout
     assert "Coverage:" not in stdout
     assert presentation.primary_sentence in html
     if presentation.coverage_incomplete:
@@ -125,3 +131,56 @@ def test_clean_report_has_no_broader_health_claim_or_finding_card():
     assert 'class="check-card check-errored"' not in html
     assert "All clear" not in html
     assert "🎉" not in html
+
+
+@pytest.mark.parametrize(
+    ("reason", "label", "explanation"),
+    [
+        ("generated", "Generated", "Generated check awaiting review or approval."),
+        ("unsupported", "Unsupported", "A capability required by this check was unavailable."),
+        ("not_run", "Not run", "The run ended before this check started."),
+    ],
+)
+def test_check_presentation_owns_skip_reason_language(reason, label, explanation):
+    raw = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))
+    raw["checks"][0]["skip_reason"] = reason
+    if reason != "generated":
+        raw["run"].update(status="partial", partial_reason="coverage unavailable")
+
+    presentation = present_check(load_results(raw).checks[0])
+
+    assert presentation.verdict == "skipped"
+    assert presentation.verdict_label == "Skipped"
+    assert presentation.evaluated is False
+    assert presentation.evaluation_label == "Not evaluated"
+    assert presentation.skip_reason is not None
+    assert (presentation.skip_reason.code, presentation.skip_reason.label) == (reason, label)
+    assert presentation.skip_reason.explanation == explanation
+
+
+def test_cli_lists_only_skipped_checks_with_stored_reason_codes(capsys):
+    raw = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))
+    checks = []
+    for reason in ("generated", "unsupported", "not_run"):
+        check = raw["checks"][0].copy()
+        check.update(id=f"{reason}-check", skip_reason=reason)
+        checks.append(check)
+    raw["checks"] = checks
+    raw["run"].update(status="partial", partial_reason="coverage unavailable")
+    raw["totals"].update(checks=3, skipped=3)
+    raw["suites"][0]["totals"].update(checks=3, skipped=3)
+
+    _print_run_summary(load_results(raw), Path("results.json"), Path("report.html"))
+    stdout = capsys.readouterr().out
+
+    normalized = " ".join(stdout.split())
+    assert "Not evaluated:" not in stdout
+    assert "Suite" in stdout and "Check" in stdout and "Reason" in stdout
+    for reason, explanation in (
+        ("generated", "Generated check awaiting review or approval."),
+        ("unsupported", "A capability required by this check was unavailable."),
+        ("not_run", "The run ended before this check started."),
+    ):
+        assert f"{reason}-check" in stdout
+        assert f"{reason}:" in normalized
+        assert all(word in normalized for word in explanation.split())

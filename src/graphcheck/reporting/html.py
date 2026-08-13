@@ -8,7 +8,7 @@ from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, RunStatus, Verdict
 from graphcheck.reporting.history import display_run_status
-from graphcheck.reporting.presentation import ResultPresentation, present_results
+from graphcheck.reporting.presentation import ResultPresentation, present_check, present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
@@ -211,7 +211,8 @@ def _run_title(results: Results) -> str:
         )
         action = (
             '<button id="run-summary-toggle" class="header-status-action" type="button" '
-            'aria-expanded="false" aria-controls="summary-table-container">See more.</button>'
+            'data-action="summary" aria-expanded="false" '
+            'aria-controls="summary-table-container">See more.</button>'
         )
     else:
         kind = "warning" if total_issues > 0 else "complete"
@@ -220,7 +221,8 @@ def _run_title(results: Results) -> str:
         if total_issues > 0:
             action = (
                 '<button id="run-summary-toggle" class="header-status-action" type="button" '
-                'aria-expanded="false" aria-controls="summary-table-container">See issues.</button>'
+                'data-action="issues" aria-expanded="false" '
+                'aria-controls="checks-panel">See issues.</button>'
             )
 
     return (
@@ -533,6 +535,7 @@ def _checks(checks: list[CheckResult]) -> str:
         '      <input type="text" id="search-input" placeholder="🔍 Search checks...">'
         '      <div class="filter-group">'
         '        <button class="filter-btn active" data-filter="all" aria-pressed="true">All</button>'
+        '        <button class="filter-btn" data-filter="issues" aria-pressed="false">Issues</button>'
         '        <button class="filter-btn" data-filter="fail" aria-pressed="false">Fail</button>'
         '        <button class="filter-btn" data-filter="warn" aria-pressed="false">Warn</button>'
         '        <button class="filter-btn" data-filter="errored" aria-pressed="false">Errored</button>'
@@ -550,16 +553,27 @@ def _checks(checks: list[CheckResult]) -> str:
 
 
 def _check(check: CheckResult) -> str:
-    verdict_str = check.verdict.value.lower()
+    presentation = present_check(check)
+    verdict_str = presentation.verdict
     classes = f"check-card check-{verdict_str}"
     suite_id_esc = _escape(check.suite_id)
     check_id_esc = _escape(check.id)
     key_esc = f"{suite_id_esc}::{check_id_esc}"
 
     details = [
-        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code></p>',
+        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code> · '
+        f"Severity: <code>{_escape(check.severity.value)}</code></p>",
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
     ]
+    reason_html = ""
+    if presentation.skip_reason is not None:
+        reason = presentation.skip_reason
+        reason_html = (
+            '<div class="callout callout-skipped skip-reason">'
+            f"<strong>{_escape(reason.label)}</strong><p>{_escape(reason.explanation)}</p>"
+            f'<p class="reason-code">Reason code: <code>{_escape(reason.code)}</code></p>'
+            "</div>"
+        )
     if check.measured is not None:
         details.append(
             f"<p><strong>Measured:</strong> <code>{_escape(_json(check.measured))}</code></p>"
@@ -587,12 +601,15 @@ def _check(check: CheckResult) -> str:
         f'<article class="{classes}" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
         f'data-suite-id="{suite_id_esc}" data-check-id="{check_id_esc}">'
         '<div class="check-title-row">'
-        f'<span class="badge badge-{verdict_str}">{_escape(check.verdict.value)}</span>'
+        f'<span class="badge badge-{verdict_str}">{_escape(presentation.verdict_label)}</span>'
         f"<h3>{_escape(check.name)}</h3>"
         f'<code class="check-id">{key_esc}</code>'
         "</div>"
+        f'<p class="evaluation-state evaluation-state-{"evaluated" if presentation.evaluated else "not-evaluated"}">'
+        f"{_escape(presentation.evaluation_label)}</p>"
+        f"{reason_html}"
         f'<details {_details_open(check)} class="check-details">'
-        "<summary>View Details & Evidence</summary>"
+        "<summary>View details</summary>"
         f'<div class="details-content">{"".join(details)}</div>'
         "</details>"
         "</article>"
@@ -741,7 +758,7 @@ body {
 .navbar h1 { margin: 0; font-weight: 400; }
 .navbar h1, .panel-section h2 { font-size: 18px; }
 .header-status { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.header-status-message { font-weight: 400; }
+.header-status-message { font-size: 18px; font-weight: 400; }
 .status-pill { padding: 2px 7px; border-radius: 999px; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: 0.06em; }
 .status-pill-complete { background: var(--pass-color); }
 .status-pill-warning { background: var(--warn-color); color: #422006; }
@@ -1271,6 +1288,8 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .check-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .check-title-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
 .check-id { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+.evaluation-state { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.evaluation-state-not-evaluated { color: var(--skipped-color); }
 
 .check-details { margin-top: 8px; font-size: 13px; }
 .check-details summary { cursor: pointer; font-weight: 600; color: #000000; font-size: 13px; }
@@ -1291,6 +1310,9 @@ p.text-muted { margin-top: 0; }
 .meta-sub { font-size: 12px; color: var(--text-muted); }
 .callout { padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
 .callout-error { background: var(--fail-bg); border: 1px solid rgba(239, 68, 68, 0.3); }
+.callout-skipped { background: var(--bg-subtle); border: 1px solid var(--skipped-color); }
+.callout p { margin: 4px 0 0; }
+.reason-code { color: var(--text-muted); }
 .kind-tag { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; font-size: 11px; }
 
 @media (max-width: 1024px) {
@@ -1763,6 +1785,12 @@ function setVerdictFilter(verdict, btn) {
   filterChecks();
 }
 
+function matchesVerdictFilter(verdict) {
+  return activeVerdictFilter === 'all'
+    || verdict === activeVerdictFilter
+    || (activeVerdictFilter === 'issues' && ['fail', 'warn', 'errored'].includes(verdict));
+}
+
 function filterChecks() {
   const query = document.getElementById('search-input').value.toLowerCase();
   const cards = document.querySelectorAll('.check-card');
@@ -1772,7 +1800,7 @@ function filterChecks() {
     const verdict = card.getAttribute('data-verdict');
     const text = card.textContent.toLowerCase();
 
-    const matchesVerdict = (activeVerdictFilter === 'all' || verdict === activeVerdictFilter);
+    const matchesVerdict = matchesVerdictFilter(verdict);
     const matchesSearch = !query || text.includes(query);
 
     const matches = matchesVerdict && matchesSearch;
@@ -1782,6 +1810,7 @@ function filterChecks() {
   const empty = document.getElementById('checks-empty-message');
   if (empty) {
     const categoryMessages = {
+      issues: 'No checks with findings or execution errors.',
       fail: 'No checks failed.',
       warn: 'No checks with warnings.',
       errored: 'No checks with errors.',
@@ -1789,7 +1818,7 @@ function filterChecks() {
       skipped: 'No checks skipped.',
     };
     const categoryHasChecks = Array.from(cards).some(
-      card => activeVerdictFilter === 'all' || card.dataset.verdict === activeVerdictFilter
+      card => matchesVerdictFilter(card.dataset.verdict)
     );
     empty.textContent = !categoryHasChecks
       ? (categoryMessages[activeVerdictFilter] || 'No checks to explore.')
@@ -1905,6 +1934,21 @@ function showIssueSummary() {
   container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function showIssues() {
+  showChecksExplorer();
+  document.getElementById('run-summary-toggle')?.setAttribute('aria-expanded', 'true');
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) searchInput.value = '';
+  const issuesButton = document.querySelector('.filter-btn[data-filter="issues"]');
+  if (issuesButton) setVerdictFilter('issues', issuesButton);
+  document.getElementById('checks-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function handleRunSummaryAction(event) {
+  if (event.currentTarget.dataset.action === 'issues') showIssues();
+  else showIssueSummary();
+}
+
 function sortTable(columnIndex) {
   const table = document.getElementById('summary-table');
   if (!table) return;
@@ -1975,7 +2019,7 @@ function navigateToCheck(suiteId, checkId) {
 function initReportSpecificInteractions() {
   document.getElementById('troubleshoot-btn')?.addEventListener('click', openTroubleshootingDialog);
   document.getElementById('close-troubleshooting-btn')?.addEventListener('click', closeTroubleshootingDialog);
-  document.getElementById('run-summary-toggle')?.addEventListener('click', showIssueSummary);
+  document.getElementById('run-summary-toggle')?.addEventListener('click', handleRunSummaryAction);
   document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
   document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);

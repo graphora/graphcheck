@@ -1837,6 +1837,10 @@ def _progress_template(check_name: str) -> str:
     return "%(label)s  [%(bar)s]  %(info)s Complete | Checking: " + check_name.replace("%", "%%")
 
 
+_PROGRESS_FILL_CHAR = "━"
+_PROGRESS_EMPTY_CHAR = "─"
+
+
 @contextmanager
 def _run_progress(
     total_checks: int,
@@ -1856,8 +1860,8 @@ def _run_progress(
         show_eta=False,
         show_percent=True,
         show_pos=True,
-        fill_char=typer.style("=", fg=typer.colors.GREEN),
-        empty_char=typer.style("-", fg=typer.colors.BRIGHT_BLACK),
+        fill_char=typer.style(_PROGRESS_FILL_CHAR, fg=typer.colors.GREEN),
+        empty_char=typer.style(_PROGRESS_EMPTY_CHAR, fg=typer.colors.BRIGHT_BLACK),
         width=28,
         color=True,
         bar_template=_progress_template(state["check"]),
@@ -2028,6 +2032,15 @@ def _run_status_color(status: str) -> str:
     }.get(status, typer.colors.WHITE)
 
 
+def _exit_code_color(exit_code: int) -> str:
+    return {
+        0: typer.colors.GREEN,
+        1: typer.colors.RED,
+        2: typer.colors.YELLOW,
+        3: typer.colors.RED,
+    }.get(exit_code, typer.colors.WHITE)
+
+
 def _check_summary(totals) -> str:
     values = (
         ("passed", totals.passed, typer.colors.GREEN),
@@ -2061,19 +2074,25 @@ def _suite_score_style(score: int | None) -> str:
     return "yellow" if score >= 50 else "red"
 
 
-def _suite_score_table(results: "Results"):
-    from rich.box import Box
+def _summary_table():
+    from rich import box
     from rich.table import Table
-    from rich.text import Text
 
-    table = Table(
-        box=Box("    \n    \n -- \n    \n    \n    \n    \n    \n", ascii=True),
+    return Table(
+        box=box.SIMPLE_HEAD,
+        safe_box=False,
         show_edge=False,
         show_lines=False,
         pad_edge=False,
         collapse_padding=True,
         header_style="bold white",
     )
+
+
+def _suite_score_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
     table.add_column("Suite", no_wrap=True)
     table.add_column("Score", justify="right", no_wrap=True)
     table.add_column("Check Coverage", justify="right", no_wrap=True)
@@ -2109,10 +2128,15 @@ def _print_suite_score_table(results: "Results") -> None:
     Console(highlight=False).print(_suite_score_table(results))
 
 
-def _result_text(presentation):
+def _result_text(presentation, *, has_not_evaluated: bool = False):
     from rich.text import Text
 
     text = Text(presentation.primary_sentence)
+    if has_not_evaluated:
+        text.append(
+            " Coverage is incomplete due to the following check(s) which have not been evaluated:"
+        )
+        return text
     if not presentation.coverage_incomplete:
         return text
     text.append(" Coverage is incomplete.")
@@ -2128,11 +2152,50 @@ def _result_text(presentation):
     return text
 
 
-def _print_result(presentation) -> None:
+def _print_result(presentation, *, has_not_evaluated: bool = False) -> None:
     from rich.console import Console
     from rich.text import Text
 
-    Console(highlight=False).print(Text("Result: ") + _result_text(presentation), soft_wrap=True)
+    Console(highlight=False).print(
+        Text("Result: ") + _result_text(presentation, has_not_evaluated=has_not_evaluated),
+        soft_wrap=True,
+    )
+
+
+def _not_evaluated_table(results: "Results"):
+    from rich.text import Text
+
+    from graphcheck.reporting.presentation import present_check
+
+    table = _summary_table()
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    skipped = sorted(
+        (check for check in results.checks if not check.executed),
+        key=lambda check: (check.suite_id, check.id),
+    )
+    for check in skipped:
+        reason = present_check(check).skip_reason
+        assert reason is not None
+        name = Text(check.name, style="italic")
+        name.append(f" ({check.id})", style="dim")
+        table.add_row(
+            Text(check.suite_id, style="italic"),
+            name,
+            f"{reason.code}: {reason.explanation}",
+        )
+    return table
+
+
+def _print_not_evaluated(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.skipped:
+        return
+    typer.echo()
+    Console(highlight=False).print(_not_evaluated_table(results))
+    typer.echo()
 
 
 def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
@@ -2153,10 +2216,15 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
         typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
         typer.echo(f"Score: {score}")
     typer.echo()
-    _print_result(presentation)
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
+    _print_result(presentation, has_not_evaluated=bool(totals.skipped))
+    _print_not_evaluated(results)
     if results.run.error is not None:
         _print_setup_error(results.run.error)
     typer.echo(f"Results and Report saved to: {results_path.parent}")
-    typer.echo(f"Exit code: {results.run.exit_code}")
+    typer.secho(
+        f"Exit code: {results.run.exit_code}",
+        fg=_exit_code_color(results.run.exit_code),
+        bold=True,
+    )

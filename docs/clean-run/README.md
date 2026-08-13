@@ -158,6 +158,34 @@ Implemented on 2026-08-13:
   runs;
 - updated SPEC-06 to document the shared terminology and acceptance matrix.
 
+### CR-2 — Complete selected-check ledger
+
+Implemented on 2026-08-13:
+
+- extended the shared immutable reporting projection with human verdict labels,
+  evaluated/not-evaluated state, and the canonical labels and generic explanations for all three
+  persisted skip reasons;
+- made every HTML check card show its stable suite/check identity, verdict, evaluation state,
+  pattern, severity, expected value, and every available measured value, estimate, compiled query,
+  evidence record, or structured execution error;
+- added a prominent skipped-check reason block with the raw `generated`, `unsupported`, or
+  `not_run` code, while keeping non-skipped cards free of skip-reason language;
+- renamed the card disclosure to `View details` and added the `Issues` union filter for fail, warn,
+  and errored checks, including its precise empty state and the same visual treatment as `All`;
+- changed the navbar `See issues` action to open the Checks Explorer with the Issues filter active,
+  without interpolating check identities into JavaScript or CSS selectors;
+- aligned the header lifecycle-status message with the 18px section-heading type scale while
+  retaining the compact 10px status pill;
+- added a concise borderless CLI table for unevaluated checks, with italicized Suite and Check name
+  plus stable id, and Reason columns containing persisted codes and shared generic explanations;
+- separated that table from the artifact line with a blank line and added semantic color to the
+  final exit-code line;
+- replaced ASCII table-header and progress-bar characters with continuous Unicode line glyphs;
+- preserved failures-only diagnostic reports as exact fail/warn/errored ledgers and added fixture,
+  renderer, shared-presentation, and end-to-end CLI acceptance coverage;
+- updated SPEC-06 to document the complete ledger, skip-reason presentation, Issues filter, and
+  CLI boundary.
+
 ### CR-3 — Target information in the run-report header
 
 Implemented on 2026-08-13:

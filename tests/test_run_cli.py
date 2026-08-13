@@ -5,13 +5,16 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
 from graphcheck import cli as cli_module
 from graphcheck.cli import (
     _check_summary,
+    _exit_code_color,
     _load_suite_inputs,
+    _not_evaluated_table,
     _result_text,
     _suite_score_style,
     _suite_score_table,
@@ -280,6 +283,67 @@ competency:
     assert client.closed is True
 
 
+def test_run_lists_generated_check_as_not_evaluated_without_repeating_passes(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "generated.yml": """\
+suite: generated-suite
+generated: true
+competency:
+  - id: draft-check
+    question: Does the draft return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    normalized = " ".join(result.stdout.split())
+    assert "Not evaluated:" not in result.stdout
+    assert "Suite" in result.stdout and "Check" in result.stdout and "Reason" in result.stdout
+    assert "draft-check" in result.stdout
+    assert "generated:" in normalized
+    assert "draft-check — pass" not in result.stdout
+    lines = result.stdout.splitlines()
+    artifacts_line = next(i for i, line in enumerate(lines) if "Results and Report saved" in line)
+    assert lines[artifacts_line - 1] == ""
+    assert client.read_calls == []
+
+
+def test_not_evaluated_table_italicizes_check_names():
+    results = load_results(FIXTURES / "results.generated-only.json")
+    output = StringIO()
+    table = _not_evaluated_table(results)
+
+    Console(file=output, force_terminal=True, color_system="standard", width=180).print(table)
+
+    rendered = output.getvalue()
+    assert "Suite" in rendered and "Check" in rendered and "Reason" in rendered
+    assert "\x1b[3mcustomer-360\x1b[0m" in rendered
+    assert "\x1b[3mdraft competency check awaiting approval\x1b[0m" in rendered
+    assert "cq-draft" in rendered
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "color"),
+    [
+        (0, typer.colors.GREEN),
+        (1, typer.colors.RED),
+        (2, typer.colors.YELLOW),
+        (3, typer.colors.RED),
+    ],
+)
+def test_exit_code_uses_semantic_color(exit_code, color):
+    assert _exit_code_color(exit_code) == color
+
+
 def test_run_prints_aligned_multi_suite_score_table(tmp_path, monkeypatch):
     _project(
         tmp_path,
@@ -346,9 +410,8 @@ competency:
     assert "┼" not in result.stdout
     assert "+" not in result.stdout
     assert "|" not in result.stdout
-    assert (
-        sum(bool(line) and set(line) in ({"─"}, {"-"}) for line in result.stdout.splitlines()) == 1
-    )
+    assert sum(bool(line) and set(line) == {"─"} for line in result.stdout.splitlines()) == 1
+    assert not any(bool(line) and set(line) == {"-"} for line in result.stdout.splitlines())
     assert result.stdout.count("1/1") == 2
     assert "Overall:" not in result.stdout
     assert "Checks: 2" not in result.stdout
@@ -550,6 +613,11 @@ def test_run_elapsed_clock_uses_minutes_and_seconds(monkeypatch):
 
 def test_run_progress_template_escapes_percent_signs():
     assert cli_module._progress_template("suite/check%name").endswith("suite/check%%name")
+
+
+def test_run_progress_uses_continuous_line_glyphs():
+    assert cli_module._PROGRESS_FILL_CHAR == "━"
+    assert cli_module._PROGRESS_EMPTY_CHAR == "─"
 
 
 def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(

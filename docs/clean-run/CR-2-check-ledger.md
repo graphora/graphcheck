@@ -80,14 +80,18 @@ finding.
 
 ## CLI behavior
 
-Do not repeat all passing checks after the progress display. After the CR-1 Result and Coverage
-lines, print a `Not evaluated:` block only when skips exist:
+Do not repeat all passing checks after the progress display. When skips exist, end the Result line
+with `Coverage is incomplete due to the following check(s) which have not been evaluated:` and
+follow it with the same borderless table style as the score breakdown:
 
 ```text
-Not evaluated:
-  customer-360/draft-check — generated: Generated check awaiting review or approval.
-  core/dangling — unsupported: A capability required by this check was unavailable.
+Suite          Check                              Reason
+customer-360   Draft check (draft-check)          generated: Generated check awaiting review or approval.
+core           Dangling relationship (dangling)   unsupported: A capability required by this check was unavailable.
 ```
+
+The suite and check's human name are italicized, and the stable check id remains visible in
+parentheses. A blank line separates the table from the artifact path.
 
 This is deliberately narrower than the HTML ledger. The CLI remains a concise run summary; the
 artifact remains the complete audit surface.
@@ -101,7 +105,7 @@ artifact remains the complete audit surface.
 - Change the navbar `See issues` action to open **Checks Explorer & Next Steps** on the Checks tab
   with the Issues filter active.
 - Keep suite marker navigation opening the exact matching check card.
-- Extend the final CLI summary with the conditional skipped-check block.
+- Extend the final CLI summary with the conditional skipped-check table.
 - Update the renderer's filtered diagnostic path so `--failures-only` still contains exactly
   `fail`, `warn`, and `errored` cards.
 - Update SPEC-06 and existing report tests that refer to issue-summary navigation.
@@ -128,7 +132,7 @@ not show a skip reason. Tests cover all three enum values.
 ### CR-2.D — CLI concision
 
 The clean CLI run contains no final per-check pass listing. A run containing skips prints exactly
-the skipped check identities and stored reason codes after the coverage summary.
+the skipped checks and stored reason codes in the table after the coverage summary.
 
 ### CR-2.E — Issue navigation
 

@@ -147,6 +147,12 @@ The report shows:
 - a colored status marker for every rendered check,
 - an issue summary containing `fail`, `warn`, and `errored` checks; intentional
   `skipped` checks are not issues,
+- a lossless check ledger containing every selected `results.checks` identity exactly once, with
+  the persisted verdict, `Evaluated`/`Not evaluated` state, pattern, severity, expected value, and
+  all available measurement, estimate, query, evidence, or structured-error detail,
+- a visible reason block on every skipped card using the stable `generated`, `unsupported`, or
+  `not_run` code and its generic shared explanation; the renderer does not infer a more specific
+  cause from run-level context,
 - checks sorted failures-first,
 - report-history timestamps converted from stored UTC to the browser's local timezone and shown as
   `yyyy-mm-dd at hh:mm:ss`,
@@ -161,8 +167,8 @@ derive recommendations from inventory. It never reconstructs labels or relations
 fingerprint, checks, evidence, or baseline data.
 
 The embedded script reveals the checks explorer, navigates from suite status
-markers to checks, filters checks by verdict or search text, states when the selected verdict
-category is empty, sorts the issue
+markers to checks, filters checks by verdict or search text, provides an `Issues` union filter for
+`fail`, `warn`, and `errored`, states when the selected verdict category is empty, sorts the issue
 summary, toggles check details, and switches the inline CSS theme. Event handlers
 are registered with `addEventListener`; check identities are read from escaped
 data attributes and matched directly rather than interpolated into JavaScript or
@@ -192,6 +198,13 @@ then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 
 Its final summary prints the shared result sentence without a separate aggregate coverage line.
+When checks were skipped, the Result line introduces a concise borderless table with Suite, Check,
+and Reason columns. Suite names and the Check cell's human name are italicized, the stable check id
+remains visible, and Reason contains the persisted code and shared generic explanation. A blank
+line separates the table from the artifact path. Passing checks are not repeated after the
+progress display. The final exit-code line uses green for 0, red for 1 and 3, and yellow for 2.
+Borderless table header rules use a continuous `─` line, and interactive progress uses a green `━`
+completed segment followed by a grey `─` remaining segment rather than ASCII equals and dashes.
 When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
 check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
 passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
@@ -365,6 +378,10 @@ The tests assert:
 - writer output validates against `results_schema()`,
 - malformed fail-without-evidence is rejected,
 - renderer output is self-contained,
+- rendered check-card identities and verdicts match the selected checks exactly for clean,
+  findings, partial, and generated-only fixtures,
+- evaluated state and all three persisted skip reasons render with shared human language,
+- the `Issues` filter and `See issues` action target fail, warn, and errored cards only,
 - failures render before warnings and passes,
 - compiled Cypher is visible,
 - evidence IDs are visible,

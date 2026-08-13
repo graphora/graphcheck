@@ -1,6 +1,8 @@
 import json
+from collections import Counter
 from copy import deepcopy
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 
 import jsonschema
@@ -20,6 +22,34 @@ FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
 
 def _fixture(name: str) -> Path:
     return FIXTURES / f"results.{name}.json"
+
+
+class _CheckCardParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.cards = []
+        self._card = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "article" and "check-card" in attributes.get("class", "").split():
+            self._card = {"attrs": attributes, "text": []}
+
+    def handle_data(self, data):
+        if self._card is not None:
+            self._card["text"].append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "article" and self._card is not None:
+            self._card["text"] = " ".join("".join(self._card["text"]).split())
+            self.cards.append(self._card)
+            self._card = None
+
+
+def _check_cards(rendered: str):
+    parser = _CheckCardParser()
+    parser.feed(rendered)
+    return parser.cards
 
 
 @pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
@@ -105,6 +135,52 @@ def test_html_renderer_orders_failures_before_passes():
     assert fail_pos < warn_pos < pass_pos
 
 
+@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only"])
+def test_html_check_ledger_matches_selected_checks_exactly(name):
+    results = load_results(_fixture(name))
+    cards = _check_cards(render_html_report(results))
+
+    assert Counter(
+        (card["attrs"]["data-suite-id"], card["attrs"]["data-check-id"]) for card in cards
+    ) == Counter((check.suite_id, check.id) for check in results.checks)
+    expected = {(check.suite_id, check.id): check for check in results.checks}
+    for card in cards:
+        attrs, text = card["attrs"], card["text"]
+        check = expected[(attrs["data-suite-id"], attrs["data-check-id"])]
+        assert attrs["data-verdict"] == check.verdict.value
+        assert ("Evaluated" if check.executed else "Not evaluated") in text
+        assert f"Pattern: {check.pattern.value}" in text
+        assert f"Severity: {check.severity.value}" in text
+
+
+@pytest.mark.parametrize(
+    ("reason", "label", "explanation"),
+    [
+        ("generated", "Generated", "Generated check awaiting review or approval."),
+        ("unsupported", "Unsupported", "A capability required by this check was unavailable."),
+        ("not_run", "Not run", "The run ended before this check started."),
+    ],
+)
+def test_html_skipped_cards_show_stable_reason_and_generic_explanation(reason, label, explanation):
+    raw = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
+    raw["checks"][0]["skip_reason"] = reason
+    if reason != "generated":
+        raw["run"].update(status="partial", partial_reason="coverage unavailable")
+    card = _check_cards(render_html_report(raw))[0]
+
+    assert label in card["text"]
+    assert explanation in card["text"]
+    assert f"Reason code: {reason}" in card["text"]
+    assert "View details" in card["text"]
+    assert "View Details & Evidence" not in card["text"]
+
+
+def test_html_non_skipped_cards_do_not_show_skip_reasons():
+    cards = _check_cards(render_html_report(_fixture("clean")))
+
+    assert all("Reason code:" not in card["text"] for card in cards)
+
+
 def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     html = render_html_report(_fixture("complete"))
 
@@ -113,7 +189,8 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert '<span class="status-pill status-pill-warning">COMPLETE</span>' in html
     assert "<strong>Run Complete.</strong>" in html
     assert '<span class="header-status-message">1 failure and 1 warning.</span>' in html
-    assert 'aria-controls="summary-table-container">See issues.</button>' in html
+    assert 'aria-controls="checks-panel">See issues.</button>' in html
+    assert 'data-action="issues"' in html
     assert "localStorage.setItem(" in html
     assert "restoreCheckFilters();" in html
     assert "<dt>Target Graph</dt><dd><strong>neo4j</strong>" in html
@@ -152,7 +229,7 @@ def test_html_renderer_reports_partial_coverage():
         "<em>customer-360</em>.</span>" in html
     )
     assert 'aria-controls="summary-table-container">See more.</button>' in html
-    assert "run-summary-toggle')?.addEventListener('click', showIssueSummary)" in html
+    assert "run-summary-toggle')?.addEventListener('click', handleRunSummaryAction)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
     assert '<span class="badge badge-skipped">1 SKIPPED</span>' in html
     assert 'class="status-box status-box-skipped"' in html
@@ -380,6 +457,11 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
         '<span class="badge badge-score">SCORE: 23</span></div>'
     ) in html
     assert " FAILED</span>" not in html
+    errored_cards = [
+        card for card in _check_cards(html) if card["attrs"]["data-verdict"] == "errored"
+    ]
+    assert len(errored_cards) == 3
+    assert all("Errored" in card["text"] and "Evaluated" in card["text"] for card in errored_cards)
 
 
 def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
@@ -406,7 +488,7 @@ def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
 def test_html_renderer_exposes_cypher_and_evidence_ids():
     html = render_html_report(_fixture("complete"))
 
-    assert "Severity:" not in html
+    assert "Severity:" in html
     assert "MATCH (c:Customer" in html
     assert "4:abc:12" in html
     assert "4:abc:88" in html
@@ -470,6 +552,12 @@ def test_html_renderer_keeps_target_labels_and_values_on_aligned_rows():
 def test_html_renderer_colors_the_active_verdict_filter():
     html = render_html_report(_fixture("complete"))
 
+    assert '.filter-btn.active[data-filter="issues"]' not in html
+    assert (
+        ".filter-btn.active { background: var(--bg-header); color: #fff; font-weight: 600; }"
+        in html
+    )
+    assert 'data-filter="issues" aria-pressed="false">Issues</button>' in html
     for verdict, color in (
         ("fail", "--fail-color"),
         ("warn", "--warn-color"),
@@ -485,6 +573,16 @@ def test_html_renderer_colors_the_active_verdict_filter():
     assert 'data-filter="all" aria-pressed="true"' in html
     assert "b.setAttribute('aria-pressed', 'false');" in html
     assert "btn.setAttribute('aria-pressed', 'true');" in html
+
+
+def test_see_issues_opens_checks_with_union_filter_and_precise_empty_state():
+    html = render_html_report(_fixture("complete"))
+
+    assert "function showIssues()" in html
+    assert "['fail', 'warn', 'errored'].includes(verdict)" in html
+    assert "setVerdictFilter('issues', issuesButton);" in html
+    assert "No checks with findings or execution errors." in html
+    assert "dataset.action === 'issues'" in html
 
 
 def test_html_renderer_displays_unreachable_neo4j_as_failed():
@@ -574,6 +672,13 @@ def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
     assert "Which accounts does a customer control" in html
     assert "Accounts are connected to a Customer" in html
     assert "Customer.tax_id is present" not in html
+    assert {
+        (card["attrs"]["data-suite-id"], card["attrs"]["data-check-id"])
+        for card in _check_cards(html)
+    } == {
+        ("customer-360", "cq-001"),
+        ("customer-360", "account-no-orphans"),
+    }
 
 
 def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
@@ -627,6 +732,11 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     comparison_dialog_css = html[comparison_dialog_start : html.index("}", comparison_dialog_start)]
     assert "overflow: hidden;" in comparison_dialog_css
     assert ".navbar h1, .panel-section h2 { font-size: 18px; }" in html
+    assert ".header-status-message { font-size: 18px; font-weight: 400; }" in html
+    assert (
+        ".status-pill { padding: 2px 7px; border-radius: 999px; color: #fff; font-size: 10px;"
+        in html
+    )
     assert "opacity: 1;" in html
     assert "function clearReportSelection()" in html
     assert "function compareMostRecentReports()" in html

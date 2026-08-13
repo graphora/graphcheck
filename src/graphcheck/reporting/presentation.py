@@ -4,7 +4,40 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from graphcheck.contracts.results import Results, RunStatus, Verdict
+from graphcheck.contracts.results import CheckResult, Results, RunStatus, SkipReason, Verdict
+
+
+@dataclass(frozen=True, slots=True)
+class SkipReasonPresentation:
+    code: str
+    label: str
+    explanation: str
+
+
+@dataclass(frozen=True, slots=True)
+class CheckPresentation:
+    verdict: str
+    verdict_label: str
+    evaluated: bool
+    evaluation_label: str
+    skip_reason: SkipReasonPresentation | None
+
+
+_VERDICT_LABELS = {
+    Verdict.PASS: "Pass",
+    Verdict.FAIL: "Fail",
+    Verdict.WARN: "Warn",
+    Verdict.ERRORED: "Errored",
+    Verdict.SKIPPED: "Skipped",
+}
+_SKIP_REASONS = {
+    SkipReason.GENERATED: ("Generated", "Generated check awaiting review or approval."),
+    SkipReason.UNSUPPORTED: (
+        "Unsupported",
+        "A capability required by this check was unavailable.",
+    ),
+    SkipReason.NOT_RUN: ("Not run", "The run ended before this check started."),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +70,22 @@ class ResultPresentation:
         return (
             f"{self.primary_sentence} Coverage is incomplete due to skipped check(s) from {suites}."
         )
+
+
+def present_check(check: CheckResult) -> CheckPresentation:
+    """Project a validated check into shared verdict and evaluation language."""
+
+    skip_reason = None
+    if check.skip_reason is not None:
+        label, explanation = _SKIP_REASONS[check.skip_reason]
+        skip_reason = SkipReasonPresentation(check.skip_reason.value, label, explanation)
+    return CheckPresentation(
+        verdict=check.verdict.value,
+        verdict_label=_VERDICT_LABELS[check.verdict],
+        evaluated=check.executed,
+        evaluation_label="Evaluated" if check.executed else "Not evaluated",
+        skip_reason=skip_reason,
+    )
 
 
 def present_results(results: Results) -> ResultPresentation:
