@@ -1619,7 +1619,8 @@ def run_command(
         _, selected_profile = select_profile(profiles, profile)
         max_concurrency = concurrency or int(config.concurrency)
         client = _new_neo4j_client(selected_profile, max_concurrency)
-        _verify_cli_audit_credential(client)
+        target = _probe_and_verify_cli_audit_credential(client)
+        _print_run_target(target)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
@@ -1792,13 +1793,26 @@ def _new_neo4j_client(profile, max_concurrency: int):
     )
 
 
-def _verify_cli_audit_credential(client: object) -> None:
+def _probe_and_verify_cli_audit_credential(client: object):
     verify = getattr(client, "verify_read_only_credential", None)
     probe = getattr(client, "probe", None)
+    result = probe() if callable(probe) else None
     if callable(verify):
-        if callable(probe):
-            probe()
         verify()
+    target = result[0] if isinstance(result, tuple) else result
+    if isinstance(result, tuple) and len(result) > 2 and target is not None:
+        counts = result[2]
+        copy = getattr(target, "model_copy", None)
+        if callable(copy):
+            target = copy(
+                update={
+                    "nodes": getattr(counts, "nodes", getattr(target, "nodes", None)),
+                    "relationships": getattr(
+                        counts, "relationships", getattr(target, "relationships", None)
+                    ),
+                }
+            )
+    return target
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
@@ -2023,45 +2037,126 @@ def _check_summary(totals) -> str:
         ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
     )
     return "".join(
-        f" | {typer.style(f'{label} {value}', fg=color)}" for label, value, color in values
+        f" | {label} {typer.style(str(value), fg=color) if value else value}"
+        for label, value, color in values
     )
+
+
+def _print_run_target(target) -> None:
+    if target is None:
+        return
+    nodes = "unavailable" if target.nodes is None else f"{target.nodes:,}"
+    relationships = "unavailable" if target.relationships is None else f"{target.relationships:,}"
+    typer.echo(
+        f"Target: {target.database} · Neo4j {target.server_version} {target.edition} · "
+        f"{nodes} nodes · {relationships} relationships"
+    )
+
+
+def _suite_score_style(score: int | None) -> str:
+    if score is None:
+        return "white"
+    if score == 100:
+        return "green"
+    return "yellow" if score >= 50 else "red"
+
+
+def _suite_score_table(results: "Results"):
+    from rich.box import Box
+    from rich.table import Table
+    from rich.text import Text
+
+    table = Table(
+        box=Box("    \n    \n -- \n    \n    \n    \n    \n    \n", ascii=True),
+        show_edge=False,
+        show_lines=False,
+        pad_edge=False,
+        collapse_padding=True,
+        header_style="bold white",
+    )
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Score", justify="right", no_wrap=True)
+    table.add_column("Check Coverage", justify="right", no_wrap=True)
+    for heading in ("Passed", "Failed", "Warnings", "Errored", "Skipped"):
+        table.add_column(heading, justify="right", width=8, no_wrap=True)
+    state_colors = ("green", "red", "yellow", "magenta", "bright_black")
+    for suite in results.suites:
+        score = "n/a" if suite.score is None else f"{suite.score}/100"
+        counts = (
+            suite.totals.passed,
+            suite.totals.fail,
+            suite.totals.warn,
+            suite.totals.errored,
+            suite.totals.skipped,
+        )
+        table.add_row(
+            Text(suite.id, style="italic"),
+            Text(score, style=_suite_score_style(suite.score)),
+            f"{suite.totals.checks - suite.totals.skipped}/{suite.totals.checks}",
+            *(
+                Text(str(count), style=color) if count else Text("-")
+                for count, color in zip(counts, state_colors, strict=True)
+            ),
+        )
+    return table
+
+
+def _print_suite_score_table(results: "Results") -> None:
+    from rich.console import Console
+
+    typer.echo("Score breakdown by check suite:")
+    typer.echo()
+    Console(highlight=False).print(_suite_score_table(results))
+
+
+def _result_text(presentation):
+    from rich.text import Text
+
+    text = Text(presentation.primary_sentence)
+    if not presentation.coverage_incomplete:
+        return text
+    text.append(" Coverage is incomplete.")
+    if not presentation.skipped_suites:
+        return text
+    text = Text(presentation.primary_sentence)
+    text.append(" Coverage is incomplete due to skipped check(s) from ")
+    for index, suite in enumerate(presentation.skipped_suites):
+        if index:
+            text.append(", ")
+        text.append(suite, style="italic")
+    text.append(".")
+    return text
+
+
+def _print_result(presentation) -> None:
+    from rich.console import Console
+    from rich.text import Text
+
+    Console(highlight=False).print(Text("Result: ") + _result_text(presentation), soft_wrap=True)
 
 
 def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
     from graphcheck.reporting.history import display_run_status
+    from graphcheck.reporting.presentation import present_results
 
     totals = results.totals
+    presentation = present_results(results)
     score = "n/a" if results.score is None else str(results.score.value)
     status = display_run_status(results).value
     typer.echo(
         f"GraphCheck run {results.run.id}: "
         f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
     )
-    if results.run.target is not None:
-        nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
-        relationships = (
-            "unavailable"
-            if results.run.target.relationships is None
-            else str(results.run.target.relationships)
-        )
-        typer.echo(
-            f"Target graph: {results.run.target.database} | nodes {nodes} | "
-            f"relationships {relationships}"
-        )
     if len(results.suites) > 1:
-        for suite in results.suites:
-            suite_score = "n/a" if suite.score is None else str(suite.score)
-            typer.echo(
-                f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
-                f"{_check_summary(suite.totals).removeprefix(' | ')}"
-            )
-        typer.echo(f"Exit code: {results.run.exit_code}")
+        _print_suite_score_table(results)
     else:
         typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
-        typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
+        typer.echo(f"Score: {score}")
+    typer.echo()
+    _print_result(presentation)
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
     if results.run.error is not None:
         _print_setup_error(results.run.error)
-    typer.echo(f"Results: {results_path}")
-    typer.echo(f"Report: {report_path}")
+    typer.echo(f"Results and Report saved to: {results_path.parent}")
+    typer.echo(f"Exit code: {results.run.exit_code}")

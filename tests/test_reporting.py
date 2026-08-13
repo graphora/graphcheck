@@ -112,7 +112,7 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert "CHECKED ON" not in html
     assert '<span class="status-pill status-pill-warning">COMPLETE</span>' in html
     assert "<strong>Run Complete.</strong>" in html
-    assert '<span class="header-status-message">1 failure, 1 warning.</span>' in html
+    assert '<span class="header-status-message">1 failure and 1 warning.</span>' in html
     assert 'aria-controls="summary-table-container">See issues.</button>' in html
     assert "localStorage.setItem(" in html
     assert "restoreCheckFilters();" in html
@@ -146,7 +146,11 @@ def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
     assert "<strong>Partial Run.</strong>" in html
-    assert '<span class="header-status-message">No issues found.</span>' in html
+    assert (
+        '<span class="header-status-message">No failures in the 1 check evaluated. '
+        "Coverage is incomplete due to skipped check(s) from "
+        "<em>customer-360</em>.</span>" in html
+    )
     assert 'aria-controls="summary-table-container">See more.</button>' in html
     assert "run-summary-toggle')?.addEventListener('click', showIssueSummary)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
@@ -157,7 +161,10 @@ def test_html_renderer_reports_partial_coverage():
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert '<span class="badge badge-score">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
-    assert "No issues found in the checks that were evaluated." in html
+    assert (
+        "No failures in the 1 check evaluated. Coverage is incomplete due to skipped check(s) "
+        "from <em>customer-360</em>." in html
+    )
     assert "No checks failed." in html
     assert "No checks with warnings." in html
     assert "No checks with errors." in html
@@ -176,7 +183,7 @@ def test_html_renderer_reports_all_checks_skipped():
     ) in html
     assert '<span class="badge badge-score">SCORE: N/A</span>' in html
     assert "CHECKED ON" not in html
-    assert "No issues found (1 check skipped)" in html
+    assert '<span class="header-status-message">No checks were evaluated.</span>' in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
     assert "Check did not pass" not in html
@@ -202,8 +209,7 @@ def test_html_renderer_does_not_call_an_empty_selection_all_clear():
 
     html = render_html_report(raw)
 
-    assert "No checks evaluated" in html
-    assert "No checks were evaluated." in html
+    assert "No checks were selected or evaluated." in html
     assert "All clear! No issues found." not in html
 
 
@@ -223,13 +229,16 @@ def test_html_renderer_does_not_count_intentional_skips_as_issues():
 
     html = render_html_report(raw)
 
-    assert "No issues found (2 checks skipped)" in html
+    assert (
+        "No failures in the 1 check evaluated. Coverage is incomplete due to skipped check(s) "
+        "from <em>customer-360</em>." in html
+    )
     assert '<span class="exit-0">2 checks skipped</span>' not in html
     assert '<span class="suite-check-stats">1/3 checks run</span>' in html
     assert '<span class="badge badge-skipped">2 SKIPPED</span>' in html
     assert " FAILED</span>" not in html
     assert "Check did not pass" not in html
-    assert "All clear! No issues found." in html
+    assert "All clear" not in html
 
 
 def test_html_renderer_appends_skips_to_issue_status_text():
@@ -247,9 +256,22 @@ def test_html_renderer_appends_skips_to_issue_status_text():
     html = render_html_report(raw)
 
     assert (
-        '<span class="header-status-message">1 failure, 1 warning (2 checks skipped).</span>'
-        in html
+        '<span class="header-status-message">1 failure and 1 warning. '
+        "Coverage is incomplete due to skipped check(s) from "
+        "<em>customer-360</em>.</span>" in html
     )
+
+
+def test_html_renderer_escapes_skipped_suite_names_before_italicizing():
+    raw = json.loads(_fixture("partial").read_text(encoding="utf-8"))
+    raw["suites"][0]["id"] = "<unsafe-suite>"
+    for check in raw["checks"]:
+        check["suite_id"] = "<unsafe-suite>"
+
+    html = render_html_report(raw)
+
+    assert "<em>&lt;unsafe-suite&gt;</em>" in html
+    assert "<em><unsafe-suite></em>" not in html
 
 
 def test_html_renderer_distinguishes_empty_and_historical_inventory(tmp_path):
@@ -347,7 +369,10 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
     assert "<strong>Partial Run.</strong>" in html
-    assert '<span class="header-status-message">1 warning, 3 errors.</span>' in html
+    assert (
+        '<span class="header-status-message">1 warning and 3 execution errors. '
+        "Coverage is incomplete.</span>" in html
+    )
     assert (
         '<div class="suite-badges-row">'
         '<span class="badge badge-errored">3 ERRORED</span>'
@@ -423,7 +448,7 @@ def test_html_renderer_displays_failed_run_error():
     assert "Neo4j rejected the credentials" in html
     assert "Check the password in profiles.yml" in html
     assert "Target unavailable" in html
-    assert "Run failed before any checks could be evaluated." in html
+    assert "Run failed before checks could complete." in html
     assert "Action required" not in html
     assert "run-diagnostic" not in html
     assert "See fix" not in html

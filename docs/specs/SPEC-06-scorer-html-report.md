@@ -122,10 +122,12 @@ use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
 
 The report shows:
 
-- a navbar status summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
-  former banner color retained in a status pill; every machine-level failed run that stops before
-  checks begin displays as failed, interrupted/incomplete runs and runs containing errored checks
-  display as partial, while every other run displays as complete and retains its issue counts,
+- a navbar lifecycle summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
+  former banner color retained in a status pill, beside deterministic result language shared with
+  the CLI: fully evaluated all-pass runs say `No failures. All N selected checks passed.`, empty or
+  all-skipped runs say no checks were selected/evaluated, and incomplete clean runs state both the
+  evaluated count and incomplete coverage; failures, warnings, and execution errors retain their
+  exact stored counts and never use clean language,
 - a `Troubleshoot.` action for failed runs that opens an offline `Troubleshooting Steps` dialog with
   the full stored problem and remediation steps; the overview does not duplicate that diagnostic,
 - a concise header for `neo4j.credential_not_read_only` while its full privilege detail remains in
@@ -188,6 +190,16 @@ connect to Neo4j or create new run data.
 completed artifact below the correspondingly named `runs/<report-name>/` directory, and
 then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
+
+Its final summary prints the shared result sentence without a separate aggregate coverage line.
+When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
+check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
+passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
+and red for 0–49; outcome colors apply only to non-zero values while headers remain white. Target
+metadata appears before interactive progress. Suite names are italicized, and incomplete coverage
+names every suite containing a skipped check in sorted order. Results and report paths collapse to
+one saved-directory line, and blank lines separate the lifecycle, score, result/artifact, and exit
+code blocks.
 
 History operations load and validate each run's `results.json`, including the
 schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
@@ -374,9 +386,9 @@ The tests assert:
 - scorer results are invariant to input order and use exact half-even rounding,
 - per-suite calculations use the same locked weights as the overall score,
 - reports show each suite score as the rightmost badge in its status card,
-  distinguish errored checks from failed checks, derive run messaging from status
-  and issue totals, state when no checks were evaluated, exclude skipped checks
-  from the issue summary, and render failure-first issue details.
+  distinguish execution errors from graph findings, project the same result sentence in the CLI
+  and HTML for failed, empty-selection, all-skipped, findings, incomplete-clean, and fully clean
+  runs, exclude skipped checks from the issue summary, and render failure-first issue details.
 - new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
   probed empty arrays from historical not-recorded null, and never infer inventory from other
   report data.

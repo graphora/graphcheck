@@ -51,8 +51,8 @@
     }
   },
   "totals": {
-    "checks": 1,
-    "pass": 1,
+    "checks": 2,
+    "pass": 2,
     "fail": 0,
     "warn": 0,
     "errored": 0,
@@ -64,8 +64,8 @@
       "source_sha": "sha256:clean-suite",
       "score": 100,
       "totals": {
-        "checks": 1,
-        "pass": 1,
+        "checks": 2,
+        "pass": 2,
         "fail": 0,
         "warn": 0,
         "errored": 0,
@@ -86,6 +86,29 @@
       "started_at": "2026-07-06T09:00:00Z",
       "duration_ms": 61,
       "compiled_query": "MATCH (c:Customer) RETURN count(c) AS total, count(c.tax_id) AS present",
+      "params": {},
+      "measured": {
+        "coverage": 1.0
+      },
+      "expected": {
+        "threshold": 1.0
+      },
+      "estimate": false,
+      "evidence": null,
+      "error": null
+    },
+    {
+      "id": "account-id-present",
+      "suite_id": "customer-360",
+      "pattern": "conformance",
+      "name": "Account.id is present",
+      "provenance": null,
+      "severity": "warn",
+      "verdict": "pass",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:00:00Z",
+      "duration_ms": 42,
+      "compiled_query": "MATCH (a:Account) RETURN count(a) AS total, count(a.id) AS present",
       "params": {},
       "measured": {
         "coverage": 1.0

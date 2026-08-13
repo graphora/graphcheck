@@ -8,6 +8,7 @@ from typing import Any
 
 from graphcheck.contracts.results import CheckResult, Results, RunStatus, Verdict
 from graphcheck.reporting.history import display_run_status
+from graphcheck.reporting.presentation import ResultPresentation, present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 
 _VERDICT_ORDER = {
@@ -180,29 +181,8 @@ def _run_title(results: Results) -> str:
     version_info = (
         f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
     )
-    total_issues = results.totals.fail + results.totals.warn + results.totals.errored
-    executed = results.totals.checks - results.totals.skipped
-
-    if total_issues > 0:
-        issue_counts = [
-            (results.totals.fail, "failure", "failures"),
-            (results.totals.warn, "warning", "warnings"),
-            (results.totals.errored, "error", "errors"),
-        ]
-        status_text = ", ".join(
-            f"{count} {singular if count == 1 else plural}"
-            for count, singular, plural in issue_counts
-            if count > 0
-        )
-    elif results.totals.skipped == 0:
-        status_text = "No checks evaluated" if executed == 0 else "No issues found"
-    else:
-        status_text = "No issues found"
-
-    skipped_text = ""
-    if results.totals.skipped > 0:
-        check_str = "check" if results.totals.skipped == 1 else "checks"
-        skipped_text = f" ({results.totals.skipped} {check_str} skipped)"
+    presentation = present_results(results)
+    total_issues = presentation.findings + presentation.execution_errors
 
     action = ""
     troubleshooting = ""
@@ -213,14 +193,22 @@ def _run_title(results: Results) -> str:
             if status is RunStatus.FAILED
             else ("partial", "PARTIAL", "Partial Run.")
         )
-        message = _run_error_summary(results.run.error.code, results.run.error.message)
+        message = (
+            f"{_result_html(presentation)} "
+            f"{_escape(_run_error_summary(results.run.error.code, results.run.error.message))}"
+        )
         action = (
             '<button id="troubleshoot-btn" class="header-status-action" type="button" '
             'aria-haspopup="dialog" aria-controls="troubleshooting-dialog">Troubleshoot.</button>'
         )
         troubleshooting = _troubleshooting_dialog(results)
     elif status is RunStatus.PARTIAL:
-        kind, label, heading, message = "partial", "PARTIAL", "Partial Run.", f"{status_text}."
+        kind, label, heading, message = (
+            "partial",
+            "PARTIAL",
+            "Partial Run.",
+            _result_html(presentation),
+        )
         action = (
             '<button id="run-summary-toggle" class="header-status-action" type="button" '
             'aria-expanded="false" aria-controls="summary-table-container">See more.</button>'
@@ -228,8 +216,7 @@ def _run_title(results: Results) -> str:
     else:
         kind = "warning" if total_issues > 0 else "complete"
         label, heading = "COMPLETE", "Run Complete."
-        celebration = " 🎉" if status_text == "No issues found" and executed > 0 else ""
-        message = f"{status_text}{skipped_text}.{celebration}"
+        message = _result_html(presentation)
         if total_issues > 0:
             action = (
                 '<button id="run-summary-toggle" class="header-status-action" type="button" '
@@ -242,7 +229,7 @@ def _run_title(results: Results) -> str:
         '  <div class="header-status">'
         f'    <span class="status-pill status-pill-{kind}">{label}</span>'
         f'    <h1><strong>{heading}</strong> <span class="header-status-message">'
-        f"{_escape(message)}</span>{action}</h1>"
+        f"{message}</span>{action}</h1>"
         "  </div>"
         f"  {troubleshooting}"
         "</div>"
@@ -253,6 +240,16 @@ def _run_error_summary(code: str, message: str) -> str:
     if code == "neo4j.credential_not_read_only":
         return "The configured Neo4j credential has privileges outside the allowed read-only model."
     return message
+
+
+def _result_html(presentation: ResultPresentation) -> str:
+    rendered = _escape(presentation.primary_sentence)
+    if not presentation.coverage_incomplete:
+        return rendered
+    if not presentation.skipped_suites:
+        return f"{rendered} Coverage is incomplete."
+    suites = ", ".join(f"<em>{_escape(suite)}</em>" for suite in presentation.skipped_suites)
+    return f"{rendered} Coverage is incomplete due to skipped check(s) from {suites}."
 
 
 def _troubleshooting_dialog(results: Results) -> str:
@@ -514,16 +511,7 @@ def _details_rows(checks: Collection[CheckResult]) -> list[str]:
 
 
 def _empty_issue_summary(results: Results, *, filtered: bool) -> str:
-    if results.run.status is RunStatus.FAILED:
-        message = "Run failed before any checks could be evaluated."
-    elif results.totals.checks == results.totals.skipped:
-        message = "No checks were evaluated."
-    elif filtered:
-        message = "No matching issues found."
-    elif results.run.status is RunStatus.PARTIAL:
-        message = "No issues found in the checks that were evaluated."
-    else:
-        message = "All clear! No issues found. 🎉"
+    message = "No matching issues found." if filtered else _result_html(present_results(results))
     return f'<tr><td colspan="4" class="text-center text-muted">{message}</td></tr>'
 
 

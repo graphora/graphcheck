@@ -51,22 +51,27 @@ Keep the existing interactive progress display. Change only the stable final sum
 `_print_run_summary()`:
 
 ```text
-GraphCheck run <id>: complete
 Target: neo4j · Neo4j 5.18.0 community · 1,250 nodes · 3,480 relationships
+<interactive progress>
+
+GraphCheck run <id>: complete
 Result: No failures. All 12 selected checks passed.
-Coverage: 12/12 selected checks evaluated
-Results: <path>
-Report: <path>
+Results and Report saved to: <directory-path>
 ```
 
-For multi-suite runs, retain per-suite score/totals lines after Result and Coverage. Do not add
-per-check pass lines. Preserve the exact process exit code and existing artifact paths.
+For multi-suite runs, show a borderless `Score breakdown by check suite:` table before Result with
+suite score, evaluated/selected coverage, and aligned outcome columns. Do not add per-check pass
+lines. Preserve the exact process exit code and existing artifact paths.
+
+Target information is printed before interactive progress begins. The final summary uses blank
+lines between lifecycle, score breakdown, result/artifact, and exit-code blocks. Suite names are
+italicized in the table and in incomplete-coverage attribution.
 
 For incomplete coverage without findings:
 
 ```text
-Result: No failures in the 9 checks evaluated. Coverage is incomplete.
-Coverage: 9/12 selected checks evaluated · 3 not evaluated
+Result: No failures in the 9 checks evaluated. Coverage is incomplete due to skipped check(s) from
+*customer-360*.
 ```
 
 CR-2 owns the optional skipped-check detail printed after this summary.

@@ -1,19 +1,30 @@
 import json
 import logging
 from datetime import UTC, date, datetime
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from graphcheck import cli as cli_module
-from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
+from graphcheck.cli import (
+    _check_summary,
+    _load_suite_inputs,
+    _result_text,
+    _suite_score_style,
+    _suite_score_table,
+    _write_run_artifacts,
+    app,
+)
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Counts, QueryResult
 from graphcheck.project import write_default_project
 from graphcheck.reporting.history import discover_report_runs
+from graphcheck.reporting.presentation import present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 
 runner = CliRunner()
@@ -253,14 +264,23 @@ competency:
     assert html.count("<script>") == 1
     assert "function filterChecks()" in html
     assert ' src="' not in html and ' href="' not in html
+    assert "Result: No failures. All 1 selected check passed." in result.stdout
+    assert "Coverage:" not in result.stdout
+    target = "Target: neo4j · Neo4j 5.18.0 community · 1,250 nodes · 3,480 relationships"
+    assert target in result.stdout
+    assert result.stdout.index(target) < result.stdout.index("GraphCheck run ")
+    assert f"{target}\nGraphCheck run " in result.stdout
     assert "Checks: 1 | passed 1" in result.stdout
-    assert "exit code: 0" in result.stdout
+    assert "Exit code: 0" in result.stdout
+    assert "Results and Report saved to:" in result.stdout
+    assert "Results:" not in result.stdout
+    assert "Report:" not in result.stdout
     assert "Suite selected:" not in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
 
 
-def test_run_prints_each_suite_summary_without_multi_suite_aggregate(tmp_path, monkeypatch):
+def test_run_prints_aligned_multi_suite_score_table(tmp_path, monkeypatch):
     _project(
         tmp_path,
         {
@@ -308,22 +328,101 @@ competency:
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 2
+    assert "Score breakdown by check suite:" in result.stdout
+    assert "Suite" in result.stdout
+    assert "Score" in result.stdout
+    assert "Check Coverage" in result.stdout
+    assert "Passed" in result.stdout
+    assert "Failed" in result.stdout
+    assert "Warnings" in result.stdout
+    assert "Errored" in result.stdout
+    assert "Skipped" in result.stdout
+    assert "alpha" in result.stdout
+    assert "100/100" in result.stdout
+    assert "beta" in result.stdout
+    assert "0/100" in result.stdout
+    assert "Suite alpha:" not in result.stdout
+    assert "│" not in result.stdout
+    assert "┼" not in result.stdout
+    assert "+" not in result.stdout
+    assert "|" not in result.stdout
     assert (
-        "Suite alpha: score 100 | checks 1 | passed 1 | failed 0 | warnings 0 | "
-        "errored 0 | skipped 0"
-    ) in result.stdout
-    assert (
-        "Suite beta: score 0 | checks 1 | passed 0 | failed 0 | warnings 1 | errored 0 | skipped 0"
-    ) in result.stdout
+        sum(bool(line) and set(line) in ({"─"}, {"-"}) for line in result.stdout.splitlines()) == 1
+    )
+    assert result.stdout.count("1/1") == 2
     assert "Overall:" not in result.stdout
     assert "Checks: 2" not in result.stdout
     assert "Score: 75" not in result.stdout
     assert "Exit code: 2" in result.stdout
+    assert "Result: 1 warning." in result.stdout
+    assert "Coverage:" not in result.stdout
+    assert result.stdout.index("GraphCheck run ") < result.stdout.index(
+        "Score breakdown by check suite:"
+    )
+    assert result.stdout.index("Score breakdown by check suite:") < result.stdout.index("Result:")
+    assert result.stdout.index("Result:") < result.stdout.index("Results and Report saved to:")
+    assert result.stdout.index("Results and Report saved to:") < result.stdout.index("Exit code: 2")
+    assert "\n\nResult: 1 warning." in result.stdout
+    assert "\nResults and Report saved to:" in result.stdout
+    assert "\nExit code: 2" in result.stdout
     payload = _payload(tmp_path)
     assert [(suite["id"], suite["score"]) for suite in payload["suites"]] == [
         ("alpha", 100),
         ("beta", 0),
     ]
+
+
+def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values():
+    results = load_results(FIXTURES / "results.clean.json")
+    green = results.suites[0].model_copy(deep=True)
+    green.id = "green"
+    yellow = load_results(FIXTURES / "results.complete.json").suites[0].model_copy(deep=True)
+    yellow.id = "yellow"
+    yellow.score = 86
+    red = load_results(FIXTURES / "results.generated-only.json").suites[0].model_copy(deep=True)
+    red.id = "red"
+    red.score = 49
+    results.suites = [green, yellow, red]
+    output = StringIO()
+
+    table = _suite_score_table(results)
+    Console(file=output, force_terminal=True, color_system="standard", width=140).print(table)
+    rendered = output.getvalue()
+
+    assert {column.width for column in table.columns[3:]} == {8}
+    assert _suite_score_style(None) == "white"
+    assert _suite_score_style(100) == "green"
+    assert _suite_score_style(99) == "yellow"
+    assert _suite_score_style(50) == "yellow"
+    assert _suite_score_style(49) == "red"
+    assert "\x1b[1;37mSuite " in rendered
+    assert "\x1b[3mgreen" in rendered
+    assert "\x1b[3myellow" in rendered
+    assert "\x1b[3mred" in rendered
+    assert "\x1b[32m100/100\x1b[0m" in rendered
+    assert "\x1b[33m 86/100\x1b[0m" in rendered
+    assert "\x1b[31m 49/100\x1b[0m" in rendered
+    assert "\x1b[32m       2\x1b[0m" in rendered
+    assert "\x1b[31m       1\x1b[0m" in rendered
+    assert "\x1b[33m       1\x1b[0m" in rendered
+    assert "\x1b[90m       1\x1b[0m" in rendered
+    assert all(f"\x1b[{code}m-\x1b[0m" not in rendered for code in (31, 32, 33, 35, 90))
+
+    single_suite = _check_summary(results.totals)
+    assert "passed \x1b[32m2\x1b[0m" in single_suite
+    assert "failed 0 | warnings 0 | errored 0 | skipped 0" in single_suite
+    assert all(
+        f"\x1b[{code}m{label}" not in single_suite
+        for code in (31, 32, 33, 35, 90)
+        for label in ("passed", "failed", "warnings", "errored", "skipped")
+    )
+
+    partial = present_results(load_results(FIXTURES / "results.partial.json"))
+    output = StringIO()
+    Console(file=output, force_terminal=True, color_system="standard", width=140).print(
+        _result_text(partial)
+    )
+    assert "\x1b[3mcustomer-360\x1b[0m" in output.getvalue()
 
 
 def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):
@@ -385,6 +484,7 @@ competency:
         ]
     )
     progress: dict[str, object] = {"updates": []}
+    lifecycle = []
 
     class FakeProgressBar:
         label = ""
@@ -400,6 +500,7 @@ competency:
             progress["updates"].append((amount, self.label, self.bar_template))
 
     def progressbar(**kwargs):
+        lifecycle.append("progress")
         progress["options"] = kwargs
         bar = FakeProgressBar()
         bar.label = kwargs["label"]
@@ -410,10 +511,18 @@ competency:
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
     monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
     monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+    real_print_target = cli_module._print_run_target
+
+    def print_target(target):
+        lifecycle.append("target")
+        real_print_target(target)
+
+    monkeypatch.setattr("graphcheck.cli._print_run_target", print_target)
 
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 0
+    assert lifecycle[:2] == ["target", "progress"]
     assert progress["options"]["length"] == 2
     assert progress["options"]["label"] == "00:00"
     assert progress["options"]["show_eta"] is False
@@ -555,6 +664,8 @@ competency:
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == expected_exit
+    assert f"Result: 1 {'failure' if verdict == 'fail' else 'warning'}." in result.stdout
+    assert "Coverage:" not in result.stdout
     payload = _payload(tmp_path)
     assert payload["run"]["exit_code"] == expected_exit
     assert payload["checks"][0]["verdict"] == verdict
@@ -586,6 +697,7 @@ competency:
 
     assert result.exit_code == 1
     assert ": partial" in result.stdout
+    assert "Result: 1 execution error. Coverage is incomplete." in result.stdout
     assert "errored 1" in result.stdout
 
 
@@ -621,6 +733,10 @@ competency:
     assert payload["run"]["error"]["code"] == "neo4j.unreachable"
     assert (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").exists()
     assert ": failed" in result.stdout
+    assert "Result: Run failed before checks could complete." in result.stdout
+    assert "Results and Report saved to:" in result.stdout
+    assert result.stdout.index("Result:") < result.stdout.index("Results and Report saved to:")
+    assert result.stdout.index("Results and Report saved to:") < result.stdout.index("Exit code: 3")
     assert "neo4j.unreachable: Neo4j could not be reached." in result.stderr
     assert "Fix: Start Neo4j" in result.stderr
     assert client.closed is True

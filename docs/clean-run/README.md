@@ -84,7 +84,8 @@ The interactive progress display remains unchanged. The final CLI summary remain
 
 - do not print every passing check again;
 - print one explicit result sentence;
-- print evaluated/selected coverage;
+- for multiple suites, print evaluated/selected coverage and outcome totals in a compact score
+  table with aligned check-state columns;
 - list individual checks only when they were not evaluated, because their reasons explain a
   coverage gap;
 - leave evidence and the complete check ledger to the HTML report and `results.json`.
@@ -133,6 +134,29 @@ CR-1, CR-2, CR-4, and CR-5 must not add fields to `results.json`. CR-3 is the so
 in this epic.
 
 ## Implementation changelog
+
+### CR-1 — Trustworthy pass result
+
+Implemented on 2026-08-13:
+
+- added a pure immutable reporting projection for selected/evaluated coverage, finding and
+  execution-error counts, fully-clean state, and deterministic primary result language;
+- made the final CLI summary and HTML lifecycle header consume the same projection, including an
+  explicit `Result` line in the CLI and exact target formatting;
+- added a borderless Rich score-breakdown table for multi-suite runs, with evaluated/selected
+  coverage, fixed-width outcome columns, threshold-colored scores, and colors only on non-zero
+  outcome values;
+- moved target metadata before interactive check progress, italicized suite names in the score
+  table and skipped-suite coverage explanation, and added deterministic attribution when skips
+  span multiple suites;
+- reorganized the final summary into spaced lifecycle, score, result/artifact, and exit-code blocks
+  and collapsed the duplicate artifact paths into one saved-directory line;
+- replaced `No issues found`, `All clear`, and celebration branches with precise language for
+  failed, empty-selection, all-skipped, findings, incomplete-clean, and fully clean runs;
+- expanded the clean contract fixture to two passing checks and added shared CLI/HTML regression
+  coverage for every CR-1 outcome state plus end-to-end CLI assertions for passing and findings
+  runs;
+- updated SPEC-06 to document the shared terminology and acceptance matrix.
 
 ### CR-3 — Target information in the run-report header
 
