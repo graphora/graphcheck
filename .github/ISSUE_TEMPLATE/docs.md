@@ -1,7 +1,7 @@
-﻿---
+---
 name: Docs
 about: Missing, unclear, or incorrect documentation
-labels: [docs]
+labels: [documentation]
 ---
 
 **Where**
