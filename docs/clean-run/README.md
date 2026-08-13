@@ -64,19 +64,16 @@ The report should read in this order:
 2. Target metadata and coverage.
 3. Per-suite overview.
 4. Not Evaluated.
-5. Checks Explorer & Next Steps.
+5. Checks Explorer or Next Steps.
 
 The existing expandable **Issue Summary** is removed. Findings already appear in suite outcome
 badges, status markers, and the full check ledger. Its space is used for the new permanent **Not
 Evaluated** section.
 
-The right-hand panel is titled **Checks Explorer & Next Steps**. It has two tabs:
+The right-hand panel has two heading-level tabs:
 
-- **Checks** — the complete selected-check ledger, filters, search, and details.
+- **Checks Explorer** — the complete selected-check ledger, filters, search, and details.
 - **Next Steps** — static generic guidance only.
-
-The panel footer provides the forward/back reading flow with one contextual action at a time:
-`Next steps →` from Checks and `← Back to checks` from Next Steps.
 
 ## Agreed CLI boundary
 
@@ -233,6 +230,37 @@ Implemented on 2026-08-13:
 - added fixture acceptance coverage for clean, findings, partial, generated-only, failed, empty,
   filtered-selection, HTML-escaping, and more-than-five-skips states;
 - updated SPEC-06 to document the permanent coverage section and its navigation behavior.
+
+### CR-5 — Generic next steps
+
+Implemented on 2026-08-13:
+
+- replaced the standalone Checks Explorer fragment with one `Checks Explorer & Next Steps` panel
+  whose Checks tab retains the complete ledger, search, verdict filters, empty states, and detail
+  controls;
+- added the two fixed generic practices—adding competency checks and tracking drift over time—and
+  the explicit boundary that they are not recommendations derived from the run, identically for
+  clean, findings, failed, and diagnostic reports;
+- implemented accessible `Checks Explorer` and `Next Steps` heading tabs with real buttons, ARIA
+  tab and tabpanel relationships, roving tab stops, Left/Right Arrow and Home/End activation,
+  focus-visible treatment, and native Enter/Space behavior;
+- kept the heading tabs as the sole navigation, removed the redundant forward/back buttons,
+  removed the full-width divider beneath them, tightened the tab-to-content spacing, and preserved
+  the search query, active filter, expanded details, and Checks scroll position across same-report
+  tab switches;
+- matched both tab headings to the bold weight used by the other report panel headings;
+- kept Overview actions and suite or coverage check navigation pinned to the Checks tab with the
+  All, Issues, or exact-check context required by each action;
+- made report-history soft navigation atomically replace the combined fragment, reset the active
+  tab, details, and scroll state for the new run, retain valid persisted check filters, and preserve
+  the panel's open state;
+- retained a stable single-panel footprint on desktop and mobile, with each tab owning its scroll
+  region and inactive content removed from layout;
+- added clean/findings generic-content equivalence, diagnostic, accessible-markup, navigation-state,
+  and report-history fragment regression coverage, plus browser verification of keyboard, focus,
+  hidden-panel, state-preservation, and responsive behavior;
+- updated SPEC-06 to document the combined panel, fixed generic guidance, accessibility behavior,
+  same-report state preservation, and cross-report reset contract.
 
 ## Epic acceptance
 

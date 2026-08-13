@@ -52,6 +52,12 @@ def _check_cards(rendered: str):
     return parser.cards
 
 
+def _next_steps_fragment(rendered: str) -> str:
+    start = rendered.index('  <div id="next-steps-tab-panel"')
+    end = rendered.index("</section>", start)
+    return rendered[start:end]
+
+
 @pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
 def test_writer_round_trips_existing_results_fixtures(name: str):
     source = _fixture(name)
@@ -125,6 +131,91 @@ def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     assert " onkeyup=" not in report
 
 
+def test_html_renderer_adds_identical_generic_next_steps_to_clean_and_findings_reports():
+    clean = render_html_report(_fixture("clean"))
+    findings = render_html_report(_fixture("complete"))
+    next_steps = _next_steps_fragment(clean)
+
+    assert next_steps == _next_steps_fragment(findings)
+    assert next_steps.count("<h3>Add competency checks</h3>") == 1
+    assert next_steps.count("<h3>Track drift over time</h3>") == 1
+    assert (
+        "Add competency checks for the core business questions your graph must answer."
+        in next_steps
+    )
+    assert "Set a baseline and rerun GraphCheck to track structural drift." in next_steps
+    assert "These are general practices, not recommendations derived from this run." in next_steps
+    for graph_specific_value in (
+        "Customer",
+        "Account",
+        "customer-360",
+        "cq-001",
+        "2 Account nodes",
+    ):
+        assert graph_specific_value not in next_steps
+
+
+def test_html_renderer_exposes_accessible_tabs_without_redundant_flow_actions():
+    html = render_html_report(_fixture("clean"))
+
+    assert html.count('id="checks-next-steps-panel"') == 1
+    assert (
+        'class="checks-next-steps-header report-tabs" role="tablist" '
+        'aria-label="Checks Explorer and Next Steps"' in html
+    )
+    assert 'id="checks-next-steps-heading"' not in html
+    assert (
+        'id="checks-tab" class="report-tab active" type="button" role="tab" '
+        'aria-selected="true" aria-controls="checks-tab-panel" tabindex="0"' in html
+    )
+    assert 'data-tab="checks">Checks Explorer</button>' in html
+    assert (
+        'id="next-steps-tab" class="report-tab" type="button" role="tab" '
+        'aria-selected="false" aria-controls="next-steps-tab-panel" tabindex="-1"' in html
+    )
+    assert (
+        'id="checks-tab-panel" class="report-tab-panel" role="tabpanel" '
+        'aria-labelledby="checks-tab"' in html
+    )
+    assert (
+        'id="next-steps-tab-panel" class="report-tab-panel next-steps-content scrollable-content" '
+        'role="tabpanel" aria-labelledby="next-steps-tab" data-tab-panel="next-steps" hidden'
+        in html
+    )
+    assert 'id="next-steps-action"' not in html
+    assert 'id="back-to-checks-action"' not in html
+    assert 'class="checks-next-steps-footer"' not in html
+    assert 'class="panel-flow-action"' not in html
+    assert 'aria-hidden="true">→' not in html
+    assert 'aria-hidden="true">←' not in html
+    assert ".report-tab { margin: 0; padding: 0 0 5px;" in html
+    assert "font-size: 18px; font-weight: 600;" in html
+    assert "height: auto;" in html
+    assert "padding-bottom: 0;" in html
+    assert "margin-bottom: 4px;" in html
+    assert ".next-steps-content { padding: 0 6px 4px 0; font-size: 13px; }" in html
+    assert ".next-step h3 { margin: 0 0 5px; font-size: 13px; }" in html
+    assert "#checks-next-steps-panel { height: 500px; }" in html
+    assert "function activateReportTab(tabName, focusTab = false)" in html
+    assert "function handleReportTabKeydown(event)" in html
+    assert "event.key === 'ArrowRight'" in html
+    assert "event.key === 'ArrowLeft'" in html
+    assert "event.key === 'Home'" in html
+    assert "event.key === 'End'" in html
+    assert "selectedTab.focus({ preventScroll: true });" in html
+
+
+def test_html_renderer_resets_tab_local_state_when_history_replaces_the_combined_panel():
+    html = render_html_report(_fixture("complete"))
+
+    assert "checks_next_steps: 'checks-next-steps-panel'" in html
+    assert "checkDetailsOpenPreference = null;" in html
+    assert "activateReportTab('checks');" in html
+    assert "if (checksOpen) showChecksExplorer(false);" in html
+    assert "|| filterButtons.find(button => button.dataset.filter === 'all');" in html
+    assert "restoreCheckFilters();" in html
+
+
 def test_html_renderer_orders_failures_before_passes():
     html = render_html_report(_fixture("complete"))
 
@@ -192,7 +283,7 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert '<span class="status-pill status-pill-warning">COMPLETE</span>' in html
     assert "<strong>Run Complete.</strong>" in html
     assert '<span class="header-status-message">1 failure and 1 warning.</span>' in html
-    assert 'aria-controls="checks-panel">See issues.</button>' in html
+    assert 'aria-controls="checks-next-steps-panel">See issues.</button>' in html
     assert 'data-action="issues"' in html
     assert "localStorage.setItem(" in html
     assert "restoreCheckFilters();" in html
@@ -359,13 +450,15 @@ def test_issue_summary_is_removed_and_coverage_navigation_is_accessible():
         assert "showIssueSummary" not in report
         assert "sortTable" not in report
         assert '<section id="not-evaluated" class="not-evaluated" tabindex="-1">' in report
-        assert 'aria-controls="checks-panel" aria-expanded="false">Explore checks' in report
+        assert (
+            'aria-controls="checks-next-steps-panel" aria-expanded="false">Explore checks' in report
+        )
         assert "showAllChecks" in report
         assert "setVerdictFilter('all', allButton);" in report
         assert "button.addEventListener('click', () => navigateToCheck(" in report
         assert report.index('class="suite-status-list"') < report.index('id="not-evaluated"')
         assert report.index('id="not-evaluated"') < report.index('id="explore-checks-btn"')
-    assert 'aria-controls="checks-panel">See issues.</button>' in complete
+    assert 'aria-controls="checks-next-steps-panel">See issues.</button>' in complete
     assert "run-summary-toggle')?.setAttribute('aria-expanded', 'true');" in complete
     assert "setVerdictFilter('issues', issuesButton);" in complete
     assert 'aria-controls="not-evaluated">Review coverage.</button>' in partial
@@ -790,10 +883,12 @@ def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
         _fixture("complete"),
         verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
     )
+    full_html = render_html_report(_fixture("complete"))
 
     assert "Which accounts does a customer control" in html
     assert "Accounts are connected to a Customer" in html
     assert "Customer.tax_id is present" not in html
+    assert _next_steps_fragment(html) == _next_steps_fragment(full_html)
     assert {
         (card["attrs"]["data-suite-id"], card["attrs"]["data-check-id"])
         for card in _check_cards(html)
@@ -821,7 +916,7 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert html.count('id="report-run-title"') == 1
     assert 'id="report-banners"' not in html
     assert html.count('id="report-overview"') == 1
-    assert html.count('id="checks-panel"') == 1
+    assert html.count('id="checks-next-steps-panel"') == 1
     assert 'id="report-explorer"' in html
     assert "<h2>Report History</h2>" in html
     assert '<span class="eyebrow explorer-eyebrow">' not in html
@@ -910,10 +1005,10 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
 def test_html_renderer_exposes_report_specific_fragments_without_the_permanent_shell():
     fragments = render_validated_html_report_fragments(load_results(_fixture("partial")))
 
-    assert set(fragments) == {"run_title", "overview", "checks"}
+    assert set(fragments) == {"run_title", "overview", "checks_next_steps"}
     assert fragments["run_title"].startswith('<div id="report-run-title"')
     assert '<section id="report-overview"' in fragments["overview"]
-    assert '<section id="checks-panel"' in fragments["checks"]
+    assert '<section id="checks-next-steps-panel"' in fragments["checks_next_steps"]
     assert "run_01HXATZ" not in fragments["run_title"]
     assert "<strong>Partial Run.</strong>" in fragments["run_title"]
     assert 'id="report-explorer"' not in "".join(fragments.values())

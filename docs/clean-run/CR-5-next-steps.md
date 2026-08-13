@@ -2,9 +2,9 @@
 
 ## Ticket
 
-Turn the existing right-hand check panel into **Checks Explorer & Next Steps**, with accessible tabs
-for the complete check ledger and generic guidance. Users must be able to move forward to Next Steps
-and back to their prior Checks view without losing context.
+Turn the existing right-hand check panel into a combined panel with heading-level accessible tabs
+for **Checks Explorer** and **Next Steps**. Users must be able to switch views without losing their
+prior Checks context.
 
 ## Dependencies
 
@@ -27,23 +27,12 @@ No next step is generated from graph contents or presented as a finding.
 Use one right-hand panel rather than adding a fourth dashboard column:
 
 ```text
-Checks Explorer & Next Steps
-[ Checks ] [ Next Steps ]
+[ Checks Explorer ] [ Next Steps ]
 
 <active tab panel>
-
-                         Next steps →
 ```
 
-On the Next Steps tab, the footer action becomes:
-
-```text
-← Back to checks
-```
-
-The top tabs provide persistent location and direct switching. The footer supplies reading flow.
-Show one contextual arrow action at a time; do not show simultaneous previous/next buttons with an
-active destination disabled.
+The tabs occupy the former panel-heading position and are the sole navigation between views.
 
 ## Checks tab
 
@@ -97,9 +86,6 @@ Implement the switcher as an accessible tab interface:
 - Enter/Space behavior follows native buttons;
 - switching tabs moves focus predictably without forcing page scroll.
 
-Footer navigation uses descriptive labels containing text; arrows are decorative reinforcement, not
-the only accessible name.
-
 ## Report history and diagnostic behavior
 
 The full report renderer and report-history fragment renderer must emit the same combined-panel
@@ -118,7 +104,7 @@ the panel is opened. Next Steps remains the same generic content.
 ## Offline and layout constraints
 
 - Guidance is rendered into the HTML artifact; it is not fetched at runtime.
-- Tabs and footer navigation operate only on existing DOM nodes.
+- Tabs operate only on existing DOM nodes.
 - Do not add external links, assets, fonts, or network APIs.
 - Desktop uses the existing right-hand column footprint.
 - Mobile uses the same single panel in the stacked layout; inactive tab content remains hidden.
@@ -128,11 +114,11 @@ the panel is opened. Next Steps remains the same generic content.
 
 - Replace the standalone `checks-panel` root with a combined report fragment such as
   `checks-next-steps-panel`.
-- Add the panel heading, tablist, Checks tab panel, Next Steps tab panel, and contextual footer.
+- Add the heading-level tablist, Checks tab panel, and Next Steps tab panel.
 - Move current check controls/cards into the Checks tab without changing their identities.
 - Add pure static HTML generation for the two guidance items and boundary note.
-- Add tab activation, keyboard navigation, contextual footer navigation, focus management, and
-  same-report Checks-state restoration to the inline script.
+- Add tab activation, keyboard navigation, focus management, and same-report Checks-state
+  restoration to the inline script.
 - Update `render_validated_html_report_fragments()` and report explorer's fragment replacement map
   to use the new root consistently.
 - Update navigation-loading selectors and checks-open detection for the new root.
@@ -148,10 +134,10 @@ Both fixtures render the combined panel, both tab buttons, exactly the two appro
 and the generic-boundary note. The content is byte-for-byte equivalent between fixtures apart from
 surrounding report data.
 
-### CR-5.B — Forward and backward flow
+### CR-5.B — Bidirectional tab flow
 
-Checks initially owns the active state. `Next steps →` activates Next Steps, and `← Back to
-checks` returns to Checks. The top tabs can perform the same switches directly.
+Checks Explorer initially owns the active state. The heading tabs switch directly between Checks
+Explorer and Next Steps in both directions.
 
 ### CR-5.C — Checks-state preservation
 

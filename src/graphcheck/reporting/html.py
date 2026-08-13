@@ -62,7 +62,7 @@ def render_validated_html_report(
             '<div class="dashboard-grid">',
             _report_explorer(model),
             fragments["overview"],
-            fragments["checks"],
+            fragments["checks_next_steps"],
             "</div>",
             "</main>",
             "<script>",
@@ -94,7 +94,7 @@ def render_validated_html_report_fragments(
     return {
         "run_title": _run_title(model),
         "overview": _status_overview(model, checks, filtered=verdicts is not None),
-        "checks": _checks(checks),
+        "checks_next_steps": _checks_next_steps(checks),
     }
 
 
@@ -221,7 +221,7 @@ def _run_title(results: Results) -> str:
             action = (
                 '<button id="run-summary-toggle" class="header-status-action" type="button" '
                 'data-action="issues" aria-expanded="false" '
-                'aria-controls="checks-panel">See issues.</button>'
+                'aria-controls="checks-next-steps-panel">See issues.</button>'
             )
 
     return (
@@ -405,7 +405,7 @@ def _status_overview(
         "  </div>"
         '  <div class="panel-footer">'
         '    <button id="explore-checks-btn" class="btn-primary" type="button" '
-        'aria-controls="checks-panel" aria-expanded="false">Explore checks &rarr;</button>'
+        'aria-controls="checks-next-steps-panel" aria-expanded="false">Explore checks &rarr;</button>'
         "  </div>"
         "</section>"
     )
@@ -531,28 +531,43 @@ def _not_evaluated_row(check: CheckResult) -> str:
     )
 
 
-def _checks(checks: list[CheckResult]) -> str:
+def _checks_next_steps(checks: list[CheckResult]) -> str:
     items = "".join(_check(check) for check in checks)
     return (
-        '<section id="checks-panel" class="card panel-section hidden-panel">'
-        '  <div class="checks-header">'
-        "    <h2>Checks Explorer</h2>"
+        '<section id="checks-next-steps-panel" class="card panel-section hidden-panel">'
+        '  <div class="checks-next-steps-header report-tabs" role="tablist" '
+        'aria-label="Checks Explorer and Next Steps">'
+        '    <button id="checks-tab" class="report-tab active" type="button" role="tab" '
+        'aria-selected="true" aria-controls="checks-tab-panel" tabindex="0" data-tab="checks">Checks Explorer</button>'
+        '    <button id="next-steps-tab" class="report-tab" type="button" role="tab" '
+        'aria-selected="false" aria-controls="next-steps-tab-panel" tabindex="-1" data-tab="next-steps">Next Steps</button>'
+        "  </div>"
+        '  <div id="checks-tab-panel" class="report-tab-panel" role="tabpanel" '
+        'aria-labelledby="checks-tab" data-tab-panel="checks">'
         '    <div class="checks-controls">'
-        '      <input type="text" id="search-input" placeholder="🔍 Search checks...">'
-        '      <div class="filter-group">'
-        '        <button class="filter-btn active" data-filter="all" aria-pressed="true">All</button>'
-        '        <button class="filter-btn" data-filter="issues" aria-pressed="false">Issues</button>'
-        '        <button class="filter-btn" data-filter="fail" aria-pressed="false">Fail</button>'
-        '        <button class="filter-btn" data-filter="warn" aria-pressed="false">Warn</button>'
-        '        <button class="filter-btn" data-filter="errored" aria-pressed="false">Errored</button>'
-        '        <button class="filter-btn" data-filter="pass" aria-pressed="false">Pass</button>'
-        '        <button class="filter-btn" data-filter="skipped" aria-pressed="false">Skipped</button>'
+        '      <input type="search" id="search-input" placeholder="🔍 Search checks..." aria-label="Search checks">'
+        '      <div class="filter-group" aria-label="Filter checks by verdict">'
+        '        <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">All</button>'
+        '        <button class="filter-btn" type="button" data-filter="issues" aria-pressed="false">Issues</button>'
+        '        <button class="filter-btn" type="button" data-filter="fail" aria-pressed="false">Fail</button>'
+        '        <button class="filter-btn" type="button" data-filter="warn" aria-pressed="false">Warn</button>'
+        '        <button class="filter-btn" type="button" data-filter="errored" aria-pressed="false">Errored</button>'
+        '        <button class="filter-btn" type="button" data-filter="pass" aria-pressed="false">Pass</button>'
+        '        <button class="filter-btn" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>'
         "      </div>"
-        '      <button id="toggle-details-btn" class="btn-secondary">Toggle Details</button>'
+        '      <button id="toggle-details-btn" class="btn-secondary" type="button">Toggle Details</button>'
+        "    </div>"
+        f'    <div id="checks-container" class="scrollable-content">{items}'
+        '      <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>'
         "    </div>"
         "  </div>"
-        f'  <div id="checks-container" class="scrollable-content">{items}'
-        '    <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>'
+        '  <div id="next-steps-tab-panel" class="report-tab-panel next-steps-content scrollable-content" '
+        'role="tabpanel" aria-labelledby="next-steps-tab" data-tab-panel="next-steps" hidden>'
+        '    <article class="next-step"><h3>Add competency checks</h3>'
+        "<p>Add competency checks for the core business questions your graph must answer.</p></article>"
+        '    <article class="next-step"><h3>Track drift over time</h3>'
+        "<p>Set a baseline and rerun GraphCheck to track structural drift.</p></article>"
+        '    <p class="next-steps-boundary">These are general practices, not recommendations derived from this run.</p>'
         "  </div>"
         "</section>"
     )
@@ -996,10 +1011,10 @@ body {
   justify-content: stretch;
 }
 
-#report-run-title, #report-overview, #checks-panel { transition: opacity 0.15s ease; }
+#report-run-title, #report-overview, #checks-next-steps-panel { transition: opacity 0.15s ease; }
 body.report-navigation-loading #report-run-title,
 body.report-navigation-loading #report-overview,
-body.report-navigation-loading #checks-panel { opacity: 0.55; }
+body.report-navigation-loading #checks-next-steps-panel { opacity: 0.55; }
 
 .card {
   background: var(--bg-card);
@@ -1017,7 +1032,7 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
   margin-bottom: 0;
   overflow: hidden;
 }
-.panel-header, .checks-header { flex-shrink: 0; }
+.panel-header, .checks-next-steps-header { flex-shrink: 0; }
 .panel-section h2 { margin: 0 0 4px 0; }
 .panel-section h3 { margin: 14px 0 8px 0; font-size: 14px; }
 
@@ -1180,19 +1195,25 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 }
 .styled-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
 
-.checks-header {
+.checks-next-steps-header {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  height: 96px;
-  min-height: 96px;
-  gap: 10px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 14px;
+  height: auto;
+  min-height: 0;
+  gap: 0;
+  padding-bottom: 0;
+  margin-bottom: 4px;
   flex-shrink: 0;
 }
-.checks-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.report-tabs { display: flex; flex-direction: row; align-items: flex-start; justify-content: flex-start; gap: 20px; }
+.report-tab { margin: 0; padding: 0 0 5px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 18px; font-weight: 600; line-height: 1.5; cursor: pointer; }
+.report-tab:hover { color: var(--text-main); }
+.report-tab.active { border-bottom-color: #2563eb; color: var(--text-main); font-weight: 600; }
+.report-tab:focus-visible, .btn-primary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.report-tab-panel { flex: 1; min-height: 0; }
+#checks-tab-panel { display: flex; flex-direction: column; }
+.checks-controls { display: flex; flex-shrink: 0; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 #search-input {
   padding: 6px 12px;
   border: 1px solid var(--border);
@@ -1219,6 +1240,13 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .filter-btn.active[data-filter="errored"] { background: var(--errored-color); color: #fff; }
 .filter-btn.active[data-filter="pass"] { background: var(--pass-color); color: #fff; }
 .filter-btn.active[data-filter="skipped"] { background: var(--skipped-color); color: #fff; }
+.next-steps-content { padding: 0 6px 4px 0; font-size: 13px; }
+.next-step { padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-subtle); }
+.next-step + .next-step { margin-top: 12px; }
+.next-step h3 { margin: 0 0 5px; font-size: 13px; }
+.next-step p { margin: 0; }
+.next-steps-boundary { margin: 18px 0 0; padding: 10px 12px; border-left: 3px solid var(--skipped-color); color: var(--text-muted); font-size: 12px; }
+[hidden] { display: none !important; }
 
 .btn-secondary {
   background: var(--bg-subtle);
@@ -1295,11 +1323,12 @@ p.text-muted { margin-top: 0; }
   html, body { height: auto; overflow: auto; }
   .dashboard-body { overflow: visible; }
   .navbar { flex-direction: row; justify-content: space-between; }
-  .summary-top-bar, .checks-header { height: auto; min-height: 0; }
+  .summary-top-bar, .checks-next-steps-header { height: auto; min-height: 0; }
   .summary-top-bar { flex-direction: column; align-items: flex-start; }
   .summary-meta-grid { flex-direction: column; gap: 8px; }
   .dashboard-grid, .dashboard-grid.has-checks { grid-template-columns: 1fr; }
   .panel-section { max-height: 500px; }
+  #checks-next-steps-panel { height: 500px; }
 }
 """.strip()
 
@@ -1333,7 +1362,7 @@ function reportHref(runId) {
 
 function setReportNavigationLoading(loading) {
   document.body.classList.toggle('report-navigation-loading', loading);
-  document.querySelectorAll('#report-run-title, #report-overview, #checks-panel').forEach(
+  document.querySelectorAll('#report-run-title, #report-overview, #checks-next-steps-panel').forEach(
     fragment => fragment.setAttribute('aria-busy', String(loading))
   );
   const status = document.getElementById('report-navigation-status');
@@ -1358,18 +1387,19 @@ function applyReport(report, historyMode = 'push') {
   const fragmentIds = {
     run_title: 'report-run-title',
     overview: 'report-overview',
-    checks: 'checks-panel',
+    checks_next_steps: 'checks-next-steps-panel',
   };
   const replacements = Object.entries(fragmentIds).map(([name, id]) => {
     const current = document.getElementById(id);
     if (!current) throw new Error(`Missing ${id} report container.`);
     return [current, reportFragment(report.fragments?.[name], id)];
   });
-  const checksOpen = !document.getElementById('checks-panel').classList.contains('hidden-panel');
+  const checksOpen = !document.getElementById('checks-next-steps-panel').classList.contains('hidden-panel');
   const scrollPosition = { x: window.scrollX, y: window.scrollY };
+  checkDetailsOpenPreference = null;
   replacements.forEach(([current, replacement]) => current.replaceWith(replacement));
   initReportSpecificInteractions();
-  applyCheckDetailsPreference();
+  activateReportTab('checks');
   if (checksOpen) showChecksExplorer(false);
   restoreCheckFilters();
   document.title = report.title;
@@ -1757,6 +1787,37 @@ function setVerdictFilter(verdict, btn) {
   filterChecks();
 }
 
+function activateReportTab(tabName, focusTab = false) {
+  const panel = document.getElementById('checks-next-steps-panel');
+  if (!panel) return;
+  const tabs = Array.from(panel.querySelectorAll('[role="tab"]'));
+  const selectedTab = tabs.find(tab => tab.dataset.tab === tabName);
+  if (!selectedTab) return;
+  tabs.forEach(tab => {
+    const selected = tab === selectedTab;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  });
+  panel.querySelectorAll('[role="tabpanel"]').forEach(
+    tabPanel => tabPanel.hidden = tabPanel.dataset.tabPanel !== tabName
+  );
+  if (focusTab) selectedTab.focus({ preventScroll: true });
+}
+
+function handleReportTabKeydown(event) {
+  const tabs = Array.from(event.currentTarget.closest('[role="tablist"]').querySelectorAll('[role="tab"]'));
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  let nextIndex = null;
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+  else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  else if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = tabs.length - 1;
+  if (nextIndex === null) return;
+  event.preventDefault();
+  activateReportTab(tabs[nextIndex].dataset.tab, true);
+}
+
 function matchesVerdictFilter(verdict) {
   return activeVerdictFilter === 'all'
     || verdict === activeVerdictFilter
@@ -1818,16 +1879,15 @@ function restoreCheckFilters() {
     return;
   }
 
-  const filterButton = Array.from(document.querySelectorAll('.filter-btn')).find(
+  const filterButtons = Array.from(document.querySelectorAll('.filter-btn'));
+  const filterButton = filterButtons.find(
     button => button.dataset.filter === saved.verdict
-  );
-  if (filterButton) {
-    activeVerdictFilter = filterButton.dataset.filter;
-    document.querySelectorAll('.filter-btn').forEach(button => {
-      button.classList.toggle('active', button === filterButton);
-      button.setAttribute('aria-pressed', String(button === filterButton));
-    });
-  }
+  ) || filterButtons.find(button => button.dataset.filter === 'all');
+  if (filterButton) activeVerdictFilter = filterButton.dataset.filter;
+  filterButtons.forEach(button => {
+    button.classList.toggle('active', button === filterButton);
+    button.setAttribute('aria-pressed', String(button === filterButton));
+  });
 
   const searchInput = document.getElementById('search-input');
   if (searchInput && typeof saved.query === 'string') searchInput.value = saved.query;
@@ -1886,12 +1946,13 @@ function closeTroubleshootingDialog() {
 
 function showIssues() {
   showChecksExplorer();
+  activateReportTab('checks');
   document.getElementById('run-summary-toggle')?.setAttribute('aria-expanded', 'true');
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = '';
   const issuesButton = document.querySelector('.filter-btn[data-filter="issues"]');
   if (issuesButton) setVerdictFilter('issues', issuesButton);
-  document.getElementById('checks-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.getElementById('checks-next-steps-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function reviewCoverage() {
@@ -1908,7 +1969,7 @@ function handleRunSummaryAction(event) {
 
 function showChecksExplorer(animate = true) {
   const grid = document.querySelector('.dashboard-grid');
-  const checksPanel = document.getElementById('checks-panel');
+  const checksPanel = document.getElementById('checks-next-steps-panel');
   const btn = document.getElementById('explore-checks-btn');
 
   if (checksPanel.classList.contains('hidden-panel')) {
@@ -1925,11 +1986,12 @@ function showChecksExplorer(animate = true) {
 
 function showAllChecks() {
   showChecksExplorer();
+  activateReportTab('checks');
   const searchInput = document.getElementById('search-input');
   if (searchInput) searchInput.value = '';
   const allButton = document.querySelector('.filter-btn[data-filter="all"]');
   if (allButton) setVerdictFilter('all', allButton);
-  document.getElementById('checks-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.getElementById('checks-next-steps-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function restoreChecksExplorerState() {
@@ -1940,6 +2002,7 @@ function restoreChecksExplorerState() {
 
 function navigateToCheck(suiteId, checkId) {
   showChecksExplorer();
+  activateReportTab('checks');
 
   const targetCard = Array.from(document.querySelectorAll('.check-card')).find(card =>
     card.dataset.suiteId === suiteId && card.dataset.checkId === checkId
@@ -1968,6 +2031,10 @@ function initReportSpecificInteractions() {
   document.getElementById('explore-checks-btn')?.addEventListener('click', showAllChecks);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);
   document.getElementById('search-input')?.addEventListener('input', filterChecks);
+  document.querySelectorAll('.report-tab').forEach(tab => {
+    tab.addEventListener('click', () => activateReportTab(tab.dataset.tab));
+    tab.addEventListener('keydown', handleReportTabKeydown);
+  });
 
   document.querySelectorAll('.filter-btn').forEach(button => {
     button.addEventListener('click', () => setVerdictFilter(button.dataset.filter, button));

@@ -159,6 +159,10 @@ The report shows:
   available in `results.json` but is not repeated in the explorer,
 - a visible `Reason` block on every skipped card with its generic shared explanation but without
   the internal raw code; the renderer does not infer a more specific cause from run-level context,
+- a combined right-hand panel with accessible `Checks Explorer` and `Next Steps` heading tabs; the
+  Checks Explorer tab owns the complete ledger and the Next Steps tab always contains
+  exactly the same two generic practices—adding competency checks and tracking drift over time—
+  plus a statement that they are not recommendations derived from the run,
 - checks sorted failures-first,
 - report-history timestamps converted from stored UTC to the browser's local timezone and shown as
   `yyyy-mm-dd at hh:mm:ss`,
@@ -172,14 +176,20 @@ The target summary does not render property keys or property-coverage percentage
 derive recommendations from inventory. It never reconstructs labels or relationship types from a
 fingerprint, checks, evidence, or baseline data.
 
-The embedded script reveals the checks explorer, navigates from suite status
-markers to checks, filters checks by verdict or search text, provides an `Issues` union filter for
-`fail`, `warn`, and `errored`, states when the selected verdict category is empty, focuses the
-`Not Evaluated` section from partial-run navigation, toggles check details, and switches the inline
-CSS theme. `See issues` opens the Issues filter, while `Explore checks` opens the All filter. Event
-handlers are registered with `addEventListener`; check identities are read from escaped data
-attributes and matched directly rather than interpolated into JavaScript or CSS selectors. These
-interactions operate only on the already-rendered document and do not load or transmit data.
+The embedded script reveals the combined panel, navigates from suite status markers to checks,
+filters checks by verdict or search text, provides an `Issues` union filter for `fail`, `warn`, and
+`errored`, states when the selected verdict category is empty, focuses the `Not Evaluated` section
+from partial-run navigation, toggles check details, and switches the inline CSS theme. `See issues`
+opens Checks/Issues, while `Explore checks` opens Checks/All. The tab interface exposes the required
+tablist, tab, and tabpanel relationships, uses roving tab stops, and supports Left/Right Arrow and
+Home/End activation. The heading tabs are the sole navigation between these views. Switching tabs
+within one report preserves the search, verdict filter, expanded details, and Checks scroll
+position. Soft navigation atomically replaces the combined panel, resets it to Checks, clears
+detail and scroll state from the prior run, retains a valid persisted filter preference, and keeps
+the panel open when it was already open. Event handlers are registered with `addEventListener`;
+check identities are read from escaped data attributes and matched directly rather than
+interpolated into JavaScript or CSS selectors. These report-local interactions operate only on the
+already-rendered document and do not load or transmit data.
 
 ### Ordering
 
@@ -407,6 +417,9 @@ The tests assert:
   overall machine score,
 - pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
 - diagnostic reports contain failures, warnings, and errors but omit passing checks,
+- clean, findings, failed, and diagnostic reports contain byte-identical generic Next Steps
+  content; accessible tab markup, keyboard activation, same-report Checks
+  state preservation, and report-history replacement/reset behavior are covered,
 - scorer results are invariant to input order and use exact half-even rounding,
 - per-suite calculations use the same locked weights as the overall score,
 - reports show each suite score as the rightmost badge in its status card,
