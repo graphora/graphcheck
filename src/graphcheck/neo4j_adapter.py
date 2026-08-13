@@ -16,7 +16,7 @@ from neo4j import GraphDatabase
 
 from graphcheck import __version__
 from graphcheck.connection_profiles import ConnectionProfile, validate_profile_uri
-from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
+from graphcheck.contracts.results import Capabilities, CheckError, ResultsTarget, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
@@ -643,12 +643,16 @@ class Neo4jClient:
                 labels, relationship_types = _call_with_timeout(self._schema_tokens, deadline)
                 count_store = _call_with_timeout(self._count_store_usable, deadline)
 
-        target = RunTarget(
+        target = ResultsTarget(
             database=self._profile.database,
             server_version=version,
             edition=edition,
             fingerprint=_fingerprint(labels, relationship_types, counts),
             capabilities=Capabilities(apoc=apoc, count_store=count_store),
+            labels=list(labels),
+            relationship_types=list(relationship_types),
+            nodes=counts.nodes,
+            relationships=counts.relationships,
         )
         _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts

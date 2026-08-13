@@ -35,9 +35,12 @@ The writer accepts:
 - or a `Path` to a `results.json` file.
 
 All inputs are normalized through the SPEC-01 source-of-truth model. Historical
-schema 1.0 artifacts are upgraded in memory by changing their version marker to
-the current 1.1 contract before validation; this compatibility read does not
-rewrite the source file. Newly written artifacts always use schema 1.1.
+schema 1.0 and 1.1 artifacts are upgraded in memory to the current 1.2 contract.
+For a non-null historical target, the compatibility loader injects `labels:null`
+and `relationship_types:null` to mean that the older schema did not record the
+inventory. This compatibility read does not rewrite the source file. New runs
+always use schema 1.2 and populate both fields with sorted, unique arrays; `[]`
+means the probe completed and found no tokens.
 
 Current inputs are validated through:
 
@@ -68,6 +71,8 @@ It preserves:
 - run status and `partial_reason`,
 - `pass`, `fail`, `warn`, `errored`, and `skipped` verdicts as distinct states,
 - graph target metadata including fingerprint and database version,
+- canonical target label and relationship-type inventory, including the distinction between a
+  probed empty array and historical not-recorded null,
 - suite `source_sha`,
 - run timestamps,
 - check `compiled_query`,
@@ -118,10 +123,17 @@ use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
 The report shows:
 
 - a navbar status summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
-  former banner color retained in a status pill; unreachable Neo4j targets display as failed,
-  interrupted/incomplete runs and runs containing errored checks display as partial, while every
-  other run displays as complete and retains its issue counts,
+  former banner color retained in a status pill; every machine-level failed run that stops before
+  checks begin displays as failed, interrupted/incomplete runs and runs containing errored checks
+  display as partial, while every other run displays as complete and retains its issue counts,
+- a `Troubleshoot.` action for failed runs that opens an offline `Troubleshooting Steps` dialog with
+  the full stored problem and remediation steps; the overview does not duplicate that diagnostic,
+- a concise header for `neo4j.credential_not_read_only` while its full privilege detail remains in
+  the troubleshooting dialog,
 - target database, version, edition, node count, and relationship count when available,
+- a compact label and relationship-type summary sourced directly from `run.target`, with the exact
+  names available in an offline disclosure; a probed empty inventory displays zero while migrated
+  pre-1.2 null displays `Inventory not recorded`,
 - GraphCheck version,
 - pack version,
 - per-suite executed/selected counts,
@@ -141,6 +153,10 @@ The report shows:
 - estimate details when present,
 - check errors when present,
 - evidence message and node/relationship or aggregate-scope IDs.
+
+The target summary does not render property keys or property-coverage percentages and does not
+derive recommendations from inventory. It never reconstructs labels or relationship types from a
+fingerprint, checks, evidence, or baseline data.
 
 The embedded script reveals the checks explorer, navigates from suite status
 markers to checks, filters checks by verdict or search text, states when the selected verdict
@@ -174,7 +190,7 @@ then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 
 History operations load and validate each run's `results.json`, including the
-schema 1.0 compatibility read described above. If `runs/latest` duplicates a
+schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
 historical run id, it appears only once in history. History is ordered
 chronologically by the validated UTC `run.finished_at`, newest first; ordering
 never compares timestamp strings lexically.
@@ -323,8 +339,9 @@ current HTML report.
 Reporting tests live in `tests/test_reporting.py`; report-command tests live in
 `tests/test_cli.py`.
 
-They use the existing SPEC-01 fixtures:
+The 1.2 test matrix uses these SPEC-01 fixtures:
 
+- `results.clean.json`
 - `results.complete.json`
 - `results.partial.json`
 - `results.generated-only.json`
@@ -340,9 +357,12 @@ The tests assert:
 - compiled Cypher is visible,
 - evidence IDs are visible,
 - failed-run errors are visible,
+- failed runs remain failed in the header and history, expose troubleshooting in a dialog without
+  a duplicate overview callout, and abbreviate verbose credential privilege details only in the
+  header,
 - `report --open` selects the newest HTML report,
 - `report --open <id>` selects a historical report and a bare ID is rejected,
-- schema 1.0 historical artifacts load without being rewritten,
+- schema 1.0 and 1.1 historical artifacts load with null inventory without being rewritten,
 - the configured artifacts directory is honored,
 - missing reports and browser-launch failures exit non-zero,
 - report history is ordered and de-duplicates `runs/latest`,
@@ -357,6 +377,9 @@ The tests assert:
   distinguish errored checks from failed checks, derive run messaging from status
   and issue totals, state when no checks were evaluated, exclude skipped checks
   from the issue summary, and render failure-first issue details.
+- new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
+  probed empty arrays from historical not-recorded null, and never infer inventory from other
+  report data.
 
 ## Deferred Work
 
@@ -367,4 +390,5 @@ The following require C1, the fixture graph, or additional tooling:
 - Compute graph fingerprint, DB version, suite SHA, and timestamps at runtime.
 - Full pipeline fixture graph coverage.
 - Browser-level offline asset/network test.
-- MCP/C7 consumption tests.
+- MCP transport implementation beyond the approved requirement that every result-returning tool
+  and declared output schema consume the canonical SPEC-01 1.2 shape.

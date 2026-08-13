@@ -989,7 +989,7 @@ class Engine:
                     error_code=None,
                 )
             self._telemetry_probe_ms = 0
-            return ResultsTarget.model_validate(target.model_dump())
+            return _new_results_target(target)
 
         probe_started = self._timing_start()
         try:
@@ -1350,10 +1350,18 @@ class Engine:
         timeout_s = _remaining(deadline, self._monotonic())
         result = probe(timeout_s=timeout_s) if self._probe_accepts_timeout else probe()
         _remaining(deadline, self._monotonic())
+        if (
+            isinstance(result, tuple)
+            and len(result) > 1
+            and getattr(result[1], "can_read", None) is False
+        ):
+            raise GraphCheckError(
+                "engine.target_inventory_unavailable",
+                "GraphCheck could not read the target schema inventory.",
+                "Grant read access to the target graph, then run GraphCheck again.",
+            )
         target = result[0] if isinstance(result, tuple) else result
-        validated = ResultsTarget.model_validate(
-            target.model_dump() if isinstance(target, RunTarget) else target
-        )
+        validated = _new_results_target(target)
         if isinstance(result, tuple) and len(result) > 2:
             counts = result[2]
             validated = validated.model_copy(
@@ -1471,6 +1479,27 @@ class Engine:
             self._telemetry_stage = EngineStage.FINALIZE
             self._emit_run_finished(results, self._telemetry_started_perf)
         return results
+
+
+def _new_results_target(target: object) -> ResultsTarget:
+    payload = target.model_dump() if isinstance(target, RunTarget) else target
+    try:
+        validated = ResultsTarget.model_validate(payload)
+    except (TypeError, ValueError) as exc:
+        raise GraphCheckError(
+            "engine.target_inventory_missing",
+            "The supplied target does not contain a complete schema inventory.",
+            "Supply sorted labels and relationship_types arrays or let the connector probe "
+            "the target.",
+        ) from exc
+    if validated.labels is None or validated.relationship_types is None:
+        raise GraphCheckError(
+            "engine.target_inventory_missing",
+            "The supplied target does not contain a complete schema inventory.",
+            "Supply sorted labels and relationship_types arrays or let the connector probe "
+            "the target.",
+        )
+    return validated
 
 
 def failed_results(

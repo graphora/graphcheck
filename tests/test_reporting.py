@@ -22,7 +22,7 @@ def _fixture(name: str) -> Path:
     return FIXTURES / f"results.{name}.json"
 
 
-@pytest.mark.parametrize("name", ["complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
 def test_writer_round_trips_existing_results_fixtures(name: str):
     source = _fixture(name)
     model = load_results(source)
@@ -35,13 +35,18 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
     assert Results.model_validate(raw) == model
 
 
-def test_writer_upgrades_schema_1_0_input_to_current_output():
+@pytest.mark.parametrize("historical_version", ["1.0", "1.1"])
+def test_writer_upgrades_historical_input_to_current_output(historical_version):
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
-    raw["schema_version"] = "1.0"
+    raw["schema_version"] = historical_version
+    raw["run"]["target"].pop("labels")
+    raw["run"]["target"].pop("relationship_types")
 
     output = json.loads(results_json(raw))
 
-    assert output["schema_version"] == "1.1"
+    assert output["schema_version"] == "1.2"
+    assert output["run"]["target"]["labels"] is None
+    assert output["run"]["target"]["relationship_types"] is None
 
 
 def test_writer_output_bytes_match_regression_fixture():
@@ -67,7 +72,7 @@ def test_writer_revalidates_mutated_results_instances():
         results_json(model)
 
 
-@pytest.mark.parametrize("name", ["complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
 def test_html_renderer_outputs_self_contained_interactive_report(name: str):
     report = render_html_report(_fixture(name))
 
@@ -111,11 +116,14 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert 'aria-controls="summary-table-container">See issues.</button>' in html
     assert "localStorage.setItem(" in html
     assert "restoreCheckFilters();" in html
-    assert "<strong>neo4j</strong> (Neo4j version: 5.18.0, community)" in html
-    assert '<span class="meta-label">Nodes</span>' in html
-    assert '<span class="meta-label">Relationships</span>' in html
-    assert "1,250" in html
-    assert "3,480" in html
+    assert "<dt>Target Graph</dt><dd><strong>neo4j</strong>" in html
+    assert "<dt>Database</dt><dd>Neo4j 5.18.0 community" in html
+    assert "<dt>Size</dt><dd>1,250 nodes · 3,480 relationships" in html
+    assert "<summary>2 labels · 2 relationship types</summary>" in html
+    assert "<strong>Labels:</strong> Account, Customer" in html
+    assert "<strong>Relationship types:</strong> CONTROLS, OWNS" in html
+    assert 'class="capability-pill capability-available"' in html
+    assert 'role="tooltip">Available</span>' in html
     assert "<code>customer-360</code>" in html
     assert '<span class="suite-check-stats">3/3 checks run</span>' in html
     assert '<span class="badge badge-fail">1 FAILED</span>' in html
@@ -244,6 +252,44 @@ def test_html_renderer_appends_skips_to_issue_status_text():
     )
 
 
+def test_html_renderer_distinguishes_empty_and_historical_inventory(tmp_path):
+    empty = json.loads(_fixture("clean").read_text(encoding="utf-8"))
+    empty["run"]["target"]["labels"] = []
+    empty["run"]["target"]["relationship_types"] = []
+    assert "<summary>0 labels · 0 relationship types</summary>" in render_html_report(empty)
+
+    historical = deepcopy(empty)
+    historical["schema_version"] = "1.1"
+    historical["run"]["target"].pop("labels")
+    historical["run"]["target"].pop("relationship_types")
+    path = tmp_path / "results.json"
+    original = json.dumps(historical)
+    path.write_text(original, encoding="utf-8")
+
+    model = load_results(path)
+
+    assert model.run.target is not None
+    assert model.run.target.labels is None
+    assert model.run.target.relationship_types is None
+    assert "Inventory not recorded" in render_html_report(model)
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_html_renderer_escapes_full_inventory_and_shows_capability_states():
+    raw = json.loads(_fixture("clean").read_text(encoding="utf-8"))
+    raw["run"]["target"]["labels"] = ["<Customer&>"]
+    raw["run"]["target"]["relationship_types"] = ["OWNS<script>"]
+    raw["run"]["target"]["capabilities"]["count_store"] = False
+
+    html = render_html_report(raw)
+
+    assert "&lt;Customer&amp;&gt;" in html
+    assert "OWNS&lt;script&gt;" in html
+    assert "<Customer&>" not in html
+    assert 'class="capability-pill capability-unavailable"' in html
+    assert 'role="tooltip">Unavailable</span>' in html
+
+
 def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["checks"] = raw["checks"][1:]
@@ -363,22 +409,57 @@ def test_html_renderer_displays_failed_run_error():
     assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
     assert 'id="checks-empty-message"' in html
     assert "No checks to explore." in html
-    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
-    assert "<strong>Partial Run.</strong>" in html
-    assert 'aria-controls="run-error-fix">See fix.</button>' in html
-    assert '<span id="run-error-fix" class="header-status-fix hidden-status-fix">' in html
+    assert '<span class="status-pill status-pill-error">FAILED</span>' in html
+    assert "<strong>Run Failed.</strong>" in html
+    assert 'aria-controls="troubleshooting-dialog">Troubleshoot.</button>' in html
+    assert '<dialog id="troubleshooting-dialog"' in html
+    assert "<h2>Troubleshooting Steps</h2>" in html
+    assert "troubleshoot-btn')?.addEventListener('click', openTroubleshootingDialog)" in html
     assert (
-        html.index('aria-controls="run-error-fix">See fix.</button>')
-        < html.index('<span id="run-error-fix"')
-        < html.index("</h1>", html.index('<span id="run-error-fix"'))
+        "close-troubleshooting-btn')?.addEventListener('click', closeTroubleshootingDialog)" in html
     )
-    assert "run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix)" in html
     assert "CHECKED ON" not in html
     assert "connection.auth" not in html
     assert "Neo4j rejected the credentials" in html
+    assert "Check the password in profiles.yml" in html
     assert "Target unavailable" in html
     assert "Run failed before any checks could be evaluated." in html
+    assert "Action required" not in html
+    assert "run-diagnostic" not in html
+    assert "See fix" not in html
     assert "All clear! No issues found." not in html
+
+
+def test_html_renderer_keeps_target_labels_and_values_on_aligned_rows():
+    html = render_html_report(_fixture("clean"))
+
+    assert ".target-summary { display: flex; flex-direction: column;" in html
+    assert (
+        ".target-summary > div { display: grid; grid-template-columns: 132px minmax(0, 1fr);"
+        in html
+    )
+    assert ".target-summary > div { display: contents; }" not in html
+    assert ".target-summary { grid-template-columns: 1fr;" not in html
+
+
+def test_html_renderer_colors_the_active_verdict_filter():
+    html = render_html_report(_fixture("complete"))
+
+    for verdict, color in (
+        ("fail", "--fail-color"),
+        ("warn", "--warn-color"),
+        ("errored", "--errored-color"),
+        ("pass", "--pass-color"),
+        ("skipped", "--skipped-color"),
+    ):
+        assert (
+            f'.filter-btn.active[data-filter="{verdict}"] '
+            f"{{ background: var({color}); color: #fff; }}" in html
+        )
+        assert f'data-filter="{verdict}" aria-pressed="false"' in html
+    assert 'data-filter="all" aria-pressed="true"' in html
+    assert "b.setAttribute('aria-pressed', 'false');" in html
+    assert "btn.setAttribute('aria-pressed', 'true');" in html
 
 
 def test_html_renderer_displays_unreachable_neo4j_as_failed():
@@ -412,16 +493,51 @@ def test_html_renderer_displays_unreachable_neo4j_as_failed():
         ),
     ],
 )
-def test_html_renderer_shows_actionable_connection_diagnostic(code, message, fix):
+def test_html_renderer_shows_connection_troubleshooting_dialog(code, message, fix):
     raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
     raw["run"]["error"] = {"code": code, "message": message, "fix": fix}
 
     html = render_html_report(raw)
 
-    assert '<section class="callout callout-error run-diagnostic"' in html
-    assert "Action required" in html
+    assert '<span class="status-pill status-pill-error">FAILED</span>' in html
+    assert '<dialog id="troubleshooting-dialog"' in html
+    assert "<h2>Troubleshooting Steps</h2>" in html
+    assert "<h3>Problem</h3>" in html
     assert message in html
-    assert f"<strong>Fix:</strong> {fix}" in html
+    assert "<h3>Steps</h3>" in html
+    if code == "neo4j.credential_not_read_only":
+        assert "Create a dedicated Neo4j user for GraphCheck." in html
+    else:
+        assert f"<li>{fix}</li>" in html
+    assert "Action required" not in html
+
+
+def test_html_renderer_shortens_read_only_error_header_and_keeps_detail_in_dialog():
+    raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
+    detail = (
+        "The configured Neo4j credential has privileges outside the allowed read-only model "
+        "(WRITE NODE(*), ROLE ADMIN) and is not server-enforced read-only."
+    )
+    raw["run"]["error"] = {
+        "code": "neo4j.credential_not_read_only",
+        "message": detail,
+        "fix": "Create a dedicated read-only user.",
+    }
+
+    html = render_html_report(raw)
+    header = html[
+        html.index('<div id="report-run-title"') : html.index(
+            "</div>", html.index('<div id="report-run-title"')
+        )
+    ]
+
+    assert (
+        "The configured Neo4j credential has privileges outside the allowed read-only model."
+        in header
+    )
+    assert "WRITE NODE(*)" not in header
+    assert detail in html
+    assert "Update user and password/password_env in profiles.yml" in html
 
 
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():

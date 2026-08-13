@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from graphcheck import cli as cli_module
 from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
-from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Counts, QueryResult
 from graphcheck.project import write_default_project
@@ -18,12 +18,14 @@ from graphcheck.reporting.writer import json_compatible, load_results
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:test-graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 
@@ -658,8 +660,9 @@ competency:
     report = (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
         encoding="utf-8"
     )
-    assert "Action required" in report
-    assert "Use a dedicated read-only user." in report
+    assert "Troubleshooting Steps" in report
+    assert "The credential has WRITE." in report
+    assert "Action required" not in report
     assert client.read_calls == []
 
 

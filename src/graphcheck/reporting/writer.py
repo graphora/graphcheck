@@ -36,17 +36,34 @@ def json_compatible(value: object) -> Any:
 
 
 def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
+    historical_schema_version = None
     if isinstance(data, Results):
         # Pydantic models are mutable and model_copy(update=...) does not validate updates.
         # Rebuild from plain data so every public writer/renderer boundary rechecks the
         # semantic score, totals, exit-code, and suite invariants.
+        historical_schema_version = data._historical_schema_version
         data = data.model_dump(mode="python", by_alias=True, exclude_none=False)
     if isinstance(data, Path):
         data = data.read_text(encoding="utf-8")
     payload = json.loads(data) if isinstance(data, str) else data
-    if isinstance(payload, dict) and payload.get("schema_version") == "1.0":
-        payload = {**payload, "schema_version": SCHEMA_VERSION}
-    return Results.model_validate(payload)
+    if isinstance(payload, dict) and payload.get("schema_version") in {"1.0", "1.1"}:
+        historical_schema_version = str(payload["schema_version"])
+        run = payload.get("run")
+        target = run.get("target") if isinstance(run, dict) else None
+        if isinstance(target, dict):
+            target = {**target}
+            target.setdefault("labels", None)
+            target.setdefault("relationship_types", None)
+            run = {**run, "target": target}
+        payload = {**payload, "schema_version": SCHEMA_VERSION, "run": run}
+    context = (
+        {"historical_schema_version": historical_schema_version}
+        if historical_schema_version is not None
+        else None
+    )
+    model = Results.model_validate(payload, context=context)
+    model._historical_schema_version = historical_schema_version
+    return model
 
 
 def results_json(results: Results | dict[str, Any]) -> str:

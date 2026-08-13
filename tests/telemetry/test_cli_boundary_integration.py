@@ -11,7 +11,7 @@ from graphcheck import cli as cli_module
 from graphcheck.cli import _write_run_artifacts, cli
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
-from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.generation.proposals import RawProposal, RawProposalBatch
 from graphcheck.generation.service import GenerationService
@@ -22,12 +22,14 @@ from graphcheck.telemetry.policy import enable_telemetry, os_family, os_version,
 from graphcheck.telemetry.posthog import PostHogAdapter
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="private-database",
     server_version="5.18.7",
     edition="enterprise",
     fingerprint="sha256:private-fingerprint",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=["PrivateLabel"],
+    relationship_types=["PRIVATE_RELATIONSHIP"],
 )
 
 

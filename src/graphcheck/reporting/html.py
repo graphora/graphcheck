@@ -205,7 +205,7 @@ def _run_title(results: Results) -> str:
         skipped_text = f" ({results.totals.skipped} {check_str} skipped)"
 
     action = ""
-    fix = ""
+    troubleshooting = ""
     status = display_run_status(results)
     if results.run.error is not None:
         kind, label, heading = (
@@ -213,15 +213,12 @@ def _run_title(results: Results) -> str:
             if status is RunStatus.FAILED
             else ("partial", "PARTIAL", "Partial Run.")
         )
-        message = results.run.error.message
+        message = _run_error_summary(results.run.error.code, results.run.error.message)
         action = (
-            '<button id="run-error-fix-toggle" class="header-status-action" type="button" '
-            'aria-expanded="false" aria-controls="run-error-fix">See fix.</button>'
+            '<button id="troubleshoot-btn" class="header-status-action" type="button" '
+            'aria-haspopup="dialog" aria-controls="troubleshooting-dialog">Troubleshoot.</button>'
         )
-        fix = (
-            '<span id="run-error-fix" class="header-status-fix hidden-status-fix">'
-            f"💡 <strong>Fix:</strong> {_escape(results.run.error.fix)}</span>"
-        )
+        troubleshooting = _troubleshooting_dialog(results)
     elif status is RunStatus.PARTIAL:
         kind, label, heading, message = "partial", "PARTIAL", "Partial Run.", f"{status_text}."
         action = (
@@ -245,9 +242,47 @@ def _run_title(results: Results) -> str:
         '  <div class="header-status">'
         f'    <span class="status-pill status-pill-{kind}">{label}</span>'
         f'    <h1><strong>{heading}</strong> <span class="header-status-message">'
-        f"{_escape(message)}</span>{action}{fix}</h1>"
+        f"{_escape(message)}</span>{action}</h1>"
         "  </div>"
+        f"  {troubleshooting}"
         "</div>"
+    )
+
+
+def _run_error_summary(code: str, message: str) -> str:
+    if code == "neo4j.credential_not_read_only":
+        return "The configured Neo4j credential has privileges outside the allowed read-only model."
+    return message
+
+
+def _troubleshooting_dialog(results: Results) -> str:
+    error = results.run.error
+    if error is None:
+        return ""
+    if error.code == "neo4j.credential_not_read_only":
+        steps = (
+            "Create a dedicated Neo4j user for GraphCheck.",
+            "Grant it only ACCESS and MATCH (or READ/TRAVERSE) on the target database and graph.",
+            "Update user and password/password_env in profiles.yml to use that account.",
+            "Run graphcheck debug, then graphcheck run.",
+        )
+    else:
+        steps = (error.fix,)
+    items = "".join(f"<li>{_escape(step)}</li>" for step in steps)
+    return (
+        '<dialog id="troubleshooting-dialog" class="comparison-dialog troubleshooting-dialog">'
+        '  <div class="comparison-dialog-header">'
+        "    <h2>Troubleshooting Steps</h2>"
+        '    <button id="close-troubleshooting-btn" class="dialog-close" type="button" '
+        'aria-label="Close Troubleshooting Steps">×</button>'
+        "  </div>"
+        '  <div class="troubleshooting-content">'
+        "    <h3>Problem</h3>"
+        f"    <p>{_escape(error.message)}</p>"
+        "    <h3>Steps</h3>"
+        f"    <ol>{items}</ol>"
+        "  </div>"
+        "</dialog>"
     )
 
 
@@ -272,16 +307,7 @@ def _status_overview(
     filtered: bool,
 ) -> str:
     details_rows = _details_rows(checks)
-    diagnostic = _run_diagnostic(results)
-
-    target = results.run.target
-    if target is None:
-        target_html = '<span class="text-muted">Target unavailable</span>'
-    else:
-        target_html = (
-            f"<strong>{_escape(target.database)}</strong> "
-            f"(Neo4j version: {_escape(target.server_version)}, {_escape(target.edition)})"
-        )
+    target_html = _target_overview(results)
 
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
@@ -377,24 +403,10 @@ def _status_overview(
         '  <div class="summary-top-bar">'
         '    <div class="summary-meta-col">'
         "      <h2>Graph Health Overview</h2>"
-        '      <div class="summary-meta-grid">'
-        '        <div class="meta-item">'
-        '          <span class="meta-label">Target Graph</span>'
-        f"          <div>{target_html}</div>"
-        "        </div>"
-        '        <div class="meta-item graph-count-item">'
-        '          <span class="meta-label">Nodes</span>'
-        f"          <div>{_target_count(results, 'nodes')}</div>"
-        "        </div>"
-        '        <div class="meta-item graph-count-item">'
-        '          <span class="meta-label">Relationships</span>'
-        f"          <div>{_target_count(results, 'relationships')}</div>"
-        "        </div>"
-        "      </div>"
+        f"      {target_html}"
         "    </div>"
         "  </div>"
         '  <div class="scrollable-content">'
-        f"    {diagnostic}"
         f'    <div class="suite-status-list">{suite_body}</div>'
         '    <div class="summary-toggle-wrapper">'
         '      <button id="toggle-summary-btn" class="btn-summary-toggle">'
@@ -419,16 +431,61 @@ def _status_overview(
     )
 
 
-def _run_diagnostic(results: Results) -> str:
-    if results.run.error is None:
-        return ""
-    error = results.run.error
+def _target_overview(results: Results) -> str:
+    target = results.run.target
+    if target is None:
+        return '<p class="target-unavailable text-muted">Target unavailable</p>'
+    inventory = _target_inventory(target.labels, target.relationship_types)
+    capabilities = "".join(
+        _capability_pill(label, available)
+        for label, available in (
+            ("APOC", target.capabilities.apoc),
+            ("Count Store", target.capabilities.count_store),
+        )
+    )
     return (
-        '<section class="callout callout-error run-diagnostic" aria-label="Run diagnostic">'
-        "<h2>Action required</h2>"
-        f"<p>{_escape(error.message)}</p>"
-        f"<p>💡 <strong>Fix:</strong> {_escape(error.fix)}</p>"
-        "</section>"
+        '<dl class="target-summary">'
+        f"<div><dt>Target Graph</dt><dd><strong>{_escape(target.database)}</strong></dd></div>"
+        f"<div><dt>Database</dt><dd>Neo4j {_escape(target.server_version)} "
+        f"{_escape(target.edition)}</dd></div>"
+        f"<div><dt>Size</dt><dd>{_target_size(target.nodes, target.relationships)}</dd></div>"
+        f"<div><dt>Schema Inventory</dt><dd>{inventory}</dd></div>"
+        f'<div><dt>Capabilities</dt><dd class="capability-list">{capabilities}</dd></div>'
+        "</dl>"
+    )
+
+
+def _target_size(nodes: int | None, relationships: int | None) -> str:
+    if nodes is None and relationships is None:
+        return "Counts unavailable"
+    node_text = "Nodes unavailable" if nodes is None else f"{nodes:,} nodes"
+    relationship_text = (
+        "Relationships unavailable" if relationships is None else f"{relationships:,} relationships"
+    )
+    return f"{node_text} · {relationship_text}"
+
+
+def _target_inventory(labels: list[str] | None, relationship_types: list[str] | None) -> str:
+    if labels is None or relationship_types is None:
+        return "Inventory not recorded"
+    label_names = ", ".join(_escape(label) for label in labels) or "None"
+    relationship_names = ", ".join(_escape(rel_type) for rel_type in relationship_types) or "None"
+    return (
+        '<details class="target-inventory-details">'
+        f"<summary>{len(labels)} labels · {len(relationship_types)} relationship types</summary>"
+        f"<div><strong>Labels:</strong> {label_names}</div>"
+        f"<div><strong>Relationship types:</strong> {relationship_names}</div>"
+        "</details>"
+    )
+
+
+def _capability_pill(label: str, available: bool) -> str:
+    state = "Available" if available else "Unavailable"
+    kind = "available" if available else "unavailable"
+    return (
+        f'<span class="capability-pill capability-{kind}" tabindex="0" '
+        f'aria-label="{_escape(label)}: {state}">{_escape(label)}'
+        f'<span class="capability-tooltip" role="tooltip">{state}</span></span>'
     )
 
 
@@ -487,12 +544,12 @@ def _checks(checks: list[CheckResult]) -> str:
         '    <div class="checks-controls">'
         '      <input type="text" id="search-input" placeholder="🔍 Search checks...">'
         '      <div class="filter-group">'
-        '        <button class="filter-btn active" data-filter="all">All</button>'
-        '        <button class="filter-btn" data-filter="fail">Fail</button>'
-        '        <button class="filter-btn" data-filter="warn">Warn</button>'
-        '        <button class="filter-btn" data-filter="errored">Errored</button>'
-        '        <button class="filter-btn" data-filter="pass">Pass</button>'
-        '        <button class="filter-btn" data-filter="skipped">Skipped</button>'
+        '        <button class="filter-btn active" data-filter="all" aria-pressed="true">All</button>'
+        '        <button class="filter-btn" data-filter="fail" aria-pressed="false">Fail</button>'
+        '        <button class="filter-btn" data-filter="warn" aria-pressed="false">Warn</button>'
+        '        <button class="filter-btn" data-filter="errored" aria-pressed="false">Errored</button>'
+        '        <button class="filter-btn" data-filter="pass" aria-pressed="false">Pass</button>'
+        '        <button class="filter-btn" data-filter="skipped" aria-pressed="false">Skipped</button>'
         "      </div>"
         '      <button id="toggle-details-btn" class="btn-secondary">Toggle Details</button>'
         "    </div>"
@@ -582,11 +639,6 @@ def _evidence(check: CheckResult) -> str:
 
 def _details_open(check: CheckResult) -> str:
     return ""
-
-
-def _target_count(results: Results, field: str) -> str:
-    value = getattr(results.run.target, field, None) if results.run.target is not None else None
-    return '<span class="text-muted">Unavailable</span>' if value is None else f"{value:,}"
 
 
 def _json(value: object) -> str:
@@ -708,8 +760,6 @@ body {
 .status-pill-partial { background: var(--errored-color); }
 .status-pill-error { background: var(--fail-color); }
 .header-status-action { margin-left: 6px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
-.header-status-fix { margin-left: 6px; color: #cbd5e1; font-size: 12px; font-weight: 400; }
-.hidden-status-fix { display: none; }
 .navbar-actions { display: flex; align-items: center; gap: 12px; }
 .report-navigation-status { min-width: 94px; color: #cbd5e1; font-size: 12px; text-align: right; }
 
@@ -744,7 +794,6 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
-  height: 96px;
   min-height: 96px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
@@ -775,6 +824,19 @@ body {
   letter-spacing: 0.05em;
   margin-bottom: 2px;
 }
+.target-unavailable { margin: 8px 0 0; }
+.target-summary { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; font-size: 13px; }
+.target-summary > div { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: baseline; column-gap: 18px; }
+.target-summary dt { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.target-summary dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.target-inventory-details summary { cursor: pointer; font-weight: 600; }
+.target-inventory-details div { margin-top: 4px; }
+.capability-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.capability-pill { position: relative; display: inline-flex; border-radius: 999px; padding: 2px 8px; color: #fff; font-size: 11px; font-weight: 700; outline-offset: 2px; }
+.capability-available { background: var(--pass-color); }
+.capability-unavailable { background: var(--skipped-color); }
+.capability-tooltip { position: absolute; left: 50%; bottom: calc(100% + 5px); z-index: 5; padding: 3px 6px; border-radius: 4px; background: #0f172a; color: #fff; font-size: 11px; font-weight: 500; opacity: 0; pointer-events: none; transform: translateX(-50%); white-space: nowrap; }
+.capability-pill:hover .capability-tooltip, .capability-pill:focus .capability-tooltip { opacity: 1; }
 
 /* Status Graph / Suite Status Layout */
 .suite-status-list {
@@ -1048,6 +1110,11 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 .dialog-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 24px; line-height: 1; cursor: pointer; }
 .dialog-close:hover { background: var(--bg-subtle); color: var(--text-main); }
 #report-comparison-content { max-height: calc(100vh - 130px); margin: 0; padding: 18px; overflow: auto; background: var(--bg-card); color: var(--text-main); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.troubleshooting-content { max-height: calc(100vh - 130px); padding: 18px; overflow: auto; font-size: 13px; line-height: 1.55; }
+.troubleshooting-content h3 { margin: 0 0 6px; font-size: 14px; }
+.troubleshooting-content p { margin: 0 0 18px; overflow-wrap: anywhere; }
+.troubleshooting-content ol { margin: 0; padding-left: 22px; }
+.troubleshooting-content li + li { margin-top: 8px; }
 .comparison-status-complete, .comparison-delta-positive { color: var(--pass-color); font-weight: 700; }
 .comparison-status-partial { color: var(--errored-color); font-weight: 700; }
 .comparison-status-failed, .comparison-delta-negative { color: var(--fail-color); font-weight: 700; }
@@ -1166,6 +1233,11 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 }
 .filter-btn:last-child { border-right: none; }
 .filter-btn.active { background: var(--bg-header); color: #fff; font-weight: 600; }
+.filter-btn.active[data-filter="fail"] { background: var(--fail-color); color: #fff; }
+.filter-btn.active[data-filter="warn"] { background: var(--warn-color); color: #fff; }
+.filter-btn.active[data-filter="errored"] { background: var(--errored-color); color: #fff; }
+.filter-btn.active[data-filter="pass"] { background: var(--pass-color); color: #fff; }
+.filter-btn.active[data-filter="skipped"] { background: var(--skipped-color); color: #fff; }
 
 .btn-secondary {
   background: var(--bg-subtle);
@@ -1694,8 +1766,12 @@ function updateTooltipPos(e) {
 
 function setVerdictFilter(verdict, btn) {
   activeVerdictFilter = verdict;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
   btn.classList.add('active');
+  btn.setAttribute('aria-pressed', 'true');
   filterChecks();
 }
 
@@ -1760,6 +1836,7 @@ function restoreCheckFilters() {
     activeVerdictFilter = filterButton.dataset.filter;
     document.querySelectorAll('.filter-btn').forEach(button => {
       button.classList.toggle('active', button === filterButton);
+      button.setAttribute('aria-pressed', String(button === filterButton));
     });
   }
 
@@ -1820,13 +1897,17 @@ function toggleSummaryTable() {
   if (container) setSummaryTableExpanded(container.classList.contains('hidden-summary'));
 }
 
-function toggleRunErrorFix() {
-  const fix = document.getElementById('run-error-fix');
-  const btn = document.getElementById('run-error-fix-toggle');
-  if (!fix || !btn) return;
-  const isHidden = fix.classList.toggle('hidden-status-fix');
-  btn.setAttribute('aria-expanded', String(!isHidden));
-  btn.textContent = isHidden ? 'See fix.' : 'Hide fix.';
+function openTroubleshootingDialog() {
+  const dialog = document.getElementById('troubleshooting-dialog');
+  if (!dialog) return;
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+function closeTroubleshootingDialog() {
+  const dialog = document.getElementById('troubleshooting-dialog');
+  if (typeof dialog?.close === 'function') dialog.close();
+  else dialog?.removeAttribute('open');
 }
 
 function showIssueSummary() {
@@ -1904,7 +1985,8 @@ function navigateToCheck(suiteId, checkId) {
 }
 
 function initReportSpecificInteractions() {
-  document.getElementById('run-error-fix-toggle')?.addEventListener('click', toggleRunErrorFix);
+  document.getElementById('troubleshoot-btn')?.addEventListener('click', openTroubleshootingDialog);
+  document.getElementById('close-troubleshooting-btn')?.addEventListener('click', closeTroubleshootingDialog);
   document.getElementById('run-summary-toggle')?.addEventListener('click', showIssueSummary);
   document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
   document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);

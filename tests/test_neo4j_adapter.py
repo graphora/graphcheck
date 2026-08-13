@@ -826,6 +826,8 @@ def test_probe_handles_permission_denied_apoc_probe():
 
     assert target.capabilities.apoc is False
     assert target.capabilities.count_store is True
+    assert target.labels == ["Customer"]
+    assert target.relationship_types == ["OWNS"]
     assert visibility.can_show_procedures is False
     assert counts == Counts(nodes=1, relationships=2)
 

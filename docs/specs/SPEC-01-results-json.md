@@ -1,10 +1,21 @@
 # SPEC-01 — `results.json`
 
-*Frozen for v0.* `results.json` is the machine-readable output of a GraphCheck run and the contract every other artifact (HTML report, MCP responses, future cloud) renders from. Its `schema_version` is `"1.1"`, versioned independently of `graphcheck_version`. Version 1.1 adds aggregate measurement-scope evidence for drift findings that cannot honestly identify removed graph elements.
+*Frozen per schema revision.* `results.json` is the machine-readable output of a GraphCheck run
+and the contract every other artifact (HTML report, MCP responses, future cloud) renders from. Its
+current `schema_version` is `"1.2"`, versioned independently of `graphcheck_version`.
+
+Version history:
+
+- **1.2** adds canonical target `labels` and `relationship_types` inventory.
+- **1.1** added aggregate measurement-scope evidence for drift findings that cannot honestly
+  identify removed graph elements.
+- **1.0** was the original results contract.
 
 **Source of truth:** the Pydantic model at `src/graphcheck/contracts/results.py`. `docs/specs/results.schema.json` is generated from it and is **structural only** — the derived invariants below live in the model's validators, so schema-valid ≠ fully-valid; external consumers must not rely on the schema alone.
 
-**Machine-valid examples:** `tests/contracts/fixtures/results.{complete,partial,generated-only,failed}.json`.
+**Required machine-valid 1.2 examples:**
+`tests/contracts/fixtures/results.{clean,complete,partial,generated-only,failed}.json`, delivered
+with the 1.2 implementation.
 
 ## Top-level shape
 
@@ -21,6 +32,48 @@
 - `checks[]` — one flat record per check, keyed by `(suite_id, id)`.
 
 Every model forbids unknown keys (`extra="forbid"`).
+
+## Target inventory
+
+For a non-null `run.target`, schema 1.2 adds the required keys `labels` and
+`relationship_types` alongside database, server version, edition, fingerprint, capabilities, and
+node/relationship totals.
+
+```json
+{
+  "database": "neo4j",
+  "server_version": "5.18.0",
+  "edition": "community",
+  "fingerprint": "sha256:abc123",
+  "capabilities": {"apoc": true, "count_store": true},
+  "nodes": 1250,
+  "relationships": 3480,
+  "labels": ["Account", "Customer"],
+  "relationship_types": ["CONTROLS", "OWNS"]
+}
+```
+
+The accuracy contract for these fields is:
+
+1. Every new non-failed schema 1.2 run populates both fields with arrays. Failed runs may have
+   `run.target:null` under the existing status rules.
+2. Arrays contain exact Neo4j token names, are sorted ascending and case-sensitively by Unicode
+   code point, and contain no duplicates. Noncanonical input is rejected rather than silently
+   normalized at a consumer boundary.
+3. `[]` means the connector probed that inventory category and found no tokens.
+4. `null` is reserved for the compatibility-loaded representation of a schema 1.0 or 1.1 artifact
+   that did not record the inventory. It does not mean that a new probe found an empty schema,
+   failed, or lacked permission.
+5. New producers reuse the schema tokens already collected by the connector probe. They must not
+   add a Neo4j query, derive names from the fingerprint, or infer them from checks, evidence, or
+   baseline data.
+6. Labels and relationship types are structural inventory, not findings. Their presence must not
+   generate concerns or automated recommendations.
+
+The compatibility loader upgrades 1.0 and 1.1 artifacts in memory by adding
+`labels:null` and `relationship_types:null` to a non-null historical target before validating
+against the current model. It does not rewrite the source artifact. A re-exposed historical result,
+including through MCP, preserves null as `not recorded by that schema version`.
 
 ## Shape by run status
 
@@ -71,6 +124,21 @@ This is required for aggregate count-drift decreases because deleted elements ca
 from the current graph. Aggregate pointers must never be substituted for row-level
 node/relationship or property-coverage evidence.
 8. **Coverage-status invariant:** any `skip_reason ∈ {unsupported, not_run}` ⇒ `run.status:partial` (a `partial` run never exits 0). `generated` skips do not force partial.
+9. **Target-inventory invariant:** results produced by a new non-failed 1.2 run carry sorted,
+   unique, non-null `run.target.labels` and `run.target.relationship_types`. Nullable inventory
+   exists only at a compatibility boundary for pre-1.2 input. An empty array is recorded evidence
+   of an empty probed category and is never interchangeable with null.
+
+## Downstream and MCP contract
+
+The HTML report, CLI artifact readers, report history, MCP tools, and future cloud surfaces consume
+the same validated `Results` model. Any MCP tool that returns a run result must:
+
+- expose `labels` and `relationship_types` in its declared output schema;
+- return arrays for new 1.2 runs and preserve null for compatibility-loaded pre-1.2 artifacts;
+- use or derive from the canonical SPEC-01 schema rather than maintain a divergent inventory
+  definition; and
+- preserve canonical order without adding target-specific interpretation or recommendations.
 
 ## Deliverables
 
@@ -78,5 +146,8 @@ node/relationship or property-coverage evidence.
 - `src/graphcheck/scoring.py` — the pure deterministic weighted scorer shared by the engine,
   result validator, and report renderer.
 - `docs/specs/results.schema.json` — generated JSON Schema (structural).
-- `tests/contracts/fixtures/results.{complete,partial,generated-only,failed}.json` — machine-valid artifacts.
+- `tests/contracts/fixtures/results.{clean,complete,partial,generated-only,failed}.json` —
+  machine-valid 1.2 artifacts with non-null target inventory on every non-failed current result.
 - `tests/contracts/test_results.py` — validates fixtures against the schema, round-trips them, and asserts every invariant directly.
+- MCP output schemas and contract tests — validate new-run arrays and historical null semantics
+  against the same SPEC-01 1.2 shape.
