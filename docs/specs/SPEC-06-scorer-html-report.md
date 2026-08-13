@@ -145,14 +145,20 @@ The report shows:
 - each suite's `SCORE: <value>` badge, or `SCORE: N/A` when that suite has no
   calculated score, always as the rightmost badge in its status card,
 - a colored status marker for every rendered check,
-- an issue summary containing `fail`, `warn`, and `errored` checks; intentional
-  `skipped` checks are not issues,
-- a lossless check ledger containing every selected `results.checks` identity exactly once, with
-  the persisted verdict, `Evaluated`/`Not evaluated` state, pattern, severity, expected value, and
-  all available measurement, estimate, query, evidence, or structured-error detail,
-- a visible reason block on every skipped card using the stable `generated`, `unsupported`, or
-  `not_run` code and its generic shared explanation; the renderer does not infer a more specific
-  cause from run-level context,
+- a permanent `Not Evaluated` section after the suite overview that distinguishes failed-before-
+  evaluation, empty selection, complete evaluation, partial evaluation, and all-skipped runs,
+- every skipped check's name as a compact control that opens and highlights its full Checks
+  Explorer entry; the first five are visible and any remainder stays in the offline document
+  behind a native disclosure,
+- the stored `run.partial_reason` once as a coverage note when present, plus the exact stored suite
+  and tag selection boundary and a permanent statement that unconfigured graph behavior was not
+  evaluated,
+- a complete selected-check ledger containing every `results.checks` identity exactly once, with
+  the persisted verdict, `Not evaluated` state on skipped checks, pattern, expected value, and all
+  available measurement, estimate, query, evidence, or structured-error detail; severity remains
+  available in `results.json` but is not repeated in the explorer,
+- a visible `Reason` block on every skipped card with its generic shared explanation but without
+  the internal raw code; the renderer does not infer a more specific cause from run-level context,
 - checks sorted failures-first,
 - report-history timestamps converted from stored UTC to the browser's local timezone and shown as
   `yyyy-mm-dd at hh:mm:ss`,
@@ -168,12 +174,12 @@ fingerprint, checks, evidence, or baseline data.
 
 The embedded script reveals the checks explorer, navigates from suite status
 markers to checks, filters checks by verdict or search text, provides an `Issues` union filter for
-`fail`, `warn`, and `errored`, states when the selected verdict category is empty, sorts the issue
-summary, toggles check details, and switches the inline CSS theme. Event handlers
-are registered with `addEventListener`; check identities are read from escaped
-data attributes and matched directly rather than interpolated into JavaScript or
-CSS selectors. These interactions operate only on the already-rendered document
-and do not load or transmit data.
+`fail`, `warn`, and `errored`, states when the selected verdict category is empty, focuses the
+`Not Evaluated` section from partial-run navigation, toggles check details, and switches the inline
+CSS theme. `See issues` opens the Issues filter, while `Explore checks` opens the All filter. Event
+handlers are registered with `addEventListener`; check identities are read from escaped data
+attributes and matched directly rather than interpolated into JavaScript or CSS selectors. These
+interactions operate only on the already-rendered document and do not load or transmit data.
 
 ### Ordering
 
@@ -208,11 +214,12 @@ completed segment followed by a grey `─` remaining segment rather than ASCII e
 When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
 check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
 passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
-and red for 0–49; outcome colors apply only to non-zero values while headers remain white. Target
-metadata appears before interactive progress. Suite names are italicized, and incomplete coverage
-names every suite containing a skipped check in sorted order. Results and report paths collapse to
-one saved-directory line, and blank lines separate the lifecycle, score, result/artifact, and exit
-code blocks.
+and red for 0–49. Check coverage is green when evaluated equals selected and yellow otherwise;
+outcome colors apply only to non-zero values while headers remain white. Target metadata appears
+before interactive progress. Suite names are italicized, and incomplete coverage names every suite
+containing a skipped check in sorted order. Results and report paths collapse to one saved-directory
+line, and blank lines separate the lifecycle, score, result/artifact, and exit code blocks. One final
+blank line follows the exit-code line.
 
 History operations load and validate each run's `results.json`, including the
 schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
@@ -405,7 +412,9 @@ The tests assert:
 - reports show each suite score as the rightmost badge in its status card,
   distinguish execution errors from graph findings, project the same result sentence in the CLI
   and HTML for failed, empty-selection, all-skipped, findings, incomplete-clean, and fully clean
-  runs, exclude skipped checks from the issue summary, and render failure-first issue details.
+  runs, render every coverage state and skipped check name in `Not Evaluated`, preserve the stored
+  selection boundary, link coverage entries to failure-first check details, and avoid a duplicate
+  issue summary.
 - new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
   probed empty arrays from historical not-recorded null, and never infer inventory from other
   report data.

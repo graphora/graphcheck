@@ -148,29 +148,32 @@ def test_html_check_ledger_matches_selected_checks_exactly(name):
         attrs, text = card["attrs"], card["text"]
         check = expected[(attrs["data-suite-id"], attrs["data-check-id"])]
         assert attrs["data-verdict"] == check.verdict.value
-        assert ("Evaluated" if check.executed else "Not evaluated") in text
+        if check.executed:
+            assert "Evaluated" not in text
+        else:
+            assert "Not evaluated" in text
         assert f"Pattern: {check.pattern.value}" in text
-        assert f"Severity: {check.severity.value}" in text
+        assert "Severity:" not in text
 
 
 @pytest.mark.parametrize(
-    ("reason", "label", "explanation"),
+    ("reason", "explanation"),
     [
-        ("generated", "Generated", "Generated check awaiting review or approval."),
-        ("unsupported", "Unsupported", "A capability required by this check was unavailable."),
-        ("not_run", "Not run", "The run ended before this check started."),
+        ("generated", "Generated check awaiting review or approval."),
+        ("unsupported", "A capability required by this check was unavailable."),
+        ("not_run", "The run ended before this check started."),
     ],
 )
-def test_html_skipped_cards_show_stable_reason_and_generic_explanation(reason, label, explanation):
+def test_html_skipped_cards_show_generic_reason_without_internal_code(reason, explanation):
     raw = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
     raw["checks"][0]["skip_reason"] = reason
     if reason != "generated":
         raw["run"].update(status="partial", partial_reason="coverage unavailable")
     card = _check_cards(render_html_report(raw))[0]
 
-    assert label in card["text"]
+    assert "Reason" in card["text"]
     assert explanation in card["text"]
-    assert f"Reason code: {reason}" in card["text"]
+    assert "Reason code:" not in card["text"]
     assert "View details" in card["text"]
     assert "View Details & Evidence" not in card["text"]
 
@@ -178,7 +181,7 @@ def test_html_skipped_cards_show_stable_reason_and_generic_explanation(reason, l
 def test_html_non_skipped_cards_do_not_show_skip_reasons():
     cards = _check_cards(render_html_report(_fixture("clean")))
 
-    assert all("Reason code:" not in card["text"] for card in cards)
+    assert all("Reason" not in card["text"] for card in cards)
 
 
 def test_html_renderer_shows_health_overview_and_outcome_breakdown():
@@ -214,7 +217,8 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert 'data-tooltip="Which accounts does a customer control — fail"' in html
     assert 'data-tooltip="Accounts are connected to a Customer — warn"' in html
     assert 'data-tooltip="Customer.tax_id is present — pass"' in html
-    assert "Show Issue Summary" in html
+    assert "<h2>Not Evaluated</h2>" in html
+    assert "None. All 3 selected checks were evaluated." in html
     assert "5000 rows exceeds max 200" in html
     assert "2 Account nodes have no controlling Customer" in html
 
@@ -228,7 +232,7 @@ def test_html_renderer_reports_partial_coverage():
         "Coverage is incomplete due to skipped check(s) from "
         "<em>customer-360</em>.</span>" in html
     )
-    assert 'aria-controls="summary-table-container">See more.</button>' in html
+    assert 'data-action="coverage" aria-controls="not-evaluated">Review coverage.</button>' in html
     assert "run-summary-toggle')?.addEventListener('click', handleRunSummaryAction)" in html
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
     assert '<span class="badge badge-skipped">1 SKIPPED</span>' in html
@@ -266,6 +270,106 @@ def test_html_renderer_reports_all_checks_skipped():
     assert "Check did not pass" not in html
     assert "No checks were evaluated." in html
     assert "All clear! No issues found." not in html
+
+
+def test_not_evaluated_is_truthful_for_clean_findings_failed_and_empty_runs():
+    scope = (
+        "This report covers checks selected for this run. GraphCheck did not evaluate graph "
+        "behavior outside those configured checks."
+    )
+    clean = render_html_report(_fixture("clean"))
+    findings = render_html_report(_fixture("complete"))
+    failed = render_html_report(_fixture("failed"))
+    empty = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
+    empty_totals = {"checks": 0, "pass": 0, "fail": 0, "warn": 0, "errored": 0, "skipped": 0}
+    empty.update(score=None, checks=[])
+    empty["totals"] = empty_totals
+    empty["suites"][0].update(score=None, totals=empty_totals.copy())
+
+    assert "None. All 2 selected checks were evaluated." in clean
+    assert 'class="not-evaluated-summary not-evaluated-complete"' in clean
+    assert "None. All 3 selected checks were evaluated." in findings
+    assert "The run failed before checks could be evaluated." in failed
+    assert "No checks were selected for this run." in render_html_report(empty)
+    assert all(scope in report for report in (clean, findings, failed))
+    assert all("summary-table" not in report for report in (clean, findings, failed))
+
+
+def test_not_evaluated_lists_partial_and_generated_coverage_from_stored_values():
+    partial = render_html_report(_fixture("partial"))
+    generated = render_html_report(_fixture("generated-only"))
+    partial_start = partial.index('<section id="not-evaluated"')
+    generated_start = generated.index('<section id="not-evaluated"')
+    partial_coverage = partial[partial_start : partial.index("</section>", partial_start)]
+    generated_coverage = generated[generated_start : generated.index("</section>", generated_start)]
+
+    assert "1 of 2 selected checks were not evaluated." in partial_coverage
+    assert partial_coverage.count("Coverage note:</strong> time budget exceeded (30s)") == 1
+    assert (
+        '<button class="not-evaluated-row" type="button" '
+        'data-suite-id="customer-360" data-check-id="account-no-orphans">'
+        "Accounts are connected to a Customer</button>"
+    ) in partial_coverage
+    assert "Not run" not in partial_coverage
+    assert "not_run" not in partial_coverage
+    assert "The run ended before this check started." not in partial_coverage
+    assert "No checks were evaluated." in generated_coverage
+    assert (
+        'data-suite-id="customer-360" data-check-id="cq-draft">'
+        "draft competency check awaiting approval</button>"
+    ) in generated_coverage
+    assert "Reason code:" not in generated_coverage
+    assert "Generated check awaiting review or approval." not in generated_coverage
+    assert "All 1 selected check passed." not in generated
+
+
+def test_not_evaluated_discloses_more_than_five_skips_without_omitting_rows():
+    raw = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
+    template = raw["checks"][0]
+    raw["checks"] = [dict(template, id=f"generated-{index}") for index in range(6)]
+    raw["totals"].update(checks=6, skipped=6)
+    raw["suites"][0]["totals"].update(checks=6, skipped=6)
+
+    html = render_html_report(raw)
+
+    assert "Show 1 more not evaluated checks" in html
+    assert '<details class="not-evaluated-more">' in html
+    assert all(f'data-check-id="generated-{index}"' in html for index in range(6))
+
+
+def test_not_evaluated_uses_only_stored_selection_and_escapes_it():
+    raw = json.loads(_fixture("clean").read_text(encoding="utf-8"))
+    raw["run"]["selection"].update(suites=["customer-360", "<suite>"], tags=["core", "<tag>"])
+
+    html = render_html_report(raw)
+
+    assert "<strong>Suites:</strong> customer-360, &lt;suite&gt;" in html
+    assert "<strong>Tags:</strong> core, &lt;tag&gt;" in html
+    assert "&lt;suite&gt;/" not in html
+
+
+def test_issue_summary_is_removed_and_coverage_navigation_is_accessible():
+    complete = render_html_report(_fixture("complete"))
+    partial = render_html_report(_fixture("partial"))
+
+    for report in (complete, partial):
+        assert "Issue Summary" not in report
+        assert "summary-table" not in report
+        assert "toggleSummaryTable" not in report
+        assert "showIssueSummary" not in report
+        assert "sortTable" not in report
+        assert '<section id="not-evaluated" class="not-evaluated" tabindex="-1">' in report
+        assert 'aria-controls="checks-panel" aria-expanded="false">Explore checks' in report
+        assert "showAllChecks" in report
+        assert "setVerdictFilter('all', allButton);" in report
+        assert "button.addEventListener('click', () => navigateToCheck(" in report
+        assert report.index('class="suite-status-list"') < report.index('id="not-evaluated"')
+        assert report.index('id="not-evaluated"') < report.index('id="explore-checks-btn"')
+    assert 'aria-controls="checks-panel">See issues.</button>' in complete
+    assert "run-summary-toggle')?.setAttribute('aria-expanded', 'true');" in complete
+    assert "setVerdictFilter('issues', issuesButton);" in complete
+    assert 'aria-controls="not-evaluated">Review coverage.</button>' in partial
+    assert "section.focus({ preventScroll: true });" in partial
 
 
 def test_html_renderer_does_not_call_an_empty_selection_all_clear():
@@ -461,7 +565,14 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
         card for card in _check_cards(html) if card["attrs"]["data-verdict"] == "errored"
     ]
     assert len(errored_cards) == 3
-    assert all("Errored" in card["text"] and "Evaluated" in card["text"] for card in errored_cards)
+    assert all(
+        "Errored" in card["text"] and "Evaluated" not in card["text"] for card in errored_cards
+    )
+    assert "None. All 5 selected checks were evaluated." in html
+    coverage_start = html.index('<section id="not-evaluated"')
+    assert (
+        "not-evaluated-row" not in html[coverage_start : html.index("</section>", coverage_start)]
+    )
 
 
 def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
@@ -488,11 +599,22 @@ def test_html_renderer_keeps_check_identity_out_of_javascript_contexts():
 def test_html_renderer_exposes_cypher_and_evidence_ids():
     html = render_html_report(_fixture("complete"))
 
-    assert "Severity:" in html
+    assert "Severity:" not in html
     assert "MATCH (c:Customer" in html
     assert "4:abc:12" in html
     assert "4:abc:88" in html
     assert "5000 rows exceeds max 200" in html
+
+
+def test_html_renderer_italicizes_suite_and_check_identities_and_fits_coverage_controls():
+    html = render_html_report(_fixture("partial"))
+
+    assert "<em><code>customer-360</code></em>" in html
+    assert '<em><code class="check-id">customer-360::account-no-orphans</code></em>' in html
+    assert ".not-evaluated { width: 100%; min-width: 0; box-sizing: border-box;" in html
+    assert ".not-evaluated:focus { outline: 0; box-shadow: inset" in html
+    assert ".not-evaluated-row { display: block; width: 100%; min-width: 0;" in html
+    assert "font-size: 13px" in html
 
 
 def test_html_renderer_labels_aggregate_measurement_scope():
@@ -768,7 +890,7 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "window.addEventListener('popstate'" in html
     assert "new AbortController()" in html
     assert "requestSequence !== reportNavigationSequence" in html
-    assert "setSummaryTableExpanded(issueSummaryExpanded);" in html
+    assert "setSummaryTableExpanded(issueSummaryExpanded);" not in html
     assert "checkDetailsOpenPreference = Array.from(details).some" in html
     assert "applyCheckDetailsPreference();" in html
     assert "showChecksExplorer(false);" in html

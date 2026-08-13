@@ -16,6 +16,7 @@ from graphcheck.cli import (
     _load_suite_inputs,
     _not_evaluated_table,
     _result_text,
+    _suite_coverage_style,
     _suite_score_style,
     _suite_score_table,
     _write_run_artifacts,
@@ -275,6 +276,7 @@ competency:
     assert f"{target}\nGraphCheck run " in result.stdout
     assert "Checks: 1 | passed 1" in result.stdout
     assert "Exit code: 0" in result.stdout
+    assert result.stdout.endswith("\n\n")
     assert "Results and Report saved to:" in result.stdout
     assert "Results:" not in result.stdout
     assert "Report:" not in result.stdout
@@ -458,6 +460,8 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
     assert _suite_score_style(99) == "yellow"
     assert _suite_score_style(50) == "yellow"
     assert _suite_score_style(49) == "red"
+    assert _suite_coverage_style(2, 2) == "green"
+    assert _suite_coverage_style(0, 1) == "yellow"
     assert "\x1b[1;37mSuite " in rendered
     assert "\x1b[3mgreen" in rendered
     assert "\x1b[3myellow" in rendered
@@ -465,6 +469,9 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
     assert "\x1b[32m100/100\x1b[0m" in rendered
     assert "\x1b[33m 86/100\x1b[0m" in rendered
     assert "\x1b[31m 49/100\x1b[0m" in rendered
+    assert "\x1b[32m           2/2\x1b[0m" in rendered
+    assert "\x1b[32m           3/3\x1b[0m" in rendered
+    assert "\x1b[33m           0/1\x1b[0m" in rendered
     assert "\x1b[32m       2\x1b[0m" in rendered
     assert "\x1b[31m       1\x1b[0m" in rendered
     assert "\x1b[33m       1\x1b[0m" in rendered

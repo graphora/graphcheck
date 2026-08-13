@@ -57,15 +57,14 @@ None. All 12 selected checks were evaluated.
 Not Evaluated
 3 of 12 selected checks were not evaluated.
 
-customer-360/draft-check    Generated
-Generated check awaiting review or approval.
-
-core/dangling              Unsupported
-A capability required by this check was unavailable.
+Draft customer check
+Accounts are connected to a Customer
 ```
 
-Reuse CR-2's reason mapping and show the raw reason code. If `run.partial_reason` is present, render
-it once as `Coverage note: <stored value>` above the skipped list. Do not copy it into every row.
+The final presentation uses each skipped check's stored human name as a compact control. Activating
+it opens and highlights the matching complete Checks Explorer entry, where CR-2's generic reason
+explanation remains available. If `run.partial_reason` is present, render it once as `Coverage
+note: <stored value>` above the skipped list. Do not copy it into every row.
 
 Errored checks were attempted and therefore do not belong in Not Evaluated. They remain visible in
 the Checks ledger as execution errors.
@@ -99,7 +98,7 @@ because the artifact does not contain them.
 - With up to five skipped checks, show all rows.
 - With more than five, show the first five and use a native `<details>` disclosure for the
   remainder. All rows remain in the offline document.
-- On mobile, stack identity, reason, and explanation without horizontal scrolling.
+- Keep each check-name control within the overview width without horizontal scrolling.
 
 ## Navigation changes
 
@@ -120,7 +119,7 @@ Replace navbar actions as follows:
 
 - Add a focused `_not_evaluated(results)` renderer in `src/graphcheck/reporting/html.py`.
 - Derive its counts exclusively from `results.totals` and skipped records in `results.checks`.
-- Reuse CR-2's skip-reason presentation mapping.
+- Render each skipped check as a name-only control backed by its stored suite/check identity.
 - Render `run.partial_reason`, when present, as stored text with HTML escaping.
 - Render the selected suite/tag boundary from `run.selection` without reconstructing absent checks.
 - Remove `_details_rows()`, `_empty_issue_summary()`, `_issue()`, summary-table markup, and
@@ -143,8 +142,8 @@ findings remain reachable through the Issues filter, not duplicated in Graph Hea
 
 ### CR-4.C — Partial coverage
 
-The partial fixture shows the exact evaluated/selected counts, each skipped identity, reason label,
-raw reason code, and stored `partial_reason` once.
+The partial fixture shows the exact evaluated/selected counts, each skipped check name linked to its
+Checks Explorer entry, and stored `partial_reason` once. Reasons remain in the explorer ledger.
 
 ### CR-4.D — Generated-only run
 

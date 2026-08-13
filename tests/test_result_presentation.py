@@ -85,6 +85,7 @@ def test_result_language_is_shared_by_cli_and_html(
         else expected
     )
     assert f"Result: {cli_expected}" in stdout
+    assert stdout.endswith("\n\n")
     assert "Coverage:" not in stdout
     assert presentation.primary_sentence in html
     if presentation.coverage_incomplete:

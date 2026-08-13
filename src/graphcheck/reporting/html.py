@@ -211,8 +211,7 @@ def _run_title(results: Results) -> str:
         )
         action = (
             '<button id="run-summary-toggle" class="header-status-action" type="button" '
-            'data-action="summary" aria-expanded="false" '
-            'aria-controls="summary-table-container">See more.</button>'
+            'data-action="coverage" aria-controls="not-evaluated">Review coverage.</button>'
         )
     else:
         kind = "warning" if total_issues > 0 else "complete"
@@ -305,7 +304,6 @@ def _status_overview(
     *,
     filtered: bool,
 ) -> str:
-    details_rows = _details_rows(checks)
     target_html = _target_overview(results)
 
     # Group checks by suite
@@ -378,7 +376,7 @@ def _status_overview(
             '<div class="suite-status-card">'
             '  <div class="suite-status-header">'
             '    <div class="suite-title-group">'
-            f'      <span class="suite-title"><code>{_escape(suite.id)}</code></span>'
+            f'      <span class="suite-title"><em><code>{_escape(suite.id)}</code></em></span>'
             f"      {suite_stats_html}"
             "    </div>"
             f"    {right_badges_html}"
@@ -393,10 +391,6 @@ def _status_overview(
         else '<p class="empty-panel-message text-muted">No suites found.</p>'
     )
 
-    details_body = (
-        "".join(details_rows) if details_rows else _empty_issue_summary(results, filtered=filtered)
-    )
-
     return (
         '<section id="report-overview" class="card panel-section">'
         '  <div class="summary-top-bar">'
@@ -407,24 +401,11 @@ def _status_overview(
         "  </div>"
         '  <div class="scrollable-content">'
         f'    <div class="suite-status-list">{suite_body}</div>'
-        '    <div class="summary-toggle-wrapper">'
-        '      <button id="toggle-summary-btn" class="btn-summary-toggle">'
-        '        Show Issue Summary <span class="toggle-arrow">▼</span>'
-        "      </button>"
-        "    </div>"
-        '    <div id="summary-table-container" class="table-container hidden-summary">'
-        '      <table class="styled-table" id="summary-table"><thead><tr>'
-        '        <th data-sort-column="0">Test <span class="sort-icon">↕</span></th>'
-        '        <th data-sort-column="1">Suite <span class="sort-icon">↕</span></th>'
-        '        <th data-sort-column="2">Result <span class="sort-icon">↕</span></th>'
-        '        <th data-sort-column="3">Issue <span class="sort-icon">↕</span></th>'
-        "      </tr></thead>"
-        f"      <tbody>{details_body}</tbody>"
-        "      </table>"
-        "    </div>"
+        f"    {_not_evaluated(results)}"
         "  </div>"
         '  <div class="panel-footer">'
-        '    <button id="explore-checks-btn" class="btn-primary">Explore Checks &rarr;</button>'
+        '    <button id="explore-checks-btn" class="btn-primary" type="button" '
+        'aria-controls="checks-panel" aria-expanded="false">Explore checks &rarr;</button>'
         "  </div>"
         "</section>"
     )
@@ -488,41 +469,66 @@ def _capability_pill(label: str, available: bool) -> str:
     )
 
 
-def _details_rows(checks: Collection[CheckResult]) -> list[str]:
-    issues = [check for check in checks if check.verdict not in (Verdict.PASS, Verdict.SKIPPED)]
-    issues.sort(
-        key=lambda check: (
-            _VERDICT_ORDER[check.verdict],
-            _SEVERITY_ORDER[check.severity.value],
-            check.suite_id,
-            check.id,
-        )
+def _not_evaluated(results: Results) -> str:
+    selected = results.totals.checks
+    skipped = results.totals.skipped
+    summary_class = "not-evaluated-summary"
+    skipped_checks = sorted(
+        (check for check in results.checks if check.verdict is Verdict.SKIPPED),
+        key=lambda check: (check.suite_id, check.id),
     )
-    rows = []
-    for check in issues:
-        v_class = check.verdict.value.lower()
-        rows.append(
-            "<tr>"
-            f"<td><strong>{_escape(check.name)}</strong><br><code>{_escape(check.id)}</code></td>"
-            f"<td><code>{_escape(check.suite_id)}</code></td>"
-            f'<td><span class="badge badge-{v_class}">{_escape(check.verdict.value)}</span></td>'
-            f"<td>{_escape(_issue(check))}</td>"
-            "</tr>"
-        )
-    return rows
+    if results.run.status is RunStatus.FAILED:
+        summary = "The run failed before checks could be evaluated."
+    elif selected == 0:
+        summary = "No checks were selected for this run."
+    elif skipped == 0:
+        noun = "check" if selected == 1 else "checks"
+        summary = f"None. All {selected} selected {noun} were evaluated."
+        summary_class += " not-evaluated-complete"
+    elif skipped == selected:
+        summary = "No checks were evaluated."
+    else:
+        summary = f"{skipped} of {selected} selected checks were not evaluated."
+
+    note = (
+        f'<p class="coverage-note"><strong>Coverage note:</strong> '
+        f"{_escape(results.run.partial_reason)}</p>"
+        if results.run.partial_reason is not None
+        else ""
+    )
+    rows = [_not_evaluated_row(check) for check in skipped_checks]
+    visible = "".join(rows[:5])
+    remainder = (
+        '<details class="not-evaluated-more"><summary>'
+        f"Show {len(rows) - 5} more not evaluated checks</summary>"
+        f'<div class="not-evaluated-list">{"".join(rows[5:])}</div></details>'
+        if len(rows) > 5
+        else ""
+    )
+    skipped_list = f'<div class="not-evaluated-list">{visible}</div>{remainder}' if rows else ""
+    suites = ", ".join(_escape(value) for value in results.run.selection.suites)
+    tags = ", ".join(_escape(value) for value in results.run.selection.tags)
+    selection = (
+        '<p class="selection-boundary"><strong>Suites:</strong> '
+        f'{suites or "all configured suites"} <span aria-hidden="true">|</span> '
+        f"<strong>Tags:</strong> {tags or 'no tag filter'}</p>"
+    )
+    return (
+        '<section id="not-evaluated" class="not-evaluated" tabindex="-1">'
+        "<h2>Not Evaluated</h2>"
+        f'<p class="{summary_class}">{summary}</p>{note}{skipped_list}'
+        '<p class="scope-statement">This report covers checks selected for this run. '
+        "GraphCheck did not evaluate graph behavior outside those configured checks.</p>"
+        f"{selection}</section>"
+    )
 
 
-def _empty_issue_summary(results: Results, *, filtered: bool) -> str:
-    message = "No matching issues found." if filtered else _result_html(present_results(results))
-    return f'<tr><td colspan="4" class="text-center text-muted">{message}</td></tr>'
-
-
-def _issue(check: CheckResult) -> str:
-    if check.evidence is not None:
-        return check.evidence.message
-    if check.error is not None:
-        return check.error.message
-    return "Check did not pass"
+def _not_evaluated_row(check: CheckResult) -> str:
+    return (
+        '<button class="not-evaluated-row" type="button" '
+        f'data-suite-id="{_escape(check.suite_id)}" data-check-id="{_escape(check.id)}">'
+        f"{_escape(check.name)}</button>"
+    )
 
 
 def _checks(checks: list[CheckResult]) -> str:
@@ -561,8 +567,7 @@ def _check(check: CheckResult) -> str:
     key_esc = f"{suite_id_esc}::{check_id_esc}"
 
     details = [
-        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code> · '
-        f"Severity: <code>{_escape(check.severity.value)}</code></p>",
+        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code></p>',
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
     ]
     reason_html = ""
@@ -570,10 +575,14 @@ def _check(check: CheckResult) -> str:
         reason = presentation.skip_reason
         reason_html = (
             '<div class="callout callout-skipped skip-reason">'
-            f"<strong>{_escape(reason.label)}</strong><p>{_escape(reason.explanation)}</p>"
-            f'<p class="reason-code">Reason code: <code>{_escape(reason.code)}</code></p>'
+            f"<strong>Reason</strong><p>{_escape(reason.explanation)}</p>"
             "</div>"
         )
+    evaluation_html = (
+        '<p class="evaluation-state evaluation-state-not-evaluated">Not evaluated</p>'
+        if not presentation.evaluated
+        else ""
+    )
     if check.measured is not None:
         details.append(
             f"<p><strong>Measured:</strong> <code>{_escape(_json(check.measured))}</code></p>"
@@ -603,10 +612,9 @@ def _check(check: CheckResult) -> str:
         '<div class="check-title-row">'
         f'<span class="badge badge-{verdict_str}">{_escape(presentation.verdict_label)}</span>'
         f"<h3>{_escape(check.name)}</h3>"
-        f'<code class="check-id">{key_esc}</code>'
+        f'<em><code class="check-id">{key_esc}</code></em>'
         "</div>"
-        f'<p class="evaluation-state evaluation-state-{"evaluated" if presentation.evaluated else "not-evaluated"}">'
-        f"{_escape(presentation.evaluation_label)}</p>"
+        f"{evaluation_html}"
         f"{reason_html}"
         f'<details {_details_open(check)} class="check-details">'
         "<summary>View details</summary>"
@@ -920,41 +928,19 @@ body {
 .status-box-errored { background-color: var(--errored-color); }
 .status-box-skipped { background-color: var(--skipped-color); }
 
-/* Toggleable Issue Summary */
-.summary-toggle-wrapper {
-  margin-top: 16px;
-  margin-bottom: 8px;
-}
-
-.btn-summary-toggle {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-main);
-  padding: 8px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  transition: background-color 0.2s ease, border-color 0.2s ease;
-}
-
-.btn-summary-toggle:hover {
-  background: var(--bg-subtle);
-  border-color: #2563eb;
-  color: #2563eb;
-}
-
-.toggle-arrow {
-  font-size: 10px;
-  transition: transform 0.2s ease;
-}
-
-.hidden-summary {
-  display: none !important;
-}
+.not-evaluated { width: 100%; min-width: 0; box-sizing: border-box; margin-top: 20px; padding: 18px 2px 2px; border-top: 1px solid var(--border); font-size: 13px; }
+.not-evaluated:focus { outline: 0; box-shadow: inset 0 0 0 2px #2563eb; border-radius: 4px; }
+.not-evaluated h2 { margin: 0 0 8px; font-size: 18px; }
+.not-evaluated-summary { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.not-evaluated-complete { padding: 10px 12px; color: var(--pass-color); background: var(--pass-bg); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; }
+.coverage-note { margin: 0 0 10px; padding: 8px 10px; background: var(--bg-subtle); border-radius: 6px; font-size: 12px; }
+.not-evaluated-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.not-evaluated-row { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-subtle); color: var(--text-main); font: inherit; font-size: 13px; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.not-evaluated-row:hover, .not-evaluated-row:focus-visible { border-color: #2563eb; color: #2563eb; outline: none; }
+.not-evaluated-more { margin: 8px 0 12px; }
+.not-evaluated-more > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.scope-statement { margin: 12px 0 8px; padding-left: 10px; border-left: 3px solid var(--skipped-color); font-size: 12px; }
+.selection-boundary { margin: 0; color: var(--text-muted); font-size: 11px; }
 
 /* Global Floating Tooltip */
 .floating-tooltip {
@@ -1191,18 +1177,8 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
   border-bottom: 2px solid var(--border);
   color: var(--text-muted);
   font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-  transition: background-color 0.15s ease;
 }
-.styled-table th:hover { background: var(--border); }
 .styled-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
-
-.sort-icon {
-  font-size: 11px;
-  opacity: 0.5;
-  margin-left: 4px;
-}
 
 .checks-header {
   display: flex;
@@ -1287,7 +1263,8 @@ body.report-navigation-loading #checks-panel { opacity: 0.55; }
 
 .check-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .check-title-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.check-id { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+.check-title-row > em { margin-left: auto; }
+.check-id { color: var(--text-muted); font-size: 12px; font-style: italic; }
 .evaluation-state { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; font-weight: 600; }
 .evaluation-state-not-evaluated { color: var(--skipped-color); }
 
@@ -1312,7 +1289,6 @@ p.text-muted { margin-top: 0; }
 .callout-error { background: var(--fail-bg); border: 1px solid rgba(239, 68, 68, 0.3); }
 .callout-skipped { background: var(--bg-subtle); border: 1px solid var(--skipped-color); }
 .callout p { margin: 4px 0 0; }
-.reason-code { color: var(--text-muted); }
 .kind-tag { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; font-size: 11px; }
 
 @media (max-width: 1024px) {
@@ -1331,7 +1307,6 @@ p.text-muted { margin-top: 0; }
 _JS = """
 let activeVerdictFilter = 'all';
 let globalTooltip = null;
-let sortDirections = {};
 let reportHistory = [];
 let pendingDeleteIds = [];
 let reportGroupStateBeforeSearch = null;
@@ -1391,12 +1366,9 @@ function applyReport(report, historyMode = 'push') {
     return [current, reportFragment(report.fragments?.[name], id)];
   });
   const checksOpen = !document.getElementById('checks-panel').classList.contains('hidden-panel');
-  const issueSummaryExpanded = !document.getElementById('summary-table-container').classList.contains('hidden-summary');
   const scrollPosition = { x: window.scrollX, y: window.scrollY };
   replacements.forEach(([current, replacement]) => current.replaceWith(replacement));
-  sortDirections = {};
   initReportSpecificInteractions();
-  setSummaryTableExpanded(issueSummaryExpanded);
   applyCheckDetailsPreference();
   if (checksOpen) showChecksExplorer(false);
   restoreCheckFilters();
@@ -1899,21 +1871,6 @@ function toggleTheme() {
   applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
 }
 
-function setSummaryTableExpanded(expanded) {
-  const container = document.getElementById('summary-table-container');
-  const btn = document.getElementById('toggle-summary-btn');
-  const bannerBtn = document.getElementById('run-summary-toggle');
-  if (!container || !btn) return;
-  container.classList.toggle('hidden-summary', !expanded);
-  btn.innerHTML = `${expanded ? 'Hide' : 'Show'} Issue Summary <span class="toggle-arrow">${expanded ? '▲' : '▼'}</span>`;
-  bannerBtn?.setAttribute('aria-expanded', String(expanded));
-}
-
-function toggleSummaryTable() {
-  const container = document.getElementById('summary-table-container');
-  if (container) setSummaryTableExpanded(container.classList.contains('hidden-summary'));
-}
-
 function openTroubleshootingDialog() {
   const dialog = document.getElementById('troubleshooting-dialog');
   if (!dialog) return;
@@ -1927,13 +1884,6 @@ function closeTroubleshootingDialog() {
   else dialog?.removeAttribute('open');
 }
 
-function showIssueSummary() {
-  const container = document.getElementById('summary-table-container');
-  if (!container) return;
-  setSummaryTableExpanded(true);
-  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
 function showIssues() {
   showChecksExplorer();
   document.getElementById('run-summary-toggle')?.setAttribute('aria-expanded', 'true');
@@ -1944,31 +1894,16 @@ function showIssues() {
   document.getElementById('checks-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function handleRunSummaryAction(event) {
-  if (event.currentTarget.dataset.action === 'issues') showIssues();
-  else showIssueSummary();
+function reviewCoverage() {
+  const section = document.getElementById('not-evaluated');
+  if (!section) return;
+  section.focus({ preventScroll: true });
+  section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function sortTable(columnIndex) {
-  const table = document.getElementById('summary-table');
-  if (!table) return;
-  const tbody = table.querySelector('tbody');
-  const rows = Array.from(tbody.querySelectorAll('tr'));
-
-  if (rows.length === 1 && rows[0].cells.length === 1) return;
-
-  const currentDir = sortDirections[columnIndex] === 'asc' ? 'desc' : 'asc';
-  sortDirections[columnIndex] = currentDir;
-
-  rows.sort((a, b) => {
-    const cellA = a.cells[columnIndex]?.textContent.trim().toLowerCase() || '';
-    const cellB = b.cells[columnIndex]?.textContent.trim().toLowerCase() || '';
-    return currentDir === 'asc'
-      ? cellA.localeCompare(cellB)
-      : cellB.localeCompare(cellA);
-  });
-
-  rows.forEach(row => tbody.appendChild(row));
+function handleRunSummaryAction(event) {
+  if (event.currentTarget.dataset.action === 'issues') showIssues();
+  else reviewCoverage();
 }
 
 function showChecksExplorer(animate = true) {
@@ -1982,9 +1917,19 @@ function showChecksExplorer(animate = true) {
     checksPanel.classList.toggle('visible-panel', animate);
     if (btn) btn.style.display = 'none';
   }
+  btn?.setAttribute('aria-expanded', 'true');
   try {
     localStorage.setItem(CHECKS_EXPLORER_STORAGE_KEY, 'true');
   } catch {}
+}
+
+function showAllChecks() {
+  showChecksExplorer();
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) searchInput.value = '';
+  const allButton = document.querySelector('.filter-btn[data-filter="all"]');
+  if (allButton) setVerdictFilter('all', allButton);
+  document.getElementById('checks-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function restoreChecksExplorerState() {
@@ -2020,17 +1965,12 @@ function initReportSpecificInteractions() {
   document.getElementById('troubleshoot-btn')?.addEventListener('click', openTroubleshootingDialog);
   document.getElementById('close-troubleshooting-btn')?.addEventListener('click', closeTroubleshootingDialog);
   document.getElementById('run-summary-toggle')?.addEventListener('click', handleRunSummaryAction);
-  document.getElementById('toggle-summary-btn')?.addEventListener('click', toggleSummaryTable);
-  document.getElementById('explore-checks-btn')?.addEventListener('click', showChecksExplorer);
+  document.getElementById('explore-checks-btn')?.addEventListener('click', showAllChecks);
   document.getElementById('toggle-details-btn')?.addEventListener('click', toggleAllDetails);
   document.getElementById('search-input')?.addEventListener('input', filterChecks);
 
   document.querySelectorAll('.filter-btn').forEach(button => {
     button.addEventListener('click', () => setVerdictFilter(button.dataset.filter, button));
-  });
-
-  document.querySelectorAll('[data-sort-column]').forEach(header => {
-    header.addEventListener('click', () => sortTable(Number(header.dataset.sortColumn)));
   });
 
   document.querySelectorAll('.status-box').forEach(box => {
@@ -2042,6 +1982,10 @@ function initReportSpecificInteractions() {
         navigate();
       }
     });
+  });
+
+  document.querySelectorAll('.not-evaluated-row').forEach(button => {
+    button.addEventListener('click', () => navigateToCheck(button.dataset.suiteId, button.dataset.checkId));
   });
 }
 

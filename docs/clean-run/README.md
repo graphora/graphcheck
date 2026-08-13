@@ -104,7 +104,7 @@ generated-only, and failed fixtures provide supplemental boundary coverage.
 | CR-1 | Explicit `No failures`; no finding rows | Exact stored finding counts and rows | Empty/all-skipped never called clean |
 | CR-2 | Every selected passing check is in the ledger | Every selected check and verdict is in the ledger | Every skipped check shows its reason |
 | CR-3 | Persisted target facts render exactly | Persisted target facts render exactly | Probed-empty and historical not-recorded inventory remain distinct |
-| CR-4 | `Not Evaluated` says none | `Not Evaluated` says none when coverage is complete | Partial/generated skips and reasons are listed |
+| CR-4 | `Not Evaluated` says none | `Not Evaluated` says none when coverage is complete | Partial/generated skipped check names link to their ledger entries |
 | CR-5 | Both tabs and generic guidance work | Same generic guidance, unaffected by findings | Failed/diagnostic reports remain navigable |
 
 At minimum, acceptance runs at three boundaries:
@@ -165,11 +165,11 @@ Implemented on 2026-08-13:
 - extended the shared immutable reporting projection with human verdict labels,
   evaluated/not-evaluated state, and the canonical labels and generic explanations for all three
   persisted skip reasons;
-- made every HTML check card show its stable suite/check identity, verdict, evaluation state,
-  pattern, severity, expected value, and every available measured value, estimate, compiled query,
+- made every HTML check card show its stable suite/check identity, verdict, skipped state when not
+  evaluated, pattern, expected value, and every available measured value, estimate, compiled query,
   evidence record, or structured execution error;
-- added a prominent skipped-check reason block with the raw `generated`, `unsupported`, or
-  `not_run` code, while keeping non-skipped cards free of skip-reason language;
+- added a prominent skipped-check `Reason` block with the shared generic explanation but without
+  its internal raw code, while keeping non-skipped cards free of skip-reason language;
 - renamed the card disclosure to `View details` and added the `Issues` union filter for fail, warn,
   and errored checks, including its precise empty state and the same visual treatment as `All`;
 - changed the navbar `See issues` action to open the Checks Explorer with the Issues filter active,
@@ -205,6 +205,34 @@ Implemented on 2026-08-13:
   snapshot, and added contract, writer, history, renderer, engine, and connector acceptance tests;
 - confirmed that this repository does not yet contain an MCP transport implementation; the
   canonical generated results schema now exposes the 1.2 target shape for future MCP consumers.
+
+### CR-4 — Known coverage limitations stated plainly
+
+Implemented on 2026-08-13:
+
+- replaced the expandable Issue Summary with a permanent Not Evaluated section after the suite
+  overview, with distinct language for failed, empty-selection, fully evaluated, partially
+  evaluated, and all-skipped runs;
+- listed every skipped check by name, showing the first five directly and retaining any remainder
+  in a native offline disclosure; each name is a keyboard-accessible control that opens and
+  highlights the matching Checks Explorer entry;
+- rendered `run.partial_reason` once as an escaped coverage note and displayed the exact stored
+  suite/tag selection boundary without reconstructing omitted checks;
+- added the permanent selected-universe scope statement to every report and kept errored checks in
+  the evaluated Checks ledger rather than treating them as coverage gaps;
+- rewired `See issues` to the Issues filter, `Review coverage` to focus and scroll to Not Evaluated,
+  and `Explore checks` to reset the explorer to the All filter;
+- fitted the coverage controls within the overview scroll area, aligned their typography with the
+  surrounding report, italicized suite and suite/check identities, and removed Severity metadata
+  from Checks Explorer cards;
+- added a blank line after the final CLI exit-code line;
+- colored complete suite coverage green and incomplete suite coverage yellow in the CLI score
+  breakdown;
+- removed the obsolete issue-summary table, renderer helpers, sorting/toggle JavaScript, and
+  summary-only styles while preserving findings in suite markers and the complete check ledger;
+- added fixture acceptance coverage for clean, findings, partial, generated-only, failed, empty,
+  filtered-selection, HTML-escaping, and more-than-five-skips states;
+- updated SPEC-06 to document the permanent coverage section and its navigation behavior.
 
 ## Epic acceptance
 

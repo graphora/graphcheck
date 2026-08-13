@@ -2074,6 +2074,10 @@ def _suite_score_style(score: int | None) -> str:
     return "yellow" if score >= 50 else "red"
 
 
+def _suite_coverage_style(evaluated: int, selected: int) -> str:
+    return "green" if evaluated == selected else "yellow"
+
+
 def _summary_table():
     from rich import box
     from rich.table import Table
@@ -2101,6 +2105,7 @@ def _suite_score_table(results: "Results"):
     state_colors = ("green", "red", "yellow", "magenta", "bright_black")
     for suite in results.suites:
         score = "n/a" if suite.score is None else f"{suite.score}/100"
+        evaluated = suite.totals.checks - suite.totals.skipped
         counts = (
             suite.totals.passed,
             suite.totals.fail,
@@ -2111,7 +2116,10 @@ def _suite_score_table(results: "Results"):
         table.add_row(
             Text(suite.id, style="italic"),
             Text(score, style=_suite_score_style(suite.score)),
-            f"{suite.totals.checks - suite.totals.skipped}/{suite.totals.checks}",
+            Text(
+                f"{evaluated}/{suite.totals.checks}",
+                style=_suite_coverage_style(evaluated, suite.totals.checks),
+            ),
             *(
                 Text(str(count), style=color) if count else Text("-")
                 for count, color in zip(counts, state_colors, strict=True)
@@ -2228,3 +2236,4 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
         fg=_exit_code_color(results.run.exit_code),
         bold=True,
     )
+    typer.echo()

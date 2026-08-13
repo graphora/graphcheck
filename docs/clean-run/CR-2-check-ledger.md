@@ -43,22 +43,24 @@ Every card in the Checks tab displays:
 - check name;
 - stable `(suite_id, check_id)` identity;
 - verdict badge;
-- evaluation label (`Evaluated` or `Not evaluated`);
-- pattern and severity;
+- `Not evaluated` label for skipped checks only;
+- pattern;
 - expected value;
 - existing measured value, estimate, compiled query, evidence, or structured error when present.
 
-A skipped card additionally displays a prominent reason block. Use a shared mapping:
+A skipped card additionally displays a prominent block headed `Reason`. Use the shared generic
+explanation mapping:
 
-| Stored value | Human label | Explanation |
-| --- | --- | --- |
-| `generated` | `Generated` | `Generated check awaiting review or approval.` |
-| `unsupported` | `Unsupported` | `A capability required by this check was unavailable.` |
-| `not_run` | `Not run` | `The run ended before this check started.` |
+| Stored value | Explanation |
+| --- | --- |
+| `generated` | `Generated check awaiting review or approval.` |
+| `unsupported` | `A capability required by this check was unavailable.` |
+| `not_run` | `The run ended before this check started.` |
 
-Also render the raw stable code, for example `Reason code: unsupported`. The explanation may not
-claim which capability was missing unless that specific fact is persisted. The run-level
-`partial_reason` belongs in CR-4 and may provide additional context.
+Do not repeat the internal raw code in the HTML card; it remains available in `results.json` and the
+CLI skipped-check table. The explanation may not claim which capability was missing unless that
+specific fact is persisted. The run-level `partial_reason` belongs in CR-4 and may provide
+additional context.
 
 Rename the card disclosure from `View Details & Evidence` to `View details`; passing and skipped
 checks do not necessarily contain evidence.
@@ -100,7 +102,7 @@ artifact remains the complete audit surface.
 
 - Put verdict, evaluated-state, and skip-reason humanization in the shared reporting presentation
   helper introduced by CR-1.
-- Extend `src/graphcheck/reporting/html.py::_check()` to render evaluation state and skip reasons.
+- Extend `src/graphcheck/reporting/html.py::_check()` to render skipped state and generic reasons.
 - Add the Issues filter to the existing filter state and empty-state messages.
 - Change the navbar `See issues` action to open **Checks Explorer & Next Steps** on the Checks tab
   with the Issues filter active.
@@ -126,8 +128,8 @@ skipped.
 
 ### CR-2.C — Skip reasons
 
-Each skipped card shows its human label, explanation, and raw `skip_reason`. Non-skipped cards do
-not show a skip reason. Tests cover all three enum values.
+Each skipped card shows a `Reason` heading and generic explanation without its raw `skip_reason`.
+Non-skipped cards do not show a skip reason. Tests cover all three enum values.
 
 ### CR-2.D — CLI concision
 
