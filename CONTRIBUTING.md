@@ -1,4 +1,4 @@
-﻿# Contributing to GraphCheck
+# Contributing to GraphCheck
 
 ## Branches
 
@@ -44,6 +44,14 @@ uv run ruff format .
 3. Open a PR against `development` using the PR template - every box in the Definition of Done is required before merge.
 4. Address review feedback from the named CODEOWNER.
 5. Once approved and CI is green, the PR is merged into `development`.
+
+## Changelog
+
+Every PR that changes user-facing behavior adds an entry to `CHANGELOG.md` under the current `## [Unreleased]` section, in the matching category (`### Added`, `### Changed`, or `### Fixed`). Skip the entry only for changes with no user-facing effect (internal refactors, test-only changes, CI tooling).
+
+Write the entry as a plain, one- or two-sentence description of what changed, in the same voice as the existing entries - not a copy of the commit message or PR title.
+
+Release work (not part of a normal PR) turns `[Unreleased]` into a dated version section and starts a fresh `[Unreleased]` heading, tied to the release flow in #41.
 
 ## Definition of done
 
