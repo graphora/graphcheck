@@ -622,7 +622,7 @@ def _check(check: CheckResult) -> str:
         details.append(_evidence(check))
 
     return (
-        f'<article class="{classes}" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
+        f'<article class="{classes}" tabindex="-1" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
         f'data-suite-id="{suite_id_esc}" data-check-id="{check_id_esc}">'
         '<div class="check-title-row">'
         f'<span class="badge badge-{verdict_str}">{_escape(presentation.verdict_label)}</span>'
@@ -2017,6 +2017,7 @@ function navigateToCheck(suiteId, checkId) {
     }
 
     targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    targetCard.focus({ preventScroll: true });
 
     targetCard.classList.remove('card-highlight');
     void targetCard.offsetWidth;

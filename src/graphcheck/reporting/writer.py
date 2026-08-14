@@ -15,8 +15,13 @@ _JSON_VALUE = TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
 def json_compatible(value: object) -> Any:
     """Return the same JSON-compatible value shape used by results.json."""
 
+    historical_schema_version = (
+        value._historical_schema_version if isinstance(value, Results) else None
+    )
     if isinstance(value, BaseModel):
         value = value.model_dump(by_alias=True, exclude_none=False)
+        if historical_schema_version is not None:
+            value["schema_version"] = historical_schema_version
     if isinstance(value, Mapping):
         return {str(key): json_compatible(item) for key, item in value.items()}
     if isinstance(value, (set, frozenset)):

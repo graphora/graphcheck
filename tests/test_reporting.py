@@ -1,4 +1,7 @@
 import json
+import re
+import shutil
+import subprocess
 from collections import Counter
 from copy import deepcopy
 from html import escape
@@ -72,7 +75,7 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
 
 
 @pytest.mark.parametrize("historical_version", ["1.0", "1.1"])
-def test_writer_upgrades_historical_input_to_current_output(historical_version):
+def test_writer_preserves_historical_provenance_in_output(historical_version):
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["schema_version"] = historical_version
     raw["run"]["target"].pop("labels")
@@ -80,9 +83,25 @@ def test_writer_upgrades_historical_input_to_current_output(historical_version):
 
     output = json.loads(results_json(raw))
 
-    assert output["schema_version"] == "1.2"
+    assert output["schema_version"] == historical_version
     assert output["run"]["target"]["labels"] is None
     assert output["run"]["target"]["relationship_types"] is None
+
+
+def test_writer_reloads_serialized_historical_results(tmp_path):
+    raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
+    raw["schema_version"] = "1.1"
+    raw["run"]["target"].pop("labels")
+    raw["run"]["target"].pop("relationship_types")
+
+    from_json = load_results(results_json(raw))
+    from_file = load_results(write_results(raw, tmp_path / "results.json"))
+
+    for model in (from_json, from_file):
+        assert model._historical_schema_version == "1.1"
+        assert model.run.target is not None
+        assert model.run.target.labels is None
+        assert model.run.target.relationship_types is None
 
 
 def test_writer_output_bytes_match_regression_fixture():
@@ -456,6 +475,7 @@ def test_issue_summary_is_removed_and_coverage_navigation_is_accessible():
         assert "showAllChecks" in report
         assert "setVerdictFilter('all', allButton);" in report
         assert "button.addEventListener('click', () => navigateToCheck(" in report
+        assert all(card["attrs"]["tabindex"] == "-1" for card in _check_cards(report))
         assert report.index('class="suite-status-list"') < report.index('id="not-evaluated"')
         assert report.index('id="not-evaluated"') < report.index('id="explore-checks-btn"')
     assert 'aria-controls="checks-next-steps-panel">See issues.</button>' in complete
@@ -463,6 +483,41 @@ def test_issue_summary_is_removed_and_coverage_navigation_is_accessible():
     assert "setVerdictFilter('issues', issuesButton);" in complete
     assert 'aria-controls="not-evaluated">Review coverage.</button>' in partial
     assert "section.focus({ preventScroll: true });" in partial
+
+
+def test_check_navigation_moves_dom_focus_to_target_card():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the report DOM behavior test")
+    report = render_html_report(_fixture("complete"))
+    navigate = re.search(
+        r"function navigateToCheck\(suiteId, checkId\) \{.*?\n\}", report, re.DOTALL
+    )
+    assert navigate is not None
+    script = f"""
+const document = {{
+  activeElement: null,
+  querySelectorAll: () => [targetCard],
+}};
+const targetCard = {{
+  dataset: {{ suiteId: 'customer-360', checkId: 'email-coverage' }},
+  style: {{}},
+  querySelector: () => details,
+  scrollIntoView: () => {{}},
+  focus: options => {{ document.activeElement = targetCard; targetCard.focusOptions = options; }},
+  classList: {{ remove: () => {{}}, add: () => {{}} }},
+  offsetWidth: 1,
+}};
+const details = {{ open: false }};
+const showChecksExplorer = () => {{}};
+const activateReportTab = () => {{}};
+{navigate.group(0)}
+navigateToCheck('customer-360', 'email-coverage');
+if (document.activeElement !== targetCard) throw new Error('target card did not receive focus');
+if (!targetCard.focusOptions?.preventScroll) throw new Error('focus did not prevent scrolling');
+if (!details.open) throw new Error('target details were not opened');
+"""
+    subprocess.run([node, "--input-type=module", "--eval", script], check=True)
 
 
 def test_html_renderer_does_not_call_an_empty_selection_all_clear():
