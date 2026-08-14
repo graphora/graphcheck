@@ -1,4 +1,4 @@
-name: GraphCheck
+﻿name: GraphCheck
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ jobs:
       - uses: ./.github/actions/graphcheck-action
         with:
           profile: ci
-          uri: bolt://localhost:7687
+          uri: bolt://localhost:9999
           user: neo4j
           version: ''        # skip PyPI install; use the source build above
           suite: graphcheck-action-smoke
