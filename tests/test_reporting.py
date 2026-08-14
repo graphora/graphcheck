@@ -27,6 +27,18 @@ def _fixture(name: str) -> Path:
     return FIXTURES / f"results.{name}.json"
 
 
+def _historical_results_schema(version: str) -> dict:
+    schema = deepcopy(results_schema())
+    schema["properties"]["schema_version"]["const"] = version
+    target = schema["$defs"]["ResultsTarget"]
+    for field in ("labels", "relationship_types"):
+        target["properties"].pop(field)
+        target["required"].remove(field)
+    if version == "1.0":
+        schema["$defs"]["EvidenceElement"]["properties"]["kind"]["enum"].remove("aggregate")
+    return schema
+
+
 class _CheckCardParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -75,7 +87,7 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
 
 
 @pytest.mark.parametrize("historical_version", ["1.0", "1.1"])
-def test_writer_preserves_historical_provenance_in_output(historical_version):
+def test_writer_emits_output_valid_for_declared_historical_schema(historical_version):
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["schema_version"] = historical_version
     raw["run"]["target"].pop("labels")
@@ -84,8 +96,9 @@ def test_writer_preserves_historical_provenance_in_output(historical_version):
     output = json.loads(results_json(raw))
 
     assert output["schema_version"] == historical_version
-    assert output["run"]["target"]["labels"] is None
-    assert output["run"]["target"]["relationship_types"] is None
+    assert "labels" not in output["run"]["target"]
+    assert "relationship_types" not in output["run"]["target"]
+    jsonschema.validate(output, _historical_results_schema(historical_version))
 
 
 def test_writer_reloads_serialized_historical_results(tmp_path):

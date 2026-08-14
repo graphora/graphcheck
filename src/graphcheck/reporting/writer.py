@@ -22,6 +22,10 @@ def json_compatible(value: object) -> Any:
         value = value.model_dump(by_alias=True, exclude_none=False)
         if historical_schema_version is not None:
             value["schema_version"] = historical_schema_version
+            target = value["run"]["target"]
+            if target is not None:
+                target.pop("labels")
+                target.pop("relationship_types")
     if isinstance(value, Mapping):
         return {str(key): json_compatible(item) for key, item in value.items()}
     if isinstance(value, (set, frozenset)):
