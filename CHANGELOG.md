@@ -2,10 +2,10 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased 07-07-2026]
+## [Unreleased]
 
 ### Added
-
+- In-repo reference docs: CI setup, check reference (all core/PII checks with fraud-ring fixture examples), and an install/quickstart pointer.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.
