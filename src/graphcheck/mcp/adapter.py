@@ -65,7 +65,25 @@ def get_results(run_id: str) -> Any:
             fix="Provide a valid GraphCheck run ID.",
         ) from exc
 
-    return load_results(results_path)
+    # Translate every result-file failure into a stable, path-free GraphCheck error.
+    # A syntactically valid but missing, unreadable, malformed, or contract-invalid
+    # artifact must never surface a filesystem path to the MCP client.
+    try:
+        return load_results(results_path)
+    except GraphCheckError:
+        raise
+    except FileNotFoundError as exc:
+        raise GraphCheckError(
+            code="mcp.results_not_found",
+            message="No GraphCheck results exist for the supplied run ID.",
+            fix="Run a suite to produce results, or supply a run ID from a completed run.",
+        ) from exc
+    except Exception as exc:
+        raise GraphCheckError(
+            code="mcp.results_unreadable",
+            message="The GraphCheck results for the supplied run ID could not be read.",
+            fix="Re-run the suite to regenerate the results, then try again.",
+        ) from exc
 
 
 def run_suite(

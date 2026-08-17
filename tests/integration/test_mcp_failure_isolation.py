@@ -42,6 +42,20 @@ async def test_mcp_failure_isolation():
         assert "The supplied run ID is invalid." in result.content[0].text
         assert "outside" not in result.content[0].text
 
+        # A syntactically valid but missing run ID must return a sanitized error,
+        # never a filesystem path from the underlying FileNotFoundError.
+        missing = await session.call_tool(
+            "get_results",
+            {"run_id": "does-not-exist"},
+        )
+
+        assert missing.is_error is True
+        assert missing.content
+        missing_text = missing.content[0].text
+        assert "No GraphCheck results exist for the supplied run ID." in missing_text
+        assert "results.json" not in missing_text
+        assert ".graphcheck" not in missing_text
+
         # Server should still work afterwards.
         result2 = await session.call_tool("list_checks", {})
 
