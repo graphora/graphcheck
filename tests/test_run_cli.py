@@ -198,14 +198,16 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
     latest_results, latest_report = _write_run_artifacts(first, runs_dir)
     previous_results = latest_results.read_bytes()
     previous_report = latest_report.read_bytes()
-    real_publish = cli_module._publish_run_directory
+    from graphcheck.application import artifacts as artifacts_module
+
+    real_publish = artifacts_module.publish_run_directory
 
     def fail_latest_refresh(artifacts, directory):
         if directory.name == "latest":
             raise OSError("simulated latest report failure")
         return real_publish(artifacts, directory)
 
-    monkeypatch.setattr(cli_module, "_publish_run_directory", fail_latest_refresh)
+    monkeypatch.setattr(artifacts_module, "publish_run_directory", fail_latest_refresh)
 
     with pytest.raises(OSError, match="simulated latest report failure"):
         _write_run_artifacts(second, runs_dir)
@@ -218,16 +220,18 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
 
 
 def test_artifact_writer_renders_once_for_history_and_latest(tmp_path, monkeypatch):
+    from graphcheck.application import artifacts as artifacts_module
+
     results = load_results(FIXTURES / "results.complete.json")
     calls = 0
-    real_render = cli_module.render_run_artifacts
+    real_render = artifacts_module.render_run_artifacts
 
-    def render_once(value):
+    def render_once(value, **kwargs):
         nonlocal calls
         calls += 1
-        return real_render(value)
+        return real_render(value, **kwargs)
 
-    monkeypatch.setattr(cli_module, "render_run_artifacts", render_once)
+    monkeypatch.setattr(artifacts_module, "render_run_artifacts", render_once)
 
     _write_run_artifacts(results, tmp_path / "runs")
 
