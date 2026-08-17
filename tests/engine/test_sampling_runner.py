@@ -3,16 +3,18 @@ from dataclasses import dataclass
 import pytest
 
 from graphcheck.contracts.check import ConformanceCheck, LoadedCheck, Suite
-from graphcheck.contracts.results import Capabilities, Pattern, RunTarget, Severity, Verdict
+from graphcheck.contracts.results import Capabilities, Pattern, ResultsTarget, Severity, Verdict
 from graphcheck.engine.runner import Engine, EngineConfig
 from graphcheck.engine.sampling import SamplingPolicy
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5",
     edition="community",
     fingerprint="sha256:sample-graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 

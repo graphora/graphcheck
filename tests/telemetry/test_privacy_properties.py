@@ -3,17 +3,19 @@ import json
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.engine.runner import Engine, SuiteInput
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.telemetry.collector import TelemetryCollector
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:test",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 
