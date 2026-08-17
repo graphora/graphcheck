@@ -36,9 +36,9 @@ class ReadOnlyExecutor:
         self._method = rich if callable(rich) else legacy if callable(legacy) else None
         self._bounded_method = bounded if callable(bounded) else None
         self._rich = callable(rich)
-        self._accepts_timeout = (
-            _accepts_timeout(self._method) if self._method is not None else False
-        )
+        parameters = _parameters(self._method) if self._method is not None else ()
+        self._accepts_timeout = _parameters_accept(parameters, "timeout_s", variadic=True)
+        self._accepts_missing_schema = _parameters_accept(parameters, "allow_missing_schema")
 
     def execute(
         self,
@@ -48,6 +48,7 @@ class ReadOnlyExecutor:
         timeout_s: float | None = None,
         policy: ResultPolicy | None = None,
         stop_when: Callable[[dict[str, Any]], bool] | None = None,
+        allow_missing_schema: bool = False,
     ) -> ExecutionResult:
         query = compiled.query if isinstance(compiled, CompiledCheck) else compiled
         values = dict(compiled.params if isinstance(compiled, CompiledCheck) else params or {})
@@ -58,6 +59,8 @@ class ReadOnlyExecutor:
                 "Pass a configured Neo4jClient or another read-only C2 connector.",
             )
         kwargs = {"timeout_s": timeout_s} if self._accepts_timeout else {}
+        if self._accepts_missing_schema:
+            kwargs["allow_missing_schema"] = allow_missing_schema
         if self._rich:
             result = (
                 self._bounded_method(
@@ -109,14 +112,17 @@ class ReadOnlyExecutor:
         return ExecutionResult(rows, tuple(rows[0]) if rows else ())
 
     @contextmanager
-    def transaction(self, *, timeout_s: float | None = None):
+    def transaction(self, *, timeout_s: float | None = None, allow_missing_schema: bool = False):
         """Yield an executor bound to one connector read transaction when supported."""
 
         factory = getattr(self.client, "read_transaction", None)
         if not callable(factory):
             yield self
             return
-        with factory(timeout_s=timeout_s) as reader:
+        kwargs = {"timeout_s": timeout_s}
+        if _accepts_parameter(factory, "allow_missing_schema"):
+            kwargs["allow_missing_schema"] = allow_missing_schema
+        with factory(**kwargs) as reader:
             yield ReadOnlyExecutor(reader)
 
 
@@ -142,12 +148,23 @@ def execute_query(
 
 
 def _accepts_timeout(method: Callable[..., object]) -> bool:
+    return _parameters_accept(_parameters(method), "timeout_s", variadic=True)
+
+
+def _accepts_parameter(method: Callable[..., object], name: str, *, variadic: bool = False) -> bool:
+    return _parameters_accept(_parameters(method), name, variadic=variadic)
+
+
+def _parameters(method: Callable[..., object]):
     try:
-        parameters = inspect.signature(method).parameters.values()
+        return tuple(inspect.signature(method).parameters.values())
     except (TypeError, ValueError):
-        return False
+        return ()
+
+
+def _parameters_accept(parameters, name: str, *, variadic: bool = False) -> bool:
     return any(
-        parameter.name == "timeout_s" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        parameter.name == name or (variadic and parameter.kind is inspect.Parameter.VAR_KEYWORD)
         for parameter in parameters
     )
 

@@ -12,19 +12,21 @@ from graphcheck.contracts.profile import (
     ProfileStatistics,
     profile_fingerprint,
 )
-from graphcheck.contracts.results import Capabilities, RunTarget, SkipReason, Verdict
+from graphcheck.contracts.results import Capabilities, ResultsTarget, SkipReason, Verdict
 from graphcheck.engine import Engine
 from graphcheck.generation.proposals import ProposalRequest, RawProposal, RawProposalBatch
 from graphcheck.generation.service import GenerationService
 from graphcheck.project import write_default_project
 
 FIXTURE = Path(__file__).parents[1] / "contracts" / "fixtures" / "baseline.json"
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="integration-target",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 

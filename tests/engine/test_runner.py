@@ -9,23 +9,27 @@ import pytest
 from graphcheck import __version__
 from graphcheck.contracts.results import (
     Capabilities,
+    ResultsTarget,
     RunStatus,
     RunTarget,
     SkipReason,
     Verdict,
 )
 from graphcheck.engine.runner import Engine, EngineConfig, SuiteInput, YamlSuiteInput
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.packs import PACK_VERSION
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
+EMPTY_TARGET = TARGET.model_copy(update={"nodes": 0, "relationships": 0})
 
 PASSING_SUITE = """\
 suite: customer-quality
@@ -237,7 +241,7 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     payload = results.model_dump(mode="json", by_alias=True, exclude_none=False)
 
     assert set(payload) == {"schema_version", "run", "score", "totals", "suites", "checks"}
-    assert results.schema_version == "1.1"
+    assert results.schema_version == "1.2"
     assert results.run.id == "run-123"
     assert results.run.started_at == "2026-07-13T10:00:00Z"
     assert results.run.finished_at == "2026-07-13T10:00:02Z"
@@ -245,7 +249,9 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert results.run.pack_version == PACK_VERSION
     assert results.run.status is RunStatus.COMPLETE
     assert results.run.target is not None
-    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump()
+    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump(
+        exclude={"nodes", "relationships"}
+    )
     assert results.run.selection.suites == ["customer-quality"]
     assert results.run.selection.fail_fast is False
     assert results.run.redaction.policy.value == "none"
@@ -270,6 +276,24 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert client.probe_calls == 1
     assert len(client.read_calls) == 1
     assert client.read_calls[0][2] > 0
+
+
+def test_supplied_target_without_inventory_fails_before_checks():
+    target = RunTarget(
+        database="neo4j",
+        server_version="5.18.0",
+        edition="community",
+        fingerprint="sha256:legacy-target",
+        capabilities=Capabilities(apoc=False, count_store=True),
+    )
+
+    results = _engine(RichClient([_passing_conformance_result()])).run_yaml(
+        PASSING_SUITE, target=target
+    )
+
+    assert results.run.status is RunStatus.FAILED
+    assert results.run.error is not None
+    assert results.run.error.code == "engine.target_inventory_missing"
 
 
 def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():
@@ -608,8 +632,8 @@ competency:
     assert check.evidence.elements[0].id == "4:graph:resolved"
 
 
-def test_timed_out_check_is_errored_and_remaining_check_becomes_not_run_partial():
-    timeout = GraphCheckError("engine.timeout", "query timed out", "narrow query")
+def test_in_flight_budget_timeout_is_partial_exit_two_and_stops_later_work():
+    timeout = GraphCheckTimeoutError("neo4j.query_failed", "query timed out", "narrow query")
     client = RichClient([timeout])
     start = datetime(2026, 7, 13, 10, 0, tzinfo=UTC)
     engine = Engine(
@@ -620,16 +644,69 @@ def test_timed_out_check_is_errored_and_remaining_check_becomes_not_run_partial(
         id_factory=lambda: "run-timeout",
     )
 
-    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET)
+    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
 
     assert results.run.status is RunStatus.PARTIAL
     assert results.run.partial_reason and "budget was exhausted" in results.run.partial_reason
-    assert results.run.exit_code == 1
+    assert "fail-fast stopped" not in results.run.partial_reason
+    assert results.run.exit_code == 2
     assert results.checks[0].verdict is Verdict.ERRORED
     assert results.checks[0].error.code == "engine.timeout"
     assert results.checks[1].verdict is Verdict.SKIPPED
     assert results.checks[1].skip_reason is SkipReason.NOT_RUN
     assert len(client.read_calls) == 1
+
+
+def test_server_query_timeout_before_deadline_remains_a_hard_fail_fast_error():
+    timeout = GraphCheckTimeoutError("neo4j.query_failed", "query timed out", "narrow query")
+    client = RichClient([timeout])
+    engine = Engine(
+        client,
+        config=EngineConfig(time_budget_s=10.0),
+        clock=FixedClock(datetime(2026, 7, 13, tzinfo=UTC)),
+        monotonic=lambda: 0.0,
+        id_factory=lambda: "run-query-timeout",
+    )
+
+    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
+
+    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.partial_reason == "fail-fast stopped the run after competencies/first"
+    assert results.run.exit_code == 1
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "neo4j.query_failed"
+    assert results.checks[1].verdict is Verdict.SKIPPED
+    assert results.checks[1].skip_reason is SkipReason.NOT_RUN
+    assert len(client.read_calls) == 1
+
+
+def test_empty_target_drift_with_missing_schema_is_errored_not_passed():
+    client = RichClient(
+        [
+            RichResult(
+                [
+                    {
+                        "schema_ok": False,
+                        "missing_labels": ["Customer"],
+                        "missing_relationship_types": [],
+                        "current": 100,
+                        "population": 0,
+                        "evidence": [],
+                    }
+                ],
+                ("schema_ok", "current", "population", "evidence"),
+            )
+        ]
+    )
+
+    results = _engine(
+        client,
+        baselines={"latest": {"node_count": {"label=Customer": 100}}},
+    ).run_yaml(DRIFT_SUITE, target=EMPTY_TARGET)
+
+    assert results.run.exit_code == 1
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "engine.schema_reference_missing"
 
 
 def test_last_check_finishing_after_deadline_marks_the_run_partial():

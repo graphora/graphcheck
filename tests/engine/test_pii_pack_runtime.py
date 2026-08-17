@@ -7,8 +7,8 @@ from pydantic import ValidationError
 from graphcheck.contracts.check import load_suite
 from graphcheck.contracts.results import (
     Capabilities,
+    ResultsTarget,
     RunStatus,
-    RunTarget,
     SkipReason,
     Verdict,
 )
@@ -20,12 +20,14 @@ from graphcheck.errors import GraphCheckError
 from graphcheck.packs import REGISTRY
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:pii-graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 

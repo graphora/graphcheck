@@ -167,8 +167,8 @@ Exit precedence is the frozen SPEC-01 contract:
 | Order | Condition | Exit |
 | --- | --- | --- |
 | 1 | Run could not start/complete because of configuration or connection failure | `3` |
-| 2 | Any error-severity `fail`, or error-severity `errored` | `1` |
-| 3 | Partial run, nothing evaluated, `warn`, or warn-severity `errored` | `2` |
+| 2 | Any error-severity `fail`, or error-severity `errored` other than an expected partial run-budget timeout | `1` |
+| 3 | Partial run (including `engine.timeout`), nothing evaluated, `warn`, or warn-severity `errored` | `2` |
 | 4 | Complete run, at least one executed check, every executed check passed | `0` |
 
 Exit 2 is the warning/incomplete-coverage gate. CI may choose whether to accept it, but GraphCheck
@@ -224,8 +224,9 @@ For each run the engine:
 
 Every check is wrapped at the compile/resolve/execute/evaluate boundary. A structured
 `GraphCheckError` becomes `verdict: errored`; an unexpected exception becomes
-`engine.internal_error`. The runner then continues unless fail-fast or the wall-clock budget prevents
-further work.
+`engine.internal_error`. An expected in-flight run-budget timeout is normalized to
+`engine.timeout`, marks the run partial, and exits 2 rather than becoming a hard failure. The runner
+then continues unless fail-fast or the wall-clock budget prevents further work.
 
 The programmatic `run_yamls` interface treats independently unloadable sources as lost coverage:
 valid suites still run and the result is partial. The CLI is intentionally stricter and treats an
@@ -398,9 +399,10 @@ collection.
 
 ## Verdict evaluation
 
-`VerdictEvaluator` is pure over the compiled check, result rows, result-column metadata, and optional
-baseline. It does not inspect severity. The runner maps `Evaluation.passed` through declared
-severity:
+`VerdictEvaluator` is pure over the compiled check, result rows, result-column metadata, optional
+baseline, and the probed global-empty state. A globally empty graph permits vacuous conformance
+measurement even when its schema inventory lacks the requested tokens; a populated graph does not.
+The evaluator does not inspect severity. The runner maps `Evaluation.passed` through declared severity:
 
 | Evaluation | Severity | Verdict |
 | --- | --- | --- |

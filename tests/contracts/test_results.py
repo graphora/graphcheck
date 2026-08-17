@@ -16,6 +16,7 @@ from graphcheck.contracts.results import (
     Pattern,
     RedactionPolicy,
     Results,
+    ResultsTarget,
     Run,
     RunStatus,
     Score,
@@ -249,6 +250,12 @@ def test_exit_code_precedence():
     assert exit_code(RunStatus.COMPLETE, [_chk(Verdict.FAIL)]) == 1
     assert exit_code(RunStatus.PARTIAL, [_chk(Verdict.FAIL)]) == 1  # fail dominates partial
     assert exit_code(RunStatus.PARTIAL, [_chk(Verdict.PASS)]) == 2  # clean partial
+    timeout = _chk(
+        Verdict.ERRORED,
+        Severity.ERROR,
+        error=CheckError(code="engine.timeout", message="timed out", fix="narrow selection"),
+    )
+    assert exit_code(RunStatus.PARTIAL, [timeout]) == 2
     assert (
         exit_code(RunStatus.COMPLETE, [_chk(Verdict.ERRORED, Severity.ERROR)]) == 1
     )  # error-errored
@@ -279,6 +286,8 @@ def _run(**over):
             "edition": "community",
             "fingerprint": "sha256:x",
             "capabilities": {"apoc": True, "count_store": True},
+            "labels": [],
+            "relationship_types": [],
         },
         error=None,
     )
@@ -319,6 +328,24 @@ def _results(checks, status=RunStatus.COMPLETE, **run_over):
 
 def test_consistent_results_validate():
     _results([_chk(Verdict.PASS)])
+
+
+def test_results_target_requires_canonical_inventory():
+    target = _run()["target"]
+    with pytest.raises(ValidationError):
+        ResultsTarget.model_validate(
+            {key: value for key, value in target.items() if key != "labels"}
+        )
+    for field, value in (("labels", ["b", "a"]), ("relationship_types", ["A", "A"])):
+        with pytest.raises(ValidationError, match="sorted and contain no duplicates"):
+            ResultsTarget.model_validate({**target, field: value})
+
+
+def test_current_results_reject_null_inventory():
+    raw = json.loads((Path(__file__).parent / "fixtures" / "results.complete.json").read_text())
+    raw["run"]["target"]["labels"] = None
+    with pytest.raises(ValidationError, match="non-null arrays"):
+        Results.model_validate(raw)
 
 
 def test_wrong_totals_rejected():
@@ -446,7 +473,7 @@ def test_duplicate_suite_id_rejected():
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-@pytest.mark.parametrize("name", ["complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
 def test_fixture_validates_against_schema_and_round_trips(name):
     raw = json.loads((FIXTURES / f"results.{name}.json").read_text())
     jsonschema.validate(raw, results_schema())  # structural (JSON Schema)

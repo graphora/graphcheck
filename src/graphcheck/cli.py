@@ -100,6 +100,10 @@ def write_results(*args, **kwargs):
     return _call("graphcheck.reporting.writer", "write_results", *args, **kwargs)
 
 
+def redact_results(*args, **kwargs):
+    return _call("graphcheck.reporting.redaction", "redact_results", *args, **kwargs)
+
+
 def write_html_report(*args, **kwargs):
     return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
 
@@ -1590,6 +1594,12 @@ def run_command(
         min=1,
         help="Maximum concurrent checks; overrides graphcheck.yml.",
     ),
+    redacted: bool = typer.Option(
+        False,
+        "--redact",
+        "--redacted",
+        help="Mask parameter, expected, query, and evidence literal values in exported artifacts.",
+    ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
     from graphcheck.contracts.results import CheckError
@@ -1604,6 +1614,14 @@ def run_command(
     client: Neo4jClient | None = None
     setup_started = time.monotonic()
     telemetry = _command_telemetry()
+
+    def display_error(error: CheckError) -> CheckError:
+        return (
+            CheckError(code=error.code, message="[REDACTED]", fix="[REDACTED]")
+            if redacted
+            else error
+        )
+
     try:
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
@@ -1619,10 +1637,14 @@ def run_command(
         _, selected_profile = select_profile(profiles, profile)
         max_concurrency = concurrency or int(config.concurrency)
         client = _new_neo4j_client(selected_profile, max_concurrency)
-        _verify_cli_audit_credential(client)
+        target = _probe_and_verify_cli_audit_credential(client)
+        if not redacted:
+            _print_run_target(target)
         if telemetry is not None:
             telemetry.mark_setup(setup_started)
-        with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
+        with _run_progress(
+            _selected_check_count(suite_inputs, tags), redacted=redacted
+        ) as progress_callback:
             results = Engine(
                 client,
                 baselines=DirectoryBaselineProvider(artifacts / "baselines"),
@@ -1645,7 +1667,7 @@ def run_command(
                 exc.error.code,
             )
         if runs_dir is None:
-            _print_setup_error(exc.error)
+            _print_setup_error(display_error(exc.error))
             raise typer.Exit(3) from exc
         results = failed_results(
             exc.error,
@@ -1680,7 +1702,7 @@ def run_command(
             fix="Fix the project configuration, then run `graphcheck debug` and try again.",
         )
         if runs_dir is None:
-            _print_setup_error(error)
+            _print_setup_error(display_error(error))
             raise typer.Exit(3) from exc
         results = failed_results(
             error,
@@ -1694,7 +1716,7 @@ def run_command(
                 client.close()
             except Exception as exc:  # a close failure must not discard a completed run artifact
                 typer.secho(
-                    f"Warning: Neo4j driver cleanup failed: {exc}",
+                    f"Warning: Neo4j driver cleanup failed: {'[REDACTED]' if redacted else exc}",
                     fg=typer.colors.YELLOW,
                     err=True,
                 )
@@ -1721,8 +1743,9 @@ def run_command(
 
     try:
         assert runs_dir is not None
+        exported_results = redact_results(results) if redacted else results
         results_path, report_path = _write_run_artifacts(
-            results,
+            exported_results,
             runs_dir,
             render_observer=observe_render if telemetry is not None else None,
         )
@@ -1749,9 +1772,10 @@ def run_command(
                 ),
             )
         if results.run.error is not None:
-            _print_setup_error(results.run.error)
+            _print_setup_error(display_error(results.run.error))
         typer.secho(
-            f"run.artifact_failed: Could not write run artifacts: {exc}",
+            "run.artifact_failed: Could not write run artifacts: "
+            f"{'[REDACTED]' if redacted else exc}",
             fg=typer.colors.RED,
             bold=True,
             err=True,
@@ -1771,8 +1795,47 @@ def run_command(
             exclude_ms=sum(render_times),
         )
 
-    _print_run_summary(results, results_path, report_path)
+    _print_run_summary(
+        exported_results,
+        results_path,
+        report_path,
+        display_run_id=results.run.id,
+    )
     raise typer.Exit(results.run.exit_code)
+
+
+@app.command("redact")
+def redact_command(
+    source: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            readable=True,
+            help="Existing results.json file or run directory to redact.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Destination file (default: results.redacted.json beside the source).",
+        ),
+    ] = None,
+) -> None:
+    """Create a verified, mask-redacted results export from an existing run."""
+
+    source_path = source / "results.json" if source.is_dir() else source
+    if not source_path.is_file():
+        raise typer.BadParameter(f"No results.json found at {source_path}", param_hint="source")
+    redacted_name = f"{source_path.stem}.redacted{source_path.suffix}"
+    destination = output or source_path.with_name(redacted_name)
+    if destination.resolve() == source_path.resolve():
+        raise typer.BadParameter("output must differ from source", param_hint="--output")
+    redacted = redact_results(source_path.read_text(encoding="utf-8"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    write_results(redacted, destination)
+    typer.secho(f"Verified redacted export written to {destination}", fg=typer.colors.GREEN)
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
@@ -1792,13 +1855,26 @@ def _new_neo4j_client(profile, max_concurrency: int):
     )
 
 
-def _verify_cli_audit_credential(client: object) -> None:
+def _probe_and_verify_cli_audit_credential(client: object):
     verify = getattr(client, "verify_read_only_credential", None)
     probe = getattr(client, "probe", None)
+    result = probe() if callable(probe) else None
     if callable(verify):
-        if callable(probe):
-            probe()
         verify()
+    target = result[0] if isinstance(result, tuple) else result
+    if isinstance(result, tuple) and len(result) > 2 and target is not None:
+        counts = result[2]
+        copy = getattr(target, "model_copy", None)
+        if callable(copy):
+            target = copy(
+                update={
+                    "nodes": getattr(counts, "nodes", getattr(target, "nodes", None)),
+                    "relationships": getattr(
+                        counts, "relationships", getattr(target, "relationships", None)
+                    ),
+                }
+            )
+    return target
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
@@ -1823,16 +1899,22 @@ def _progress_template(check_name: str) -> str:
     return "%(label)s  [%(bar)s]  %(info)s Complete | Checking: " + check_name.replace("%", "%%")
 
 
+_PROGRESS_FILL_CHAR = "━"
+_PROGRESS_EMPTY_CHAR = "─"
+
+
 @contextmanager
 def _run_progress(
     total_checks: int,
+    *,
+    redacted: bool = False,
 ) -> Iterator[Callable[[int, int, str], None] | None]:
     if total_checks == 0 or not _interactive_stderr():
         yield None
         return
 
     started = time.monotonic()
-    state = {"check": "Preparing graph checks"}
+    state = {"check": "Preparing redacted graph checks" if redacted else "Preparing graph checks"}
     lock = threading.Lock()
     stopped = threading.Event()
     with typer.progressbar(
@@ -1842,8 +1924,8 @@ def _run_progress(
         show_eta=False,
         show_percent=True,
         show_pos=True,
-        fill_char=typer.style("=", fg=typer.colors.GREEN),
-        empty_char=typer.style("-", fg=typer.colors.BRIGHT_BLACK),
+        fill_char=typer.style(_PROGRESS_FILL_CHAR, fg=typer.colors.GREEN),
+        empty_char=typer.style(_PROGRESS_EMPTY_CHAR, fg=typer.colors.BRIGHT_BLACK),
         width=28,
         color=True,
         bar_template=_progress_template(state["check"]),
@@ -1865,10 +1947,11 @@ def _run_progress(
         ticker.start()
 
         def update(completed: int, total: int, check_name: str) -> None:
+            display_name = "redacted check" if redacted else check_name
             with lock:
-                state["check"] = check_name
+                state["check"] = display_name
                 bar.label = _elapsed_clock(started)
-                bar.bar_template = _progress_template(check_name)
+                bar.bar_template = _progress_template(display_name)
                 bar.update(1)
 
         try:
@@ -2014,6 +2097,15 @@ def _run_status_color(status: str) -> str:
     }.get(status, typer.colors.WHITE)
 
 
+def _exit_code_color(exit_code: int) -> str:
+    return {
+        0: typer.colors.GREEN,
+        1: typer.colors.RED,
+        2: typer.colors.YELLOW,
+        3: typer.colors.RED,
+    }.get(exit_code, typer.colors.WHITE)
+
+
 def _check_summary(totals) -> str:
     values = (
         ("passed", totals.passed, typer.colors.GREEN),
@@ -2023,45 +2115,259 @@ def _check_summary(totals) -> str:
         ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
     )
     return "".join(
-        f" | {typer.style(f'{label} {value}', fg=color)}" for label, value, color in values
+        f" | {label} {typer.style(str(value), fg=color) if value else value}"
+        for label, value, color in values
     )
 
 
-def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
+def _print_run_target(target) -> None:
+    if target is None:
+        return
+    nodes = "unavailable" if target.nodes is None else f"{target.nodes:,}"
+    relationships = "unavailable" if target.relationships is None else f"{target.relationships:,}"
+    typer.echo(
+        f"Target: {target.database} · Neo4j {target.server_version} {target.edition} · "
+        f"{nodes} nodes · {relationships} relationships"
+    )
+
+
+def _suite_score_style(score: int | None) -> str:
+    if score is None:
+        return "white"
+    if score == 100:
+        return "green"
+    return "yellow" if score >= 50 else "red"
+
+
+def _suite_coverage_style(evaluated: int, selected: int) -> str:
+    return "green" if evaluated == selected else "yellow"
+
+
+def _summary_table():
+    from rich import box
+    from rich.table import Table
+
+    return Table(
+        box=box.SIMPLE_HEAD,
+        safe_box=False,
+        show_edge=False,
+        show_lines=False,
+        pad_edge=False,
+        collapse_padding=True,
+        header_style="bold white",
+    )
+
+
+def _suite_score_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Score", justify="right", no_wrap=True)
+    table.add_column("Check Coverage", justify="right", no_wrap=True)
+    for heading in ("Passed", "Failed", "Warnings", "Errored", "Skipped"):
+        table.add_column(heading, justify="right", width=8, no_wrap=True)
+    if not results.suites:
+        table.add_row(*(Text("n/a", style="bright_black") for _ in range(8)))
+        return table
+    state_colors = ("green", "red", "yellow", "magenta", "bright_black")
+    for suite in results.suites:
+        score = "n/a" if suite.score is None else f"{suite.score}/100"
+        evaluated = suite.totals.checks - suite.totals.skipped
+        counts = (
+            suite.totals.passed,
+            suite.totals.fail,
+            suite.totals.warn,
+            suite.totals.errored,
+            suite.totals.skipped,
+        )
+        table.add_row(
+            Text(suite.id, style="italic"),
+            Text(score, style=_suite_score_style(suite.score)),
+            Text(
+                f"{evaluated}/{suite.totals.checks}",
+                style=_suite_coverage_style(evaluated, suite.totals.checks),
+            ),
+            *(
+                Text(str(count), style=color) if count else Text("-")
+                for count, color in zip(counts, state_colors, strict=True)
+            ),
+        )
+    return table
+
+
+def _print_suite_score_table(results: "Results") -> None:
+    from rich.console import Console
+
+    typer.echo("Score breakdown by check suite:")
+    typer.echo()
+    Console(highlight=False).print(_suite_score_table(results))
+
+
+def _result_text(presentation, *, has_not_evaluated: bool = False):
+    from rich.text import Text
+
+    text = Text(presentation.primary_sentence)
+    if has_not_evaluated:
+        text.append(
+            " Coverage is incomplete due to the following check(s) which have not been evaluated:"
+        )
+        return text
+    if not presentation.coverage_incomplete:
+        return text
+    text.append(" Coverage is incomplete.")
+    if not presentation.skipped_suites:
+        return text
+    text = Text(presentation.primary_sentence)
+    text.append(" Coverage is incomplete due to skipped check(s) from ")
+    for index, suite in enumerate(presentation.skipped_suites):
+        if index:
+            text.append(", ")
+        text.append(suite, style="italic")
+    text.append(".")
+    return text
+
+
+def _print_result(presentation, *, has_not_evaluated: bool = False) -> None:
+    from rich.console import Console
+    from rich.text import Text
+
+    Console(highlight=False).print(
+        Text("Result: ") + _result_text(presentation, has_not_evaluated=has_not_evaluated),
+        soft_wrap=True,
+    )
+
+
+def _not_evaluated_table(results: "Results"):
+    from rich.text import Text
+
+    from graphcheck.reporting.presentation import present_check
+
+    table = _summary_table()
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    skipped = sorted(
+        (check for check in results.checks if not check.executed),
+        key=lambda check: (check.suite_id, check.id),
+    )
+    for check in skipped:
+        reason = present_check(check).skip_reason
+        assert reason is not None
+        name = Text(check.name, style="italic")
+        name.append(f" ({check.id})", style="dim")
+        table.add_row(
+            Text(check.suite_id, style="italic"),
+            name,
+            f"{reason.code}: {reason.explanation}",
+        )
+    return table
+
+
+def _print_not_evaluated(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.skipped:
+        return
+    typer.echo()
+    Console(highlight=False).print(_not_evaluated_table(results))
+    typer.echo()
+
+
+def _execution_error_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
+    include_fix = not results.run.redaction.applied
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    if include_fix:
+        table.add_column("Fix")
+    for check in sorted(
+        (check for check in results.checks if check.error is not None),
+        key=lambda check: (check.suite_id, check.id),
+    ):
+        name = Text(check.name, style="italic white")
+        name.append(f" ({check.id})", style="dim white")
+        cells = [
+            Text(check.suite_id, style="italic white"),
+            name,
+            Text(f"{check.error.code}: {check.error.message}", style="magenta"),
+        ]
+        if include_fix:
+            cells.append(Text(check.error.fix, style="white"))
+        table.add_row(*cells)
+    return table
+
+
+def _print_execution_errors(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.errored:
+        return
+    typer.echo(
+        "The following check(s) have execution errors:"
+        if results.run.redaction.applied
+        else "The following check(s) have execution errors. Suggested fixes are provided:"
+    )
+    typer.echo()
+    Console(highlight=False).print(_execution_error_table(results))
+    typer.echo()
+
+
+def _print_run_summary(
+    results: "Results",
+    results_path: Path,
+    report_path: Path,
+    *,
+    display_run_id: str | None = None,
+) -> None:
     from graphcheck.reporting.history import display_run_status
+    from graphcheck.reporting.presentation import present_results
 
     totals = results.totals
+    presentation = present_results(results)
     score = "n/a" if results.score is None else str(results.score.value)
     status = display_run_status(results).value
+    run_label = "GraphCheck redacted run" if results.run.redaction.applied else "GraphCheck run"
     typer.echo(
-        f"GraphCheck run {results.run.id}: "
+        f"{run_label} {display_run_id or results.run.id}: "
         f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
     )
-    if results.run.target is not None:
-        nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
-        relationships = (
-            "unavailable"
-            if results.run.target.relationships is None
-            else str(results.run.target.relationships)
-        )
-        typer.echo(
-            f"Target graph: {results.run.target.database} | nodes {nodes} | "
-            f"relationships {relationships}"
-        )
-    if len(results.suites) > 1:
-        for suite in results.suites:
-            suite_score = "n/a" if suite.score is None else str(suite.score)
-            typer.echo(
-                f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
-                f"{_check_summary(suite.totals).removeprefix(' | ')}"
-            )
-        typer.echo(f"Exit code: {results.run.exit_code}")
+    if len(results.suites) > 1 or results.run.status.value == "failed":
+        _print_suite_score_table(results)
     else:
         typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
-        typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
+        typer.echo(f"Score: {score}")
+    typer.echo()
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
+    _print_result(presentation, has_not_evaluated=bool(totals.skipped))
+    _print_not_evaluated(results)
     if results.run.error is not None:
         _print_setup_error(results.run.error)
-    typer.echo(f"Results: {results_path}")
-    typer.echo(f"Report: {report_path}")
+    _print_execution_errors(results)
+    if not any(check.measured is not None for check in results.checks) and (
+        results.run.error is not None or any(check.error is not None for check in results.checks)
+    ):
+        typer.echo(
+            "Nothing to evaluate: no selected check produced a measured result. "
+            "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        typer.echo(
+            "Empty graph: checks were evaluated against zero nodes and relationships; "
+            "load data if this was unexpected."
+        )
+    typer.echo(f"Results and Report saved to: {results_path.parent}")
+    typer.secho(
+        f"Exit code: {results.run.exit_code}",
+        fg=_exit_code_color(results.run.exit_code),
+        bold=True,
+    )
+    typer.echo()

@@ -143,12 +143,20 @@
       "database": "neo4j",
       "edition": "community",
       "fingerprint": "sha256:abc123",
+      "labels": [
+        "Account",
+        "Customer"
+      ],
       "nodes": 1250,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS"
+      ],
       "relationships": 3480,
       "server_version": "5.18.0"
     }
   },
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "score": {
     "method": "weighted-by-severity",
     "value": 43,

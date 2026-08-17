@@ -131,6 +131,8 @@ def format_report_history(records: list[ReportRun]) -> str:
 
 def report_name(results: Results) -> str:
     """Return the filesystem-safe target and basic-ISO report identifier."""
+    if results.run.redaction.applied:
+        return results.run.id
     database = results.run.target.database if results.run.target is not None else "unknown"
     target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
     timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%S%fZ")
@@ -139,7 +141,7 @@ def report_name(results: Results) -> str:
 
 def display_run_status(results: Results) -> RunStatus:
     """Map machine run outcomes to user-facing statuses."""
-    if results.run.error is not None and results.run.error.code == "neo4j.unreachable":
+    if results.run.status is RunStatus.FAILED:
         return RunStatus.FAILED
     return (
         RunStatus.PARTIAL

@@ -5,11 +5,19 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from graphcheck.scoring import SEVERITY_WEIGHTS, calculate_score, calculate_suite_scores
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 
 class Verdict(StrEnum):
@@ -199,7 +207,16 @@ def exit_code(status: RunStatus, checks: list[CheckResult]) -> int:
     if status is RunStatus.FAILED:
         return 3
     hard = any(
-        c.verdict is Verdict.FAIL or (c.verdict is Verdict.ERRORED and c.severity is Severity.ERROR)
+        c.verdict is Verdict.FAIL
+        or (
+            c.verdict is Verdict.ERRORED
+            and c.severity is Severity.ERROR
+            and not (
+                status is RunStatus.PARTIAL
+                and c.error is not None
+                and c.error.code == "engine.timeout"
+            )
+        )
         for c in checks
     )
     if hard:
@@ -255,6 +272,15 @@ class RunTarget(_Strict):
 class ResultsTarget(RunTarget):
     nodes: int | None = Field(default=None, ge=0)
     relationships: int | None = Field(default=None, ge=0)
+    labels: list[str] | None
+    relationship_types: list[str] | None
+
+    @field_validator("labels", "relationship_types")
+    @classmethod
+    def _inventory_is_canonical(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and value != sorted(set(value)):
+            raise ValueError("target inventory must be sorted and contain no duplicates")
+        return value
 
 
 class Selection(_Strict):
@@ -303,15 +329,16 @@ class Suite(_Strict):
 
 
 class Results(_Strict):
-    schema_version: Literal["1.1"]  # frozen top-level key, required and present
+    schema_version: Literal["1.2"]  # frozen top-level key, required and present
     run: Run
     score: Score | None
     totals: Totals
     suites: list[Suite]
     checks: list[CheckResult]
+    _historical_schema_version: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _consistency(self) -> Results:
+    def _consistency(self, info: ValidationInfo) -> Results:
         status = self.run.status
         if status is RunStatus.FAILED:
             if self.run.error is None:
@@ -323,6 +350,13 @@ class Results(_Strict):
 
         if status in (RunStatus.COMPLETE, RunStatus.PARTIAL) and self.run.target is None:
             raise ValueError("complete/partial run must carry run.target")
+        historical = (info.context or {}).get("historical_schema_version") in {"1.0", "1.1"}
+        if (
+            self.run.target is not None
+            and (self.run.target.labels is None or self.run.target.relationship_types is None)
+            and not historical
+        ):
+            raise ValueError("schema 1.2 target inventory must contain non-null arrays")
 
         if (self.run.partial_reason is not None) != (status is RunStatus.PARTIAL):
             raise ValueError("partial_reason must be non-null iff status is partial")

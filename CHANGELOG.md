@@ -6,6 +6,26 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 - In-repo reference docs: CI setup, check reference (all core/PII checks with fraud-ring fixture examples), and an install/quickstart pointer.
+- Contributor docs: dev setup, tests/lint, and PR flow sections in CONTRIBUTING.md, plus bug/feature/docs issue templates and three good-first-issue labels.
+- A shared, immutable result-presentation layer now gives the CLI and HTML report the same
+  deterministic language for clean, findings, incomplete, empty, all-skipped, and failed runs.
+- Complete HTML check ledgers now show every selected check's stable identity and verdict, with
+  generic persisted-reason explanations for skipped checks and an `Issues` filter for failures,
+  warnings, and execution errors.
+- Offline reports now include a compact target summary with graph size, schema inventory, and
+  capability availability; a permanent `Not Evaluated` coverage section; and an accessible,
+  tabbed `Checks Explorer` / `Next Steps` panel with fixed non-personalized guidance.
+- Multi-suite CLI runs now include a borderless score and coverage table, while runs with skipped
+  checks include a concise table naming each unevaluated check and its persisted reason.
+- A clean all-pass results fixture and CR1–5 implementation roadmap document the new outcome,
+  coverage, target, ledger, navigation, and generic-guidance acceptance contracts.
+- Verified mask-redacted exports through `graphcheck run --redact` (alias `--redacted`) and
+  `graphcheck redact`, with
+  fail-closed literal-surface verification and preserved result contract structure.
+- Closed redacted-export leaks through diagnostics, partial reasons, authored check metadata, and
+  target-derived run IDs.
+- Added relationship-preserving aliases for free-form identifiers and a source-aware final-artifact
+  literal scan with an explicit structural allowlist.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.
@@ -111,6 +131,19 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Bumped the independently versioned `results.json` contract to schema 1.2. New non-failed runs
+  persist sorted, unique label and relationship-type inventories collected by the existing target
+  probe; schema 1.0 and 1.1 artifacts retain explicit in-memory `not recorded` compatibility.
+- The stable `graphcheck debug --json` target now intentionally exposes the same schema 1.2 graph
+  counts and sorted label/relationship-type inventory returned by the connector probe.
+- `graphcheck run` now prints target metadata before interactive progress and ends with an explicit
+  result sentence, one artifact-directory path, and a semantically colored exit-code line without
+  repeating individual passing checks.
+- The offline report now separates run lifecycle, findings, execution errors, and evaluated
+  coverage instead of using broad `All clear` / `No issues found` language or a duplicate Issue
+  Summary table.
+- Expanded the README's Neo4j setup guidance with edition-specific credential requirements,
+  Enterprise read-only user provisioning, and Community Edition's planner-guarded security model.
 - `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
   the separate `--run ID` selector when opening a historical report.
 - Offline reports now present each suite's independently calculated score alongside execution
@@ -197,10 +230,19 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Failed artifacts now remain failed in report headers and history for every run-level error code,
+  rather than only for unreachable-Neo4j failures.
+- Clean-result presentation no longer overstates all-skipped, empty-selection, partial, or errored
+  runs; incomplete coverage and execution errors are reported explicitly on both output surfaces.
+- Empty Neo4j databases now evaluate conformance checks vacuously with real zero-population
+  measurements while drift and populated graphs with unfamiliar schema still report
+  `engine.schema_reference_missing`; in-flight run-budget timeouts now produce partial exit 2, and
+  terminal/HTML diagnostics reserve “checks were evaluated” for measured runs.
 - Neo4j driver deprecation notifications no longer flood GraphCheck CLI output; GraphCheck still
   consumes the notification metadata needed to reject missing schema references.
-- Report history and rendering now read schema 1.0 artifacts by upgrading them to schema 1.1 in
-  memory; newly written `results.json` files continue to use the current 1.1 contract.
+- Report history and rendering now read schema 1.0 and 1.1 artifacts by upgrading them to schema
+  1.2 in memory without rewriting the source; newly written `results.json` files use the current
+  1.2 contract with non-null target inventory arrays.
 - Corrected the C1/C5 merge resolution so human-readable visibility and blocker diagnostics remain
   in `graphcheck debug`, report opening no longer references an undefined debug trace, HTML reports
   retain deterministic check ordering and aggregate-scope labels, and results/HTML artifacts share
