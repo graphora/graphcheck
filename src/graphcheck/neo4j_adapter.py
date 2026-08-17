@@ -341,7 +341,9 @@ class Neo4jClient:
         return self._probe_cypher_version
 
     @contextmanager
-    def read_transaction(self, *, timeout_s: float | None = None):
+    def read_transaction(
+        self, *, timeout_s: float | None = None, allow_missing_schema: bool = False
+    ):
         """Yield a planner-verified reader whose queries share one read snapshot."""
 
         deadline = _timeout_deadline(timeout_s)
@@ -358,6 +360,7 @@ class Neo4jClient:
                     self._profile.database,
                     deadline,
                     self._read_classifications,
+                    allow_missing_schema,
                 )
         except GraphCheckError:
             raise
@@ -395,6 +398,7 @@ class Neo4jClient:
         params: dict[str, object] | None = None,
         *,
         timeout_s: float | None = None,
+        allow_missing_schema: bool = False,
     ) -> QueryResult:
         """Run a planner-verified read while preserving graph values and metadata.
 
@@ -403,7 +407,13 @@ class Neo4jClient:
         first and GraphCheck executes it only when Neo4j classifies it as read-only.
         """
 
-        return self._run_read_result(query, params, timeout_s=timeout_s, verify_read=True)
+        return self._run_read_result(
+            query,
+            params,
+            timeout_s=timeout_s,
+            verify_read=True,
+            allow_missing_schema=allow_missing_schema,
+        )
 
     def run_read_result_bounded(
         self,
@@ -413,6 +423,7 @@ class Neo4jClient:
         policy: ResultPolicy,
         timeout_s: float | None = None,
         stop_when: Callable[[dict[str, Any]], bool] | None = None,
+        allow_missing_schema: bool = False,
     ) -> QueryResult:
         """Run a planner-verified read without retaining more rows than ``policy`` allows."""
 
@@ -423,6 +434,7 @@ class Neo4jClient:
             verify_read=True,
             policy=policy,
             stop_when=stop_when,
+            allow_missing_schema=allow_missing_schema,
         )
 
     def _run_read_result(
@@ -434,6 +446,7 @@ class Neo4jClient:
         verify_read: bool,
         policy: ResultPolicy | None = None,
         stop_when: Callable[[dict[str, Any]], bool] | None = None,
+        allow_missing_schema: bool = False,
     ) -> QueryResult:
         try:
             deadline = _timeout_deadline(timeout_s)
@@ -503,7 +516,9 @@ class Neo4jClient:
                 consume = getattr(result, "consume", None)
                 summary = consume() if complete and callable(consume) else None
                 notifications = _summary_notifications(summary)
-                _raise_for_missing_schema_reference(notifications)
+                _raise_for_missing_schema_reference(
+                    notifications, allow_missing_schema=allow_missing_schema
+                )
                 return QueryResult(
                     rows=rows,
                     columns=columns,
@@ -907,11 +922,13 @@ class _TransactionReader:
         database: str,
         deadline: float | None,
         read_classifications: _ReadClassificationCache,
+        allow_missing_schema: bool,
     ) -> None:
         self._transaction = transaction
         self._database = database
         self._deadline = deadline
         self._read_classifications = read_classifications
+        self._allow_missing_schema = allow_missing_schema
 
     def run_read_result(
         self,
@@ -949,7 +966,9 @@ class _TransactionReader:
             consume = getattr(result, "consume", None)
             summary = consume() if callable(consume) else None
             notifications = _summary_notifications(summary)
-            _raise_for_missing_schema_reference(notifications)
+            _raise_for_missing_schema_reference(
+                notifications, allow_missing_schema=self._allow_missing_schema
+            )
             return QueryResult(
                 rows=rows,
                 columns=columns,
@@ -1291,7 +1310,11 @@ def _notification_dict(notification: object) -> dict[str, Any] | None:
     return values or None
 
 
-def _raise_for_missing_schema_reference(notifications: tuple[dict[str, Any], ...]) -> None:
+def _raise_for_missing_schema_reference(
+    notifications: tuple[dict[str, Any], ...], *, allow_missing_schema: bool = False
+) -> None:
+    if allow_missing_schema:
+        return
     for notification in notifications:
         kind = _missing_schema_kind(notification)
         if kind is None:

@@ -72,7 +72,7 @@ competency:
     assert results.checks[0].error.code == "neo4j.query_failed"
 
 
-def test_missing_conformance_label_is_errored_not_an_empty_pass(neo4j_profile):
+def test_empty_graph_vacuously_measures_real_compiled_conformance_query(neo4j_profile):
     client = Neo4jClient(neo4j_profile)
     try:
         results = Engine(client).run_yaml(
@@ -88,6 +88,65 @@ conformance:
         client.close()
 
     check = results.checks[0]
+    assert results.run.target.nodes == 0
+    assert results.run.target.relationships == 0
+    assert "CALL db.labels()" in check.compiled_query
+    assert check.verdict is Verdict.PASS
+    assert check.measured["population"] == 0
+
+
+def test_empty_graph_drift_keeps_missing_schema_strict(neo4j_profile):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={"latest": {"node_count": {"label=Customer": 100}}},
+        ).run_yaml(
+            """
+suite: missing-drift-schema
+drift:
+  - id: customer-count
+    metric: node_count
+    target: {label: Customer}
+    baseline: latest
+    tolerance: {max_delta: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    assert results.run.target.nodes == 0
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "engine.schema_reference_missing"
+
+
+def test_populated_graph_with_unfamiliar_schema_is_errored(neo4j_profile):
+    driver = GraphDatabase.driver(
+        neo4j_profile.uri,
+        auth=(neo4j_profile.user, neo4j_profile.password),
+    )
+    try:
+        with driver.session(database=neo4j_profile.database) as session:
+            session.run("CREATE (:ExistingLabel)").consume()
+    finally:
+        driver.close()
+
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(client).run_yaml(
+            """
+suite: missing-schema
+conformance:
+  - id: typo
+    check: completeness
+    with: {label: ThisLabelMustNotExist, property: id}
+"""
+        )
+    finally:
+        client.close()
+
+    check = results.checks[0]
+    assert results.run.target.nodes == 1
     assert check.verdict is Verdict.ERRORED
     assert check.error.code == "engine.schema_reference_missing"
 

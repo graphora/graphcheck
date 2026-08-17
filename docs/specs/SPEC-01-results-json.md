@@ -107,8 +107,8 @@ including through MCP, preserves null as `not recorded by that schema version`.
    | Order | Condition | Exit |
    | --- | --- | --- |
    | 1 | `run.status:failed` | **3** |
-   | 2 | any `verdict:fail`, or (`errored` and `severity:error`) | **1** |
-   | 3 | `run.status:partial`; or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
+   | 2 | any `verdict:fail`, or (`errored` and `severity:error`) except an `engine.timeout` on a partial run | **1** |
+   | 3 | `run.status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
    | 4 | otherwise (`complete`, ≥ 1 executed, all `pass`/`skipped`) | **0** |
 
 2. **Evidence is mandatory on `fail` and `warn`.** `compiled_query` is present once compiled, `null` if the check errored before compiling; it keeps `$param` placeholders — literal values live only in `params`.
@@ -116,7 +116,20 @@ including through MCP, preserves null as `not recorded by that schema version`.
 4. **Estimates are labeled** (`estimate:false` = exact, else `{sample_size, population, confidence, ci}`). `errored`/`skipped` are never estimates.
 5. **`checks[]` is the selected universe.** It contains exactly the checks matching the active `--suite`/tag selection; non-matching checks are absent, not skipped. `totals` is a pure tally of `checks[]`; check identity `(suite_id, id)` and suite ids are unique.
 6. **Score:** `round(100 × Σ w(pass) / Σ w(pass|fail|warn|errored))` with `w(error)=3, w(warn)=1` (hard-coded), computed per run **and per suite**; empty denominator ⇒ `null`. Rounding applies to the exact rational value using **half-to-even**, without an intermediate floating-point value. Weights are locked. The overall score is computed directly from all checks, never by averaging rounded suite scores. Also: `verdict:fail` requires `severity:error` and `verdict:warn` requires `severity:warn` (rule 1) — mismatches are rejected, so a malformed record can't downgrade the exit code.
-7. **Redaction** enum `none | mask | hash` is frozen; v0 emits `none` only. `params` is the only literal-value surface; `evidence.elements` carry graph element IDs or aggregate measurement-scope IDs plus labels/types only; `compiled_query` keeps placeholders.
+7. **Redaction** enum `none | mask | hash` is frozen. Normal runs emit
+   `{policy:"none", applied:false}`. `graphcheck run --redact` (alias `--redacted`) and
+   `graphcheck redact` emit
+   `{policy:"mask", applied:true}` after replacing compiled query text, all `params`, `expected`,
+   and `measured` leaves, evidence messages and element IDs/labels/types, check names and
+   provenance, partial reasons, error messages/fixes, source hashes, and target identifiers with
+   `[REDACTED]`. Suite, check, and selected-tag identifiers use consistent ordered aliases that
+   preserve cross-field relationships. Redacted run IDs are target-neutral and derived only from
+   the finish timestamp. Keys, containers, error codes, verdicts, scores, and run-level counts are
+   preserved. Redaction collects the original strings from every masked or aliased surface and
+   rejects a final artifact that repeats one outside the explicit structural allowlist of schema
+   and version metadata, timestamps, enums, server metadata, and error codes. The canonical JSON
+   and HTML writers also verify every artifact's mask, alias, and neutral-ID policy. `hash` remains
+   reserved.
 
 Evidence pointer `kind` is `node`, `rel`, or `aggregate`. An `aggregate` pointer identifies a
 canonical metric/target scope such as `node_count:label=Customer`; it is not a Neo4j element ID.

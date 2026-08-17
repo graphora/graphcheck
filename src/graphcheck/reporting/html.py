@@ -6,7 +6,7 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from graphcheck.contracts.results import CheckResult, Results, RunStatus, Verdict
+from graphcheck.contracts.results import CheckResult, RedactionPolicy, Results, RunStatus, Verdict
 from graphcheck.reporting.history import display_run_status
 from graphcheck.reporting.presentation import ResultPresentation, present_check, present_results
 from graphcheck.reporting.writer import json_compatible, load_results
@@ -47,6 +47,10 @@ def render_validated_html_report(
             '<meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             (
+                '<meta name="graphcheck-redaction" '
+                f'content="{_escape(model.run.redaction.policy.value)}">'
+            ),
+            (
                 f'<meta name="graphcheck-explorer-token" content="{_escape(explorer_token)}">'
                 if explorer_token is not None
                 else ""
@@ -82,6 +86,11 @@ def render_validated_html_report_fragments(
 ) -> dict[str, str]:
     """Render the report-specific roots used by full and soft navigation."""
 
+    if model.run.redaction.policy is RedactionPolicy.MASK or model.run.redaction.applied:
+        from graphcheck.reporting.redaction import verify_redacted_results
+
+        verify_redacted_results(model)
+
     checks = sorted(
         (check for check in model.checks if verdicts is None or check.verdict in verdicts),
         key=lambda check: (
@@ -94,7 +103,7 @@ def render_validated_html_report_fragments(
     return {
         "run_title": _run_title(model),
         "overview": _status_overview(model, checks, filtered=verdicts is not None),
-        "checks_next_steps": _checks_next_steps(checks),
+        "checks_next_steps": _checks_next_steps(checks, redacted=model.run.redaction.applied),
     }
 
 
@@ -150,7 +159,7 @@ def _report_explorer(results: Results) -> str:
         "    </details>"
         "  </div>"
         '  <div class="panel-footer explorer-footer">'
-        '    <p id="report-explorer-status" class="explorer-status" aria-live="polite"></p>'
+        '    <div id="report-explorer-status" class="explorer-status" aria-live="polite"></div>'
         '    <div class="explorer-comparison-actions">'
         '      <button id="compare-reports-btn" class="btn-secondary" '
         'type="button" disabled>Compare Selected</button>'
@@ -165,6 +174,19 @@ def _report_explorer(results: Results) -> str:
         '    <button id="close-comparison-btn" class="dialog-close" type="button" aria-label="Close Comparison">×</button>'
         "  </div>"
         '  <pre id="report-comparison-content" tabindex="0"></pre>'
+        "</dialog>"
+        '<dialog id="report-missing-dialog" class="comparison-dialog report-missing-dialog">'
+        '  <div class="comparison-dialog-header">'
+        '    <div class="report-missing-title">'
+        "      <h2>Report Not Found</h2>"
+        '      <p id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span> could not be found or opened.</p>'
+        "    </div>"
+        '    <button id="close-report-missing-btn" class="dialog-close" type="button" '
+        'aria-label="Close Report Missing">×</button>'
+        "  </div>"
+        '  <div class="report-missing-content">'
+        "    <p><strong>Next step:</strong> Select another report from history or regenerate the missing report.</p>"
+        "  </div>"
         "</dialog>"
         '<dialog id="delete-confirmation-dialog" class="confirmation-dialog">'
         "  <h2>Are you sure?</h2>"
@@ -183,6 +205,11 @@ def _run_title(results: Results) -> str:
     )
     presentation = present_results(results)
     total_issues = presentation.findings + presentation.execution_errors
+    redaction_pill = (
+        '    <span class="status-pill status-pill-redacted">DETAILS REDACTED</span>'
+        if results.run.redaction.applied
+        else ""
+    )
 
     action = ""
     troubleshooting = ""
@@ -229,6 +256,7 @@ def _run_title(results: Results) -> str:
         f'  <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
         '  <div class="header-status">'
         f'    <span class="status-pill status-pill-{kind}">{label}</span>'
+        f"{redaction_pill}"
         f'    <h1><strong>{heading}</strong> <span class="header-status-message">'
         f"{message}</span>{action}</h1>"
         "  </div>"
@@ -304,7 +332,7 @@ def _status_overview(
     *,
     filtered: bool,
 ) -> str:
-    target_html = _target_overview(results)
+    target_html = "" if results.run.redaction.applied else _target_overview(results)
 
     # Group checks by suite
     checks_by_suite: dict[str, list[CheckResult]] = {}
@@ -337,14 +365,10 @@ def _status_overview(
                 f'<span class="badge badge-skipped">{totals.skipped} SKIPPED</span>'
             )
 
-        if not right_badges:
-            if totals.passed > 0:
-                right_badges.append('<span class="badge badge-pass">OPERATIONAL</span>')
-            else:
-                right_badges.append('<span class="badge badge-skipped">NO CHECKS</span>')
+        if not right_badges and totals.passed == 0:
+            right_badges.append('<span class="badge badge-skipped">NO CHECKS</span>')
 
-        score = "N/A" if suite.score is None else str(suite.score)
-        right_badges.append(f'<span class="badge badge-score">SCORE: {score}</span>')
+        right_badges.append(_score_badge(suite.score))
         right_badges_html = f'<div class="suite-badges-row">{"".join(right_badges)}</div>'
 
         suite_stats_html = (
@@ -400,6 +424,7 @@ def _status_overview(
         "    </div>"
         "  </div>"
         '  <div class="scrollable-content">'
+        f"    {_run_diagnostics(results)}"
         f'    <div class="suite-status-list">{suite_body}</div>'
         f"    {_not_evaluated(results)}"
         "  </div>"
@@ -432,6 +457,39 @@ def _target_overview(results: Results) -> str:
         f"<div><dt>Schema Inventory</dt><dd>{inventory}</dd></div>"
         f'<div><dt>Capabilities</dt><dd class="capability-list">{capabilities}</dd></div>'
         "</dl>"
+    )
+
+
+def _run_diagnostics(results: Results) -> str:
+    messages: list[tuple[str, str]] = []
+    if results.run.partial_reason is not None:
+        messages.append(("Partial reason", results.run.partial_reason))
+    if not any(check.measured is not None for check in results.checks) and (
+        results.run.error is not None or any(check.error is not None for check in results.checks)
+    ):
+        messages.append(
+            (
+                "Nothing to evaluate",
+                "No selected check produced a measured result. Adjust the selection or resolve "
+                "the reported errors or skip reasons, then rerun.",
+            )
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        messages.append(
+            (
+                "Empty graph",
+                "Checks were evaluated against zero nodes and relationships; load data if this "
+                "was unexpected.",
+            )
+        )
+    return "".join(
+        '<div class="callout callout-diagnostic">'
+        f"<strong>{_escape(title)}</strong><p>{_escape(message)}</p></div>"
+        for title, message in messages
     )
 
 
@@ -531,8 +589,13 @@ def _not_evaluated_row(check: CheckResult) -> str:
     )
 
 
-def _checks_next_steps(checks: list[CheckResult]) -> str:
-    items = "".join(_check(check) for check in checks)
+def _checks_next_steps(checks: list[CheckResult], *, redacted: bool) -> str:
+    items = "".join(_check(check, redacted=redacted) for check in checks)
+    toggle_details = (
+        ""
+        if redacted
+        else '      <button id="toggle-details-btn" class="btn-secondary" type="button">Toggle Details</button>'
+    )
     return (
         '<section id="checks-next-steps-panel" class="card panel-section hidden-panel">'
         '  <div class="checks-next-steps-header report-tabs" role="tablist" '
@@ -555,7 +618,7 @@ def _checks_next_steps(checks: list[CheckResult]) -> str:
         '        <button class="filter-btn" type="button" data-filter="pass" aria-pressed="false">Pass</button>'
         '        <button class="filter-btn" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>'
         "      </div>"
-        '      <button id="toggle-details-btn" class="btn-secondary" type="button">Toggle Details</button>'
+        f"{toggle_details}"
         "    </div>"
         f'    <div id="checks-container" class="scrollable-content">{items}'
         '      <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>'
@@ -573,16 +636,30 @@ def _checks_next_steps(checks: list[CheckResult]) -> str:
     )
 
 
-def _check(check: CheckResult) -> str:
+def _check(check: CheckResult, *, redacted: bool) -> str:
     presentation = present_check(check)
     verdict_str = presentation.verdict
     classes = f"check-card check-{verdict_str}"
     suite_id_esc = _escape(check.suite_id)
     check_id_esc = _escape(check.id)
     key_esc = f"{suite_id_esc}::{check_id_esc}"
-
+    name = _escape(check.name)
+    pattern = _escape(check.pattern.value)
+    name_html = (
+        '<div class="check-name-group">'
+        f"<h3>{name}</h3>"
+        f'<span class="check-pattern">Pattern: <code>{pattern}</code></span>'
+        "</div>"
+        if redacted
+        else f"<h3>{name}</h3>"
+    )
+    identity_html = (
+        f'<code class="check-id">{key_esc}</code>'
+        if redacted
+        else f'<em><code class="check-id">{key_esc}</code></em>'
+    )
     details = [
-        f'<p class="meta-sub">Pattern: <code>{_escape(check.pattern.value)}</code></p>',
+        f'<p class="meta-sub">Pattern: <code>{pattern}</code></p>',
         f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
     ]
     reason_html = ""
@@ -594,9 +671,13 @@ def _check(check: CheckResult) -> str:
             "</div>"
         )
     evaluation_html = (
-        '<p class="evaluation-state evaluation-state-not-evaluated">Not evaluated</p>'
-        if not presentation.evaluated
-        else ""
+        '<p class="evaluation-state evaluation-state-errored">Errored</p>'
+        if check.verdict is Verdict.ERRORED
+        else (
+            '<p class="evaluation-state evaluation-state-not-evaluated">Not evaluated</p>'
+            if not presentation.evaluated
+            else ""
+        )
     )
     if check.measured is not None:
         details.append(
@@ -620,21 +701,27 @@ def _check(check: CheckResult) -> str:
         )
     if check.evidence is not None:
         details.append(_evidence(check))
+    details_html = (
+        ""
+        if redacted
+        else (
+            f'<details {_details_open(check)} class="check-details">'
+            "<summary>View details</summary>"
+            f'<div class="details-content">{"".join(details)}</div>'
+            "</details>"
+        )
+    )
 
     return (
         f'<article class="{classes}" tabindex="-1" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
         f'data-suite-id="{suite_id_esc}" data-check-id="{check_id_esc}">'
         '<div class="check-title-row">'
-        f'<span class="badge badge-{verdict_str}">{_escape(presentation.verdict_label)}</span>'
-        f"<h3>{_escape(check.name)}</h3>"
-        f'<em><code class="check-id">{key_esc}</code></em>'
+        f"{name_html}"
+        f"{identity_html}"
         "</div>"
         f"{evaluation_html}"
         f"{reason_html}"
-        f'<details {_details_open(check)} class="check-details">'
-        "<summary>View details</summary>"
-        f'<div class="details-content">{"".join(details)}</div>'
-        "</details>"
+        f"{details_html}"
         "</article>"
     )
 
@@ -667,6 +754,15 @@ def _evidence(check: CheckResult) -> str:
 
 def _details_open(check: CheckResult) -> str:
     return ""
+
+
+def _score_badge(score: int | None) -> str:
+    value, color = (
+        ("N/A", "na")
+        if score is None
+        else (str(score), "good" if score == 100 else "warn" if score >= 50 else "bad")
+    )
+    return f'<span class="badge badge-score badge-score-{color}">SCORE: {value}</span>'
 
 
 def _json(value: object) -> str:
@@ -787,6 +883,7 @@ body {
 .status-pill-warning { background: var(--warn-color); color: #422006; }
 .status-pill-partial { background: var(--errored-color); }
 .status-pill-error { background: var(--fail-color); }
+.status-pill-redacted { background: #64748b; color: #fff; }
 .header-status-action { margin-left: 6px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .navbar-actions { display: flex; align-items: center; gap: 12px; }
 .report-navigation-status { min-width: 94px; color: #cbd5e1; font-size: 12px; text-align: right; }
@@ -912,6 +1009,8 @@ body {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .status-bar-wrapper {
@@ -1102,9 +1201,11 @@ body.report-navigation-loading #checks-next-steps-panel { opacity: 0.55; }
 .report-meta { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; line-height: 1.35; }
 .report-status { text-transform: capitalize; }
 .explorer-footer { flex-direction: column; align-items: stretch; gap: 6px; margin-top: 5px; margin-bottom: 0; padding-top: 5px; padding-bottom: 0; border-bottom: 0; }
-.explorer-status { min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
+.explorer-status { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 16px; margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
 .explorer-status:empty { display: none; }
 .explorer-status.error { color: var(--fail-color); }
+.explorer-status-message { min-width: 0; flex: 1; }
+.explorer-status-dismiss { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
 .explorer-selection-actions { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .explorer-comparison-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .explorer-selection-actions button, .explorer-comparison-actions button { width: 100%; min-width: 0; }
@@ -1121,6 +1222,12 @@ body.report-navigation-loading #checks-next-steps-panel { opacity: 0.55; }
 .troubleshooting-content p { margin: 0 0 18px; overflow-wrap: anywhere; }
 .troubleshooting-content ol { margin: 0; padding-left: 22px; }
 .troubleshooting-content li + li { margin-top: 8px; }
+.report-missing-dialog { width: min(520px, calc(100vw - 32px)); }
+.report-missing-title { min-width: 0; }
+.report-missing-title p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.report-missing-name { color: var(--fail-color); font-weight: 400; }
+.report-missing-content { padding: 18px; border-top: 1px solid var(--border); }
+.report-missing-content p { margin: 0; color: var(--text-main); font-size: 13px; line-height: 1.5; }
 .comparison-status-complete, .comparison-delta-positive { color: var(--pass-color); font-weight: 700; }
 .comparison-status-partial { color: var(--errored-color); font-weight: 700; }
 .comparison-status-failed, .comparison-delta-negative { color: var(--fail-color); font-weight: 700; }
@@ -1169,20 +1276,26 @@ body.report-navigation-loading #checks-next-steps-panel { opacity: 0.55; }
 }
 
 .badge {
-  display: inline-block;
-  padding: 3px 7px;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
   font-size: 11px;
   font-weight: 700;
+  line-height: 1;
   text-transform: uppercase;
+  white-space: nowrap;
 }
-.badge-pass { background: var(--pass-bg); color: var(--pass-color); border: 1px solid rgba(16, 185, 129, 0.3); }
-.badge-fail { background: var(--fail-bg); color: var(--fail-color); border: 1px solid rgba(239, 68, 68, 0.3); }
-.badge-warn { background: var(--warn-bg); color: var(--warn-color); border: 1px solid rgba(245, 158, 11, 0.3); }
-.badge-errored { background: var(--errored-bg); color: var(--errored-color); border: 1px solid rgba(139, 92, 246, 0.3); }
-.badge-skipped { background: var(--skipped-bg); color: var(--skipped-color); border: 1px solid var(--border); }
-.badge-score { background: #eff6ff; color: #2563eb; border: 1px solid rgba(37, 99, 235, 0.3); order: 999; }
-[data-theme="dark"] .badge-score { background: #1e3a8a; color: #bfdbfe; }
+.badge-score-good { background: #059669; }
+.badge-fail, .badge-score-bad { background: #dc2626; }
+.badge-warn, .badge-score-warn { background: #d97706; }
+.badge-errored { background: #7c3aed; }
+.badge-skipped, .badge-score-na { background: #64748b; }
+.badge-score { order: 999; }
 
 .table-container { overflow-x: auto; margin-top: 8px; }
 .styled-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
@@ -1289,10 +1402,11 @@ body.report-navigation-loading #checks-next-steps-panel { opacity: 0.55; }
   100% { outline: 0px solid transparent; box-shadow: var(--shadow); }
 }
 
-.check-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.check-title-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.check-title-row > em { margin-left: auto; }
-.check-id { color: var(--text-muted); font-size: 12px; font-style: italic; }
+.check-title-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.check-title-row h3 { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 600; line-height: 1.45; }
+.check-name-group { min-width: 0; }
+.check-pattern { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; }
+.check-id { max-width: 100%; overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; }
 .evaluation-state { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; font-weight: 600; }
 .evaluation-state-not-evaluated { color: var(--skipped-color); }
 
@@ -1314,6 +1428,7 @@ p.text-muted { margin-top: 0; }
 .text-center { text-align: center; }
 .meta-sub { font-size: 12px; color: var(--text-muted); }
 .callout { padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+.callout-diagnostic { background: var(--bg-subtle); border: 1px solid var(--border); }
 .callout-error { background: var(--fail-bg); border: 1px solid rgba(239, 68, 68, 0.3); }
 .callout-skipped { background: var(--bg-subtle); border: 1px solid var(--skipped-color); }
 .callout p { margin: 4px 0 0; }
@@ -1352,8 +1467,21 @@ const REPORT_EXPLORER_TOKEN = document.querySelector('meta[name="graphcheck-expl
 function setReportExplorerStatus(message, error = false) {
   const status = document.getElementById('report-explorer-status');
   if (!status) return;
-  status.textContent = message;
+  status.replaceChildren();
   status.classList.toggle('error', error);
+  if (!message) return;
+  const text = document.createElement('span');
+  text.className = 'explorer-status-message';
+  text.textContent = message;
+  status.appendChild(text);
+  if (!error) return;
+  const dismiss = document.createElement('button');
+  dismiss.className = 'explorer-status-dismiss';
+  dismiss.type = 'button';
+  dismiss.setAttribute('aria-label', 'Dismiss report error');
+  dismiss.textContent = '×';
+  dismiss.addEventListener('click', () => setReportExplorerStatus(''));
+  status.appendChild(dismiss);
 }
 
 function reportHref(runId) {
@@ -1408,6 +1536,7 @@ function applyReport(report, historyMode = 'push') {
   const explorer = document.getElementById('report-explorer');
   if (explorer) explorer.dataset.currentReport = report.id;
   updateCurrentReportRow(report.id);
+  closeReportMissingDialog();
   requestAnimationFrame(() => window.scrollTo(scrollPosition.x, scrollPosition.y));
 }
 
@@ -1427,7 +1556,7 @@ async function navigateReport(href, historyMode = 'push') {
     applyReport(payload.report, historyMode);
   } catch (error) {
     if (error.name !== 'AbortError' && requestSequence === reportNavigationSequence) {
-      setReportExplorerStatus(error.message, true);
+      openReportMissingDialog(runId);
     }
   } finally {
     if (requestSequence === reportNavigationSequence) setReportNavigationLoading(false);
@@ -1646,6 +1775,24 @@ function openComparisonDialog(message) {
   content.focus();
 }
 
+function openReportMissingDialog(reportName) {
+  const dialog = document.getElementById('report-missing-dialog');
+  const diagnostic = document.getElementById('report-missing-diagnostic');
+  if (!dialog || !diagnostic) return;
+  const name = document.createElement('span');
+  name.className = 'report-missing-name';
+  name.textContent = reportName || 'Selected report';
+  diagnostic.replaceChildren(name, ' could not be found or opened.');
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
+function closeReportMissingDialog() {
+  const dialog = document.getElementById('report-missing-dialog');
+  if (typeof dialog?.close === 'function' && dialog.open) dialog.close();
+  else dialog?.removeAttribute('open');
+}
+
 function clearReportSelection() {
   selectedReportIds.clear();
   document.querySelectorAll('.report-select').forEach(checkbox => checkbox.checked = false);
@@ -1737,7 +1884,8 @@ async function initReportExplorer() {
     renderReportHistory(payload.reports || [], true);
     window.setInterval(() => reportExplorerRequest('/api/ping').catch(() => {}), 30000);
   } catch (error) {
-    setReportExplorerStatus(error.message, true);
+    const current = new URLSearchParams(window.location.search).get('id');
+    openReportMissingDialog(current || document.getElementById('report-explorer')?.dataset.currentReport);
   }
 }
 
@@ -2077,6 +2225,7 @@ function initInteractions() {
     if (typeof dialog?.close === 'function') dialog.close();
     else dialog?.removeAttribute('open');
   });
+  document.getElementById('close-report-missing-btn')?.addEventListener('click', closeReportMissingDialog);
 
   document.addEventListener('click', handleReportLinkClick);
   window.addEventListener('popstate', () => navigateReport(window.location.href, 'none'));

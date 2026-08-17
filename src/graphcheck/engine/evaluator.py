@@ -122,10 +122,11 @@ class VerdictEvaluator:
         baseline: BaselineValue | None = None,
         complete: bool = True,
         observed_rows: int | None = None,
+        graph_empty: bool = False,
     ) -> Evaluation:
         pattern = compiled.check.pattern
         if pattern is Pattern.CONFORMANCE:
-            return self._conformance(compiled, rows)
+            return self._conformance(compiled, rows, graph_empty=graph_empty)
         if pattern in (Pattern.COMPETENCY_SHAPE, Pattern.COMPETENCY_REGRESSION):
             return self._competency(
                 compiled,
@@ -143,13 +144,17 @@ class VerdictEvaluator:
         )
 
     def _conformance(
-        self, compiled: CompiledCheck, rows: Sequence[Mapping[str, Any]]
+        self,
+        compiled: CompiledCheck,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        graph_empty: bool,
     ) -> Evaluation:
         spec = compiled.check.spec
         if not isinstance(spec, ConformanceCheck):
             raise _bad_result(compiled, "the loaded payload is not conformance")
         row = _single_summary_row(compiled, rows)
-        _require_schema(compiled, row)
+        _require_schema(compiled, row, graph_empty=graph_empty)
 
         if spec.check in {"pii_name_match", "pii_value_match"}:
             return self._pii(compiled, row, spec.check)
@@ -422,7 +427,7 @@ class VerdictEvaluator:
                 "Pin the requested baseline and run the suite again.",
             )
         row = _single_summary_row(compiled, rows)
-        _require_schema(compiled, row)
+        _require_schema(compiled, row, graph_empty=False)
         current = _number(row, "current", compiled)
         previous = baseline.value
         if spec.metric == "property_coverage" and (
@@ -468,6 +473,7 @@ def evaluate_check(
     baseline: BaselineValue | None = None,
     complete: bool = True,
     observed_rows: int | None = None,
+    graph_empty: bool = False,
 ) -> Evaluation:
     return VerdictEvaluator().evaluate(
         compiled,
@@ -476,6 +482,7 @@ def evaluate_check(
         baseline=baseline,
         complete=complete,
         observed_rows=observed_rows,
+        graph_empty=graph_empty,
     )
 
 
@@ -496,13 +503,15 @@ def _single_summary_row(
     return rows[0]
 
 
-def _require_schema(compiled: CompiledCheck, row: Mapping[str, Any]) -> None:
+def _require_schema(compiled: CompiledCheck, row: Mapping[str, Any], *, graph_empty: bool) -> None:
     if "schema_ok" not in row:
         raise _bad_result(compiled, "compiled summary omitted schema_ok")
     if row["schema_ok"] is True:
         return
     if row["schema_ok"] is not False:
         raise _bad_result(compiled, "compiled summary schema_ok is not boolean")
+    if graph_empty:
+        return
     labels = list(row.get("missing_labels") or [])
     rel_types = list(row.get("missing_relationship_types") or [])
     properties = list(row.get("missing_properties") or [])
@@ -512,7 +521,7 @@ def _require_schema(compiled: CompiledCheck, row: Mapping[str, Any]) -> None:
     detail = ", ".join(missing) or "an unknown graph schema token"
     raise GraphCheckError(
         "engine.schema_reference_missing",
-        f"Check {compiled.check.id!r} references {detail}.",
+        f"Check {compiled.check.id!r} has nothing to evaluate because it references {detail}.",
         "Correct the label/type in the suite or run it against the intended graph.",
     )
 

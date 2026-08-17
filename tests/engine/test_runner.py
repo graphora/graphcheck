@@ -16,7 +16,7 @@ from graphcheck.contracts.results import (
     Verdict,
 )
 from graphcheck.engine.runner import Engine, EngineConfig, SuiteInput, YamlSuiteInput
-from graphcheck.errors import GraphCheckError
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.packs import PACK_VERSION
 
@@ -29,6 +29,7 @@ TARGET = ResultsTarget(
     labels=[],
     relationship_types=[],
 )
+EMPTY_TARGET = TARGET.model_copy(update={"nodes": 0, "relationships": 0})
 
 PASSING_SUITE = """\
 suite: customer-quality
@@ -631,8 +632,8 @@ competency:
     assert check.evidence.elements[0].id == "4:graph:resolved"
 
 
-def test_timed_out_check_is_errored_and_remaining_check_becomes_not_run_partial():
-    timeout = GraphCheckError("engine.timeout", "query timed out", "narrow query")
+def test_in_flight_budget_timeout_is_partial_exit_two_and_stops_later_work():
+    timeout = GraphCheckTimeoutError("neo4j.query_failed", "query timed out", "narrow query")
     client = RichClient([timeout])
     start = datetime(2026, 7, 13, 10, 0, tzinfo=UTC)
     engine = Engine(
@@ -643,16 +644,69 @@ def test_timed_out_check_is_errored_and_remaining_check_becomes_not_run_partial(
         id_factory=lambda: "run-timeout",
     )
 
-    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET)
+    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
 
     assert results.run.status is RunStatus.PARTIAL
     assert results.run.partial_reason and "budget was exhausted" in results.run.partial_reason
-    assert results.run.exit_code == 1
+    assert "fail-fast stopped" not in results.run.partial_reason
+    assert results.run.exit_code == 2
     assert results.checks[0].verdict is Verdict.ERRORED
     assert results.checks[0].error.code == "engine.timeout"
     assert results.checks[1].verdict is Verdict.SKIPPED
     assert results.checks[1].skip_reason is SkipReason.NOT_RUN
     assert len(client.read_calls) == 1
+
+
+def test_server_query_timeout_before_deadline_remains_a_hard_fail_fast_error():
+    timeout = GraphCheckTimeoutError("neo4j.query_failed", "query timed out", "narrow query")
+    client = RichClient([timeout])
+    engine = Engine(
+        client,
+        config=EngineConfig(time_budget_s=10.0),
+        clock=FixedClock(datetime(2026, 7, 13, tzinfo=UTC)),
+        monotonic=lambda: 0.0,
+        id_factory=lambda: "run-query-timeout",
+    )
+
+    results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
+
+    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.partial_reason == "fail-fast stopped the run after competencies/first"
+    assert results.run.exit_code == 1
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "neo4j.query_failed"
+    assert results.checks[1].verdict is Verdict.SKIPPED
+    assert results.checks[1].skip_reason is SkipReason.NOT_RUN
+    assert len(client.read_calls) == 1
+
+
+def test_empty_target_drift_with_missing_schema_is_errored_not_passed():
+    client = RichClient(
+        [
+            RichResult(
+                [
+                    {
+                        "schema_ok": False,
+                        "missing_labels": ["Customer"],
+                        "missing_relationship_types": [],
+                        "current": 100,
+                        "population": 0,
+                        "evidence": [],
+                    }
+                ],
+                ("schema_ok", "current", "population", "evidence"),
+            )
+        ]
+    )
+
+    results = _engine(
+        client,
+        baselines={"latest": {"node_count": {"label=Customer": 100}}},
+    ).run_yaml(DRIFT_SUITE, target=EMPTY_TARGET)
+
+    assert results.run.exit_code == 1
+    assert results.checks[0].verdict is Verdict.ERRORED
+    assert results.checks[0].error.code == "engine.schema_reference_missing"
 
 
 def test_last_check_finishing_after_deadline_marks_the_run_partial():

@@ -250,6 +250,12 @@ def test_exit_code_precedence():
     assert exit_code(RunStatus.COMPLETE, [_chk(Verdict.FAIL)]) == 1
     assert exit_code(RunStatus.PARTIAL, [_chk(Verdict.FAIL)]) == 1  # fail dominates partial
     assert exit_code(RunStatus.PARTIAL, [_chk(Verdict.PASS)]) == 2  # clean partial
+    timeout = _chk(
+        Verdict.ERRORED,
+        Severity.ERROR,
+        error=CheckError(code="engine.timeout", message="timed out", fix="narrow selection"),
+    )
+    assert exit_code(RunStatus.PARTIAL, [timeout]) == 2
     assert (
         exit_code(RunStatus.COMPLETE, [_chk(Verdict.ERRORED, Severity.ERROR)]) == 1
     )  # error-errored

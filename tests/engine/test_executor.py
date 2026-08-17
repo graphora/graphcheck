@@ -50,6 +50,19 @@ def test_executor_prefers_rich_c2_path_and_preserves_columns_and_timeout():
     assert calls == [(compiled.query, {"value": 7}, 3.5)]
 
 
+def test_executor_forwards_explicit_missing_schema_allowance_only_when_supported():
+    calls = []
+
+    class Client:
+        def run_read_result(self, query, params, *, timeout_s=None, allow_missing_schema=False):
+            calls.append(allow_missing_schema)
+            return RichResult([{"value": 7}], ("value",))
+
+    ReadOnlyExecutor(Client()).execute(_compiled(), allow_missing_schema=True)
+
+    assert calls == [True]
+
+
 def test_executor_supports_frozen_legacy_c2_api_without_timeout_keyword():
     calls = []
 

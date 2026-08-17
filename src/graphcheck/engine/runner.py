@@ -87,6 +87,22 @@ from graphcheck.telemetry.policy import (
 
 _ProgressCallback = Callable[[int, int, str], None]
 
+_CAPABILITY_FIXES = {
+    "apoc": "Install APOC for this Neo4j DBMS, restart Neo4j, then rerun GraphCheck.",
+    "count_store": "Enable count-store support for this check, then rerun GraphCheck.",
+    "store_consistency": (
+        "Run Neo4j's offline consistency checker or install a connector that exposes a "
+        "read-only relationship-store consistency probe."
+    ),
+}
+
+
+def _deadline_reason(seconds: float) -> str:
+    return (
+        f"the {seconds:g}-second run budget was exhausted. Fix: select fewer checks, narrow "
+        "expensive queries, or enable sampling, then rerun."
+    )
+
 
 @dataclass(frozen=True)
 class SuiteInput:
@@ -493,9 +509,19 @@ class Engine:
                     check.id,
                 )
                 rendered = ", ".join(missing_capabilities)
+                fixes = list(
+                    dict.fromkeys(
+                        _CAPABILITY_FIXES.get(
+                            capability,
+                            f"Enable the `{capability}` capability, then rerun GraphCheck.",
+                        )
+                        for capability in missing_capabilities
+                    )
+                )
                 _append_once(
                     partial_reasons,
-                    f"check {suite_id}/{check.id} requires missing capability: {rendered}",
+                    f"check {suite_id}/{check.id} requires missing capability: {rendered}. "
+                    f"Fix: {' '.join(fixes)}",
                 )
                 self._add_partial_code(PartialReasonCode.UNSUPPORTED_CHECK)
                 return False
@@ -508,7 +534,7 @@ class Engine:
                 )
                 _append_once(
                     partial_reasons,
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                 )
                 self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
                 return False
@@ -558,7 +584,7 @@ class Engine:
                 if self._monotonic() >= deadline:
                     _append_once(
                         partial_reasons,
-                        f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                        _deadline_reason(self.config.time_budget_s),
                     )
                     self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
         else:
@@ -614,7 +640,7 @@ class Engine:
             if runnable and self._monotonic() >= deadline:
                 _append_once(
                     partial_reasons,
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                 )
                 self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
 
@@ -654,6 +680,10 @@ class Engine:
         resolved_params: dict[str, object] | None = None
         baseline: BaselineValue | None = None
         partial_reason: str | None = None
+        graph_empty = (
+            getattr(target, "nodes", None) == 0 and getattr(target, "relationships", None) == 0
+        )
+        allow_missing_schema = graph_empty and isinstance(check.spec, ConformanceCheck)
         try:
             self._telemetry_stage = EngineStage.COMPILE
             stage_started = self._timing_start()
@@ -714,10 +744,12 @@ class Engine:
                     timeout_s=_remaining(deadline, self._monotonic()),
                     policy=consumption.policy if consumption is not None else None,
                     stop_when=consumption.stop_when if consumption is not None else None,
+                    allow_missing_schema=allow_missing_schema,
                 )
             else:
                 with self.executor.transaction(
-                    timeout_s=_remaining(deadline, self._monotonic())
+                    timeout_s=_remaining(deadline, self._monotonic()),
+                    allow_missing_schema=allow_missing_schema,
                 ) as transaction:
                     execution = self._execute_query_with_event(
                         compiled.query,
@@ -725,6 +757,7 @@ class Engine:
                         role=QueryRole.CHECK_MEASUREMENT,
                         timeout_s=_remaining(deadline, self._monotonic()),
                         executor=transaction,
+                        allow_missing_schema=allow_missing_schema,
                     )
                     if _evidence_required(compiled, execution.rows):
                         evidence_execution = self._execute_query_with_event(
@@ -733,6 +766,7 @@ class Engine:
                             role=QueryRole.EVIDENCE_COLLECTION,
                             timeout_s=_remaining(deadline, self._monotonic()),
                             executor=transaction,
+                            allow_missing_schema=allow_missing_schema,
                         )
                         execution = _merge_evidence(compiled, execution, evidence_execution)
             if consumption is not None and not execution.complete and not consumption.decisive:
@@ -754,6 +788,7 @@ class Engine:
                 evaluator_kwargs.update(
                     complete=execution.complete,
                     observed_rows=execution.observed_rows,
+                    graph_empty=allow_missing_schema,
                 )
             evaluation = self.evaluator.evaluate(
                 # Evidence extraction must see executed literals, never unresolved graph tokens.
@@ -797,7 +832,18 @@ class Engine:
             return result, partial_reason, timings
         except GraphCheckError as exc:
             error = exc.error
-            if error.code == "engine.baseline_partial_missing":
+            if (
+                isinstance(exc, GraphCheckTimeoutError) or error.code == "engine.timeout"
+            ) and self._monotonic() >= deadline:
+                error = error.model_copy(update={"code": "engine.timeout"})
+                deadline_reason = _deadline_reason(self.config.time_budget_s)
+                partial_reason = (
+                    f"{partial_reason}; {deadline_reason}"
+                    if partial_reason is not None
+                    else deadline_reason
+                )
+                self._add_partial_code(PartialReasonCode.DEADLINE_EXHAUSTED)
+            elif error.code == "engine.baseline_partial_missing":
                 partial_reason = (
                     f"check {suite_id}/{check.id} used a partial baseline missing its measurement"
                 )
@@ -844,7 +890,7 @@ class Engine:
             if self._monotonic() >= deadline:
                 return (
                     _skipped_result(check, suite_id, SkipReason.NOT_RUN),
-                    f"the {self.config.time_budget_s:g}-second run budget was exhausted",
+                    _deadline_reason(self.config.time_budget_s),
                     _CheckTimings(),
                 )
             return self._run_check(
@@ -912,6 +958,11 @@ class Engine:
             compiled.population_params or {},
             role=QueryRole.SAMPLING_POPULATION,
             timeout_s=_remaining(deadline, self._monotonic()),
+            allow_missing_schema=(
+                isinstance(check.spec, ConformanceCheck)
+                and getattr(target, "nodes", None) == 0
+                and getattr(target, "relationships", None) == 0
+            ),
         )
         sampling_population_ms = self._timing_finish(stage_started)
         if len(population_execution.rows) != 1:
@@ -1098,6 +1149,7 @@ class Engine:
         policy=None,
         stop_when=None,
         executor: ReadOnlyExecutor | None = None,
+        allow_missing_schema: bool = False,
     ):
         started = self._timing_start()
         active_executor = executor or self.executor
@@ -1108,6 +1160,7 @@ class Engine:
                 timeout_s=timeout_s,
                 policy=policy,
                 stop_when=stop_when,
+                allow_missing_schema=allow_missing_schema,
             )
         except Exception as exc:
             duration_ms = self._timing_finish(started) or 0
@@ -1637,7 +1690,9 @@ def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
 
 def _is_hard_result(result: CheckResult) -> bool:
     return result.verdict is Verdict.FAIL or (
-        result.verdict is Verdict.ERRORED and result.severity is Severity.ERROR
+        result.verdict is Verdict.ERRORED
+        and result.severity is Severity.ERROR
+        and (result.error is None or result.error.code != "engine.timeout")
     )
 
 
@@ -1663,7 +1718,7 @@ def _duration_ms(started: float, finished: float) -> int:
 def _remaining(deadline: float, now: float) -> float:
     remaining = deadline - now
     if remaining <= 0:
-        raise GraphCheckError(
+        raise GraphCheckTimeoutError(
             "engine.timeout",
             "The run time budget was exhausted while executing a check.",
             "Narrow the selection, enable sampling, or increase the external job budget.",

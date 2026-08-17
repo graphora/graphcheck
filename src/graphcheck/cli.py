@@ -100,6 +100,10 @@ def write_results(*args, **kwargs):
     return _call("graphcheck.reporting.writer", "write_results", *args, **kwargs)
 
 
+def redact_results(*args, **kwargs):
+    return _call("graphcheck.reporting.redaction", "redact_results", *args, **kwargs)
+
+
 def write_html_report(*args, **kwargs):
     return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
 
@@ -1590,6 +1594,12 @@ def run_command(
         min=1,
         help="Maximum concurrent checks; overrides graphcheck.yml.",
     ),
+    redacted: bool = typer.Option(
+        False,
+        "--redact",
+        "--redacted",
+        help="Mask parameter, expected, query, and evidence literal values in exported artifacts.",
+    ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
     from graphcheck.contracts.results import CheckError
@@ -1722,8 +1732,9 @@ def run_command(
 
     try:
         assert runs_dir is not None
+        exported_results = redact_results(results) if redacted else results
         results_path, report_path = _write_run_artifacts(
-            results,
+            exported_results,
             runs_dir,
             render_observer=observe_render if telemetry is not None else None,
         )
@@ -1774,6 +1785,40 @@ def run_command(
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
+
+
+@app.command("redact")
+def redact_command(
+    source: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            readable=True,
+            help="Existing results.json file or run directory to redact.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Destination file (default: results.redacted.json beside the source).",
+        ),
+    ] = None,
+) -> None:
+    """Create a verified, mask-redacted results export from an existing run."""
+
+    source_path = source / "results.json" if source.is_dir() else source
+    if not source_path.is_file():
+        raise typer.BadParameter(f"No results.json found at {source_path}", param_hint="source")
+    redacted_name = f"{source_path.stem}.redacted{source_path.suffix}"
+    destination = output or source_path.with_name(redacted_name)
+    if destination.resolve() == source_path.resolve():
+        raise typer.BadParameter("output must differ from source", param_hint="--output")
+    redacted = redact_results(source_path.read_text(encoding="utf-8"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    write_results(redacted, destination)
+    typer.secho(f"Verified redacted export written to {destination}", fg=typer.colors.GREEN)
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
@@ -2230,6 +2275,37 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
     _print_not_evaluated(results)
     if results.run.error is not None:
         _print_setup_error(results.run.error)
+    seen_errors: set[tuple[str, str, str]] = set()
+    for check in results.checks:
+        if check.error is None:
+            continue
+        identity = (check.error.code, check.error.message, check.error.fix)
+        if identity in seen_errors:
+            continue
+        seen_errors.add(identity)
+        typer.secho(
+            f"{check.suite_id}/{check.id}: {check.error.code}: {check.error.message}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
+    if not any(check.measured is not None for check in results.checks) and (
+        results.run.error is not None or any(check.error is not None for check in results.checks)
+    ):
+        typer.echo(
+            "Nothing to evaluate: no selected check produced a measured result. "
+            "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        typer.echo(
+            "Empty graph: checks were evaluated against zero nodes and relationships; "
+            "load data if this was unexpected."
+        )
     typer.echo(f"Results and Report saved to: {results_path.parent}")
     typer.secho(
         f"Exit code: {results.run.exit_code}",

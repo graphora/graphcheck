@@ -18,6 +18,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
   checks include a concise table naming each unevaluated check and its persisted reason.
 - A clean all-pass results fixture and CR1–5 implementation roadmap document the new outcome,
   coverage, target, ledger, navigation, and generic-guidance acceptance contracts.
+- Verified mask-redacted exports through `graphcheck run --redact` (alias `--redacted`) and
+  `graphcheck redact`, with
+  fail-closed literal-surface verification and preserved result contract structure.
+- Closed redacted-export leaks through diagnostics, partial reasons, authored check metadata, and
+  target-derived run IDs.
+- Added relationship-preserving aliases for free-form identifiers and a source-aware final-artifact
+  literal scan with an explicit structural allowlist.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.
@@ -226,6 +233,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
   rather than only for unreachable-Neo4j failures.
 - Clean-result presentation no longer overstates all-skipped, empty-selection, partial, or errored
   runs; incomplete coverage and execution errors are reported explicitly on both output surfaces.
+- Empty Neo4j databases now evaluate conformance checks vacuously with real zero-population
+  measurements while drift and populated graphs with unfamiliar schema still report
+  `engine.schema_reference_missing`; in-flight run-budget timeouts now produce partial exit 2, and
+  terminal/HTML diagnostics reserve “checks were evaluated” for measured runs.
 - Neo4j driver deprecation notifications no longer flood GraphCheck CLI output; GraphCheck still
   consumes the notification metadata needed to reject missing schema references.
 - Report history and rendering now read schema 1.0 and 1.1 artifacts by upgrading them to schema
