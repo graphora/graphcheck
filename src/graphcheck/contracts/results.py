@@ -199,7 +199,16 @@ def exit_code(status: RunStatus, checks: list[CheckResult]) -> int:
     if status is RunStatus.FAILED:
         return 3
     hard = any(
-        c.verdict is Verdict.FAIL or (c.verdict is Verdict.ERRORED and c.severity is Severity.ERROR)
+        c.verdict is Verdict.FAIL
+        or (
+            c.verdict is Verdict.ERRORED
+            and c.severity is Severity.ERROR
+            and not (
+                status is RunStatus.PARTIAL
+                and c.error is not None
+                and c.error.code == "engine.timeout"
+            )
+        )
         for c in checks
     )
     if hard:

@@ -58,6 +58,10 @@ def validated_results_json(results: Results | dict[str, Any]) -> tuple[Results, 
     """Validate once and return both the canonical model and serialized JSON."""
 
     model = load_results(results)
+    if model.run.redaction.policy.value == "mask" or model.run.redaction.applied:
+        from graphcheck.reporting.redaction import verify_redacted_results
+
+        verify_redacted_results(model)
     payload = json_compatible(model)
     return model, json.dumps(payload, indent=2, sort_keys=True) + "\n"
 

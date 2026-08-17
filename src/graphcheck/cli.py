@@ -100,6 +100,10 @@ def write_results(*args, **kwargs):
     return _call("graphcheck.reporting.writer", "write_results", *args, **kwargs)
 
 
+def redact_results(*args, **kwargs):
+    return _call("graphcheck.reporting.redaction", "redact_results", *args, **kwargs)
+
+
 def write_html_report(*args, **kwargs):
     return _call("graphcheck.reporting.html", "write_html_report", *args, **kwargs)
 
@@ -1600,6 +1604,12 @@ def run_command(
         min=1,
         help="Maximum concurrent checks; overrides graphcheck.yml.",
     ),
+    redacted: bool = typer.Option(
+        False,
+        "--redact",
+        "--redacted",
+        help="Mask parameter, expected, query, and evidence literal values in exported artifacts.",
+    ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
     from graphcheck.application.run import RunRequest, execute_run
@@ -1626,6 +1636,13 @@ def run_command(
         render_times.append(duration_ms)
         render_failed = render_failed or not succeeded
 
+    def export_run_artifacts(run_results, target_runs_dir, *, render_observer=None):
+        # Redact parameter, expected, query, and evidence literals in the written
+        # artifacts when --redact is set. The in-memory results stay unredacted so the
+        # terminal summary is unaffected.
+        exported = redact_results(run_results) if redacted else run_results
+        return _write_run_artifacts(exported, target_runs_dir, render_observer=render_observer)
+
     try:
         root = find_project_root()
         runs_dir = root / ARTIFACTS_DIR / "runs"
@@ -1637,8 +1654,6 @@ def run_command(
             _project_path(root, config.checks),
             requested_suites,
         )
-        if telemetry is not None:
-            telemetry.mark_setup(setup_started)
 
         with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
             outcome = execute_run(
@@ -1654,12 +1669,23 @@ def run_command(
                 event_sink=telemetry.event_sink if telemetry is not None else None,
                 render_observer=observe_render if telemetry is not None else None,
                 client_factory=_new_neo4j_client,
-                artifact_writer=_write_run_artifacts,
+                artifact_writer=export_run_artifacts,
             )
 
         results = outcome.results
         results_path = outcome.results_path
         report_path = outcome.report_path
+
+        # Attribute time to the real boundaries the shared service reports, not the whole
+        # command: setup_ms ends once client setup completes, and artifact_write_ms starts
+        # immediately before publication.
+        if telemetry is not None:
+            if outcome.setup_done_perf is not None:
+                telemetry.setup_ms = max(0, round((outcome.setup_done_perf - setup_started) * 1000))
+            elif telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+        if outcome.artifact_started_perf is not None:
+            artifact_started = outcome.artifact_started_perf
 
         if outcome.artifact_error is not None:
             if telemetry is not None:
@@ -1753,8 +1779,9 @@ def run_command(
     if results_path is None:
         assert runs_dir is not None
 
+        artifact_started = time.monotonic()
         try:
-            results_path, report_path = _write_run_artifacts(
+            results_path, report_path = export_run_artifacts(
                 results,
                 runs_dir,
                 render_observer=observe_render if telemetry is not None else None,
@@ -1803,10 +1830,14 @@ def run_command(
         and telemetry is not None
         and telemetry.process_outcome is ProcessOutcome.SUCCESS
     ):
+        # A failed run.status here comes from the shared service converting a preflight or
+        # configuration GraphCheckError into a result — the engine never ran. Classify it
+        # by its error code so it is not reported as an engine error.
+        error_code = results.run.error.code if results.run.error is not None else None
         telemetry.fail(
-            ProcessOutcome.ENGINE_ERROR,
-            CliFailureStage.ENGINE,
-            results.run.error.code if results.run.error is not None else None,
+            ProcessOutcome.USER_ERROR,
+            _cli_stage_for_error(error_code) if error_code is not None else CliFailureStage.ENGINE,
+            error_code,
         )
 
     if telemetry is not None:
@@ -1820,6 +1851,40 @@ def run_command(
 
     _print_run_summary(results, results_path, report_path)
     raise typer.Exit(results.run.exit_code)
+
+
+@app.command("redact")
+def redact_command(
+    source: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            readable=True,
+            help="Existing results.json file or run directory to redact.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Destination file (default: results.redacted.json beside the source).",
+        ),
+    ] = None,
+) -> None:
+    """Create a verified, mask-redacted results export from an existing run."""
+
+    source_path = source / "results.json" if source.is_dir() else source
+    if not source_path.is_file():
+        raise typer.BadParameter(f"No results.json found at {source_path}", param_hint="source")
+    redacted_name = f"{source_path.stem}.redacted{source_path.suffix}"
+    destination = output or source_path.with_name(redacted_name)
+    if destination.resolve() == source_path.resolve():
+        raise typer.BadParameter("output must differ from source", param_hint="--output")
+    redacted = redact_results(source_path.read_text(encoding="utf-8"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    write_results(redacted, destination)
+    typer.secho(f"Verified redacted export written to {destination}", fg=typer.colors.GREEN)
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
@@ -1992,6 +2057,7 @@ def _write_run_artifacts(
     *,
     render_observer: Callable[[int, bool], None] | None = None,
 ) -> tuple[Path, Path]:
+    from graphcheck.application.artifacts import latest_publication_lock
     from graphcheck.reporting.history import report_name
 
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -2007,7 +2073,8 @@ def _write_run_artifacts(
     artifacts = render_run_artifacts(results)
     _publish_run_directory(artifacts, historical_dir)
     latest_dir = runs_dir / "latest"
-    _publish_run_directory(artifacts, latest_dir)
+    with latest_publication_lock(runs_dir):
+        _publish_run_directory(artifacts, latest_dir)
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
@@ -2110,5 +2177,34 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
         typer.echo(f"Partial: {results.run.partial_reason}")
     if results.run.error is not None:
         _print_setup_error(results.run.error)
+    seen_errors: set[tuple[str, str, str]] = set()
+    for check in results.checks:
+        if check.error is None:
+            continue
+        identity = (check.error.code, check.error.message, check.error.fix)
+        if identity in seen_errors:
+            continue
+        seen_errors.add(identity)
+        typer.secho(
+            f"{check.suite_id}/{check.id}: {check.error.code}: {check.error.message}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
+    if not any(check.measured is not None for check in results.checks):
+        typer.echo(
+            "Nothing to evaluate: no selected check produced a measured result. "
+            "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        typer.echo(
+            "Empty graph: checks were evaluated against zero nodes and relationships; "
+            "load data if this was unexpected."
+        )
     typer.echo(f"Results: {results_path}")
     typer.echo(f"Report: {report_path}")

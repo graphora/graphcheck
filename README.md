@@ -199,6 +199,7 @@ graphcheck run --profile staging
 graphcheck run --suite customer-health
 graphcheck run --select tag:production
 graphcheck run --suite customer-health --select tag:production --fail-fast
+graphcheck run --redact
 ```
 
 `--suite` and `--select` are repeatable. Repeated tag selectors use OR semantics. `--fail-fast`
@@ -218,6 +219,30 @@ Every prepared run writes:
 interaction script and has no external assets or network calls, so it can be opened and shared
 offline. The run-id directory preserves history; `latest` is a consistently published convenience
 copy of the newest run.
+
+Use `graphcheck run --redact` (`--redacted` remains an alias) when the generated artifacts will be
+shared. Mask mode preserves
+verdicts, scores, run-level counts, keys, and container structure while replacing query text,
+parameter, expected, and measured literals; check names and provenance; partial reasons; diagnostic
+messages and fixes; source hashes and target identifiers; and evidence messages/element values with
+`[REDACTED]`. Suite, check, and tag identifiers receive consistent ordered aliases so their
+relationships remain intact. Redacted artifacts use a target-neutral `redacted_<timestamp>` run ID.
+Redaction also compares the final artifact with its collected source literals, allowing collisions
+only in explicitly safe structural fields such as timestamps, versions, enums, and error codes.
+Every mask-mode JSON and HTML write verifies the mask, alias, and neutral-ID policy before export.
+To create a safe sidecar from an existing run:
+
+Redacted HTML reports omit all target metadata and graph counts. Check cards show the pattern under
+the check name and omit the details/evidence toggle and its Expected, Measured, and Compiled Cypher
+sections.
+
+```console
+graphcheck redact .graphcheck/runs/<run-id>/results.json
+graphcheck redact .graphcheck/runs/<run-id> --output export/results.json
+```
+
+Without `--output`, the command writes `results.redacted.json` beside the source and never
+overwrites the original.
 
 ## Exit codes
 

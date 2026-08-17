@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from graphcheck.contracts.results import Results, Verdict
 from graphcheck.contracts.schemas import results_schema
 from graphcheck.reporting.html import (
+    _score_badge,
     render_html_report,
     render_validated_html_report_fragments,
 )
@@ -120,10 +121,11 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
     assert '<span class="suite-check-stats">3/3 checks run</span>' in html
     assert '<span class="badge badge-fail">1 FAILED</span>' in html
     assert '<span class="badge badge-warn">1 WARNING</span>' in html
+    assert "OPERATIONAL" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-fail">1 FAILED</span>'
         '<span class="badge badge-warn">1 WARNING</span>'
-        '<span class="badge badge-score">SCORE: 43</span></div>'
+        '<span class="badge badge-score badge-score-bad">SCORE: 43</span></div>'
     ) in html
     assert "overall-badges-row" not in html
     assert 'data-tooltip="Which accounts does a customer control — fail"' in html
@@ -147,7 +149,7 @@ def test_html_renderer_reports_partial_coverage():
     assert 'class="status-box status-box-pass"' in html
     assert "CHECKED ON" not in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
-    assert '<span class="badge badge-score">SCORE: 100</span>' in html
+    assert '<span class="badge badge-score badge-score-good">SCORE: 100</span>' in html
     assert "Check did not pass" not in html
     assert "No issues found in the checks that were evaluated." in html
     assert "No checks failed." in html
@@ -164,9 +166,9 @@ def test_html_renderer_reports_all_checks_skipped():
     assert (
         '<div class="suite-badges-row">'
         '<span class="badge badge-skipped">1 SKIPPED</span>'
-        '<span class="badge badge-score">SCORE: N/A</span></div>'
+        '<span class="badge badge-score badge-score-na">SCORE: N/A</span></div>'
     ) in html
-    assert '<span class="badge badge-score">SCORE: N/A</span>' in html
+    assert '<span class="badge badge-score badge-score-na">SCORE: N/A</span>' in html
     assert "CHECKED ON" not in html
     assert "No issues found (1 check skipped)" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
@@ -266,7 +268,7 @@ def test_html_renderer_describes_completed_warning_only_exit_two_as_complete():
     assert "Run interrupted" not in html
     assert (
         '<div class="suite-badges-row"><span class="badge badge-warn">1 WARNING</span>'
-        '<span class="badge badge-score">SCORE: 75</span></div>'
+        '<span class="badge badge-score badge-score-warn">SCORE: 75</span></div>'
     ) in html
 
 
@@ -306,7 +308,7 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
         '<div class="suite-badges-row">'
         '<span class="badge badge-errored">3 ERRORED</span>'
         '<span class="badge badge-warn">1 WARNING</span>'
-        '<span class="badge badge-score">SCORE: 23</span></div>'
+        '<span class="badge badge-score badge-score-bad">SCORE: 23</span></div>'
     ) in html
     assert " FAILED</span>" not in html
 
@@ -342,6 +344,35 @@ def test_html_renderer_exposes_cypher_and_evidence_ids():
     assert "5000 rows exceeds max 200" in html
 
 
+@pytest.mark.parametrize(
+    ("score", "color"),
+    [(100, "good"), (99, "warn"), (50, "warn"), (49, "bad"), (None, "na")],
+)
+def test_score_badge_uses_threshold_color(score, color):
+    assert f"badge-score-{color}" in _score_badge(score)
+
+
+def test_html_renderer_omits_redundant_check_pill_and_wraps_long_name():
+    raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
+    long_name = "A deliberately long check name " * 12
+    raw["checks"][0]["name"] = long_name
+
+    html = render_html_report(raw)
+
+    card = html.index('data-check-key="customer-360::cq-001"')
+    card_end = html.index("</article>", card)
+    name = html.index(f"<h3>{long_name}</h3>", card)
+    check_id = html.index('<code class="check-id">customer-360::cq-001</code>', name)
+    assert card < name < check_id < card_end
+    assert 'class="badge badge-fail"' not in html[card:card_end]
+    assert "grid-template-columns: minmax(0, 1fr) auto" in html
+    assert "overflow-wrap: anywhere" in html
+    pill_css = html[html.index(".badge {") : html.index(".table-container")]
+    assert "min-height: 22px" in pill_css
+    assert "border-radius: 999px" in pill_css
+    assert "color: #fff" in pill_css
+
+
 def test_html_renderer_labels_aggregate_measurement_scope():
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["checks"][0]["evidence"]["elements"][0] = {
@@ -360,6 +391,9 @@ def test_html_renderer_labels_aggregate_measurement_scope():
 def test_html_renderer_displays_failed_run_error():
     html = render_html_report(_fixture("failed"))
 
+    assert '<section class="callout callout-error run-diagnostic"' in html
+    assert "<h2>Action required</h2>" in html
+    assert "<strong>Fix:</strong> Check the password in profiles.yml" in html
     assert '<p class="empty-panel-message text-muted">No suites found.</p>' in html
     assert 'id="checks-empty-message"' in html
     assert "No checks to explore." in html
@@ -442,7 +476,7 @@ def test_html_renderer_describes_empty_diagnostic_as_no_matching_issues():
     )
 
     assert '<span class="suite-check-stats">1/2 checks run</span>' in html
-    assert '<span class="badge badge-score">SCORE: 100</span>' in html
+    assert '<span class="badge badge-score badge-score-good">SCORE: 100</span>' in html
     assert "No matching issues" in html
     assert "No checks executed" not in html
 
@@ -482,6 +516,26 @@ def test_html_renderer_places_report_explorer_left_of_graph_health_overview():
     assert "#delete-reports-btn {" not in html
     assert ".explorer-scroll { margin-top: 20px; }" in html
     assert ".explorer-status:empty { display: none; }" in html
+    assert 'class="explorer-status" aria-live="polite"></div>' in html
+    assert ".explorer-status-dismiss {" in html
+    assert "status.replaceChildren();" in html
+    assert "dismiss.setAttribute('aria-label', 'Dismiss report error');" in html
+    assert "dismiss.addEventListener('click', () => setReportExplorerStatus(''));" in html
+    assert 'id="report-missing-dialog" class="comparison-dialog report-missing-dialog"' in html
+    assert "<h2>Report Not Found</h2>" in html
+    diagnostic = (
+        'id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span>'
+    )
+    assert f"{diagnostic} could not be found or opened." in html
+    assert ".report-missing-name { color: var(--fail-color); font-weight: 400; }" in html
+    assert "<strong>Next step:</strong> Select another report from history" in html
+    assert "name.textContent = reportName || 'Selected report';" in html
+    assert "name.className = 'report-missing-name';" in html
+    assert "diagnostic.replaceChildren(name, ' could not be found or opened.');" in html
+    assert "function closeReportMissingDialog()" in html
+    assert "closeReportMissingDialog();" in html
+    assert "openReportMissingDialog(runId);" in html
+    assert "close-report-missing-btn')?.addEventListener('click', closeReportMissingDialog)" in html
     comparison_dialog_start = html.index(".comparison-dialog {")
     comparison_dialog_css = html[comparison_dialog_start : html.index("}", comparison_dialog_start)]
     assert "overflow: hidden;" in comparison_dialog_css

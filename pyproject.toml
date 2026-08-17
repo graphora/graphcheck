@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.6",
     "pyyaml>=6.0",
     "mcp>=2.0.0,<3",
+    "filelock>=3.12",
 ]
 
 [project.scripts]

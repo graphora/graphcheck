@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -48,6 +49,12 @@ class RunOutcome:
     results_path: Path | None
     report_path: Path | None
     artifact_error: Exception | None = None
+    # `time.monotonic()` boundaries so a caller can attribute setup versus
+    # artifact-write time correctly. `setup_done_perf` is stamped once profile,
+    # client, credential, and suite setup finish (before the engine runs);
+    # `artifact_started_perf` is stamped immediately before artifacts are written.
+    setup_done_perf: float | None = None
+    artifact_started_perf: float | None = None
 
 
 def execute_run(
@@ -92,6 +99,7 @@ def execute_run(
             checks_dir,
             request.suite_ids,
         )
+        setup_done_perf = time.monotonic()
         results = Engine(
             client,
             baselines=DirectoryBaselineProvider(
@@ -107,6 +115,7 @@ def execute_run(
             selection_suites=request.suite_ids or None,
         )
 
+        artifact_started_perf = time.monotonic()
         results_path, report_path = artifact_writer(
             results,
             runs_dir,
@@ -117,9 +126,12 @@ def execute_run(
             results=results,
             results_path=results_path,
             report_path=report_path,
+            setup_done_perf=setup_done_perf,
+            artifact_started_perf=artifact_started_perf,
         )
 
     except GraphCheckError as exc:
+        setup_done_perf = time.monotonic()
         results = failed_results(
             exc.error,
             suite_ids=request.suite_ids,
@@ -128,6 +140,7 @@ def execute_run(
         )
 
         try:
+            artifact_started_perf = time.monotonic()
             results_path, report_path = artifact_writer(
                 results,
                 runs_dir,
@@ -139,15 +152,19 @@ def execute_run(
                 results_path=None,
                 report_path=None,
                 artifact_error=artifact_exc,
+                setup_done_perf=setup_done_perf,
             )
 
         return RunOutcome(
             results=results,
             results_path=results_path,
             report_path=report_path,
+            setup_done_perf=setup_done_perf,
+            artifact_started_perf=artifact_started_perf,
         )
 
     except Exception as exc:
+        setup_done_perf = time.monotonic()
         error = CheckError(
             code="run.configuration",
             message=f"GraphCheck could not prepare the run: {type(exc).__name__}: {exc}",
@@ -162,6 +179,7 @@ def execute_run(
         )
 
         try:
+            artifact_started_perf = time.monotonic()
             results_path, report_path = artifact_writer(
                 results,
                 runs_dir,
@@ -173,12 +191,15 @@ def execute_run(
                 results_path=None,
                 report_path=None,
                 artifact_error=artifact_exc,
+                setup_done_perf=setup_done_perf,
             )
 
         return RunOutcome(
             results=results,
             results_path=results_path,
             report_path=report_path,
+            setup_done_perf=setup_done_perf,
+            artifact_started_perf=artifact_started_perf,
         )
 
     finally:

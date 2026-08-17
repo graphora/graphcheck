@@ -673,6 +673,7 @@ name = "graphcheck"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "filelock" },
     { name = "instructor", extra = ["anthropic", "google-genai"] },
     { name = "mcp" },
     { name = "neo4j" },
@@ -695,6 +696,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "filelock", specifier = ">=3.12" },
     { name = "instructor", extras = ["anthropic", "google-genai"], specifier = "==1.15.4" },
     { name = "mcp", specifier = ">=2.0.0,<3" },
     { name = "neo4j", specifier = ">=5.20,<7" },

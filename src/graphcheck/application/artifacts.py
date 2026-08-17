@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+
+from filelock import FileLock
 
 from graphcheck.contracts.results import Results
 from graphcheck.reporting import (
@@ -13,6 +17,25 @@ from graphcheck.reporting import (
 )
 
 RenderObserver = Callable[[int, bool], None]
+
+# The `latest` alias is the only artifact target multiple runs contend for (historical run
+# directories are unique per run id). MCP 2.0 dispatches synchronous tools through worker
+# threads, so two run_suite calls can publish concurrently within one process; separate CLI
+# processes can also publish at once. This in-process thread lock is shared by every code
+# path that publishes `latest`.
+_LATEST_PUBLISH_LOCK = threading.Lock()
+
+
+@contextmanager
+def latest_publication_lock(runs_dir: Path) -> Iterator[None]:
+    """Serialize publication of the shared `latest` alias across threads and processes.
+
+    Every writer that swaps `<runs_dir>/latest` must hold this lock so the exists/move/swap
+    sequence in a publish routine can never interleave with another publisher.
+    """
+    file_lock = FileLock(str(runs_dir / ".latest.lock"))
+    with _LATEST_PUBLISH_LOCK, file_lock:
+        yield
 
 
 def write_run_artifacts(
@@ -37,12 +60,12 @@ def write_run_artifacts(
     )
 
     latest_dir = runs_dir / "latest"
-
-    publish_run_directory(
-        results,
-        latest_dir,
-        render_observer=render_observer,
-    )
+    with latest_publication_lock(runs_dir):
+        publish_run_directory(
+            results,
+            latest_dir,
+            render_observer=render_observer,
+        )
     return latest_dir / "results.json", latest_dir / "report.html"
 
 
