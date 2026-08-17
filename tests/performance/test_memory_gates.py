@@ -4,19 +4,21 @@ from collections.abc import Iterable
 
 import pytest
 
-from graphcheck.contracts.results import Capabilities, RunTarget, Verdict
+from graphcheck.contracts.results import Capabilities, ResultsTarget, Verdict
 from graphcheck.engine.runner import Engine, EngineConfig
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import QueryResult
 from tests.performance.helpers import measure_allocations
 
 pytestmark = pytest.mark.performance
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.26.28",
     edition="community",
     fingerprint="sha256:performance-memory-gate",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 

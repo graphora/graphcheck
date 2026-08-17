@@ -395,6 +395,20 @@
           "title": "Fingerprint",
           "type": "string"
         },
+        "labels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Labels"
+        },
         "nodes": {
           "anyOf": [
             {
@@ -407,6 +421,20 @@
           ],
           "default": null,
           "title": "Nodes"
+        },
+        "relationship_types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Relationship Types"
         },
         "relationships": {
           "anyOf": [
@@ -431,7 +459,9 @@
         "server_version",
         "edition",
         "fingerprint",
-        "capabilities"
+        "capabilities",
+        "labels",
+        "relationship_types"
       ],
       "title": "ResultsTarget",
       "type": "object"
@@ -704,7 +734,7 @@
       "$ref": "#/$defs/Run"
     },
     "schema_version": {
-      "const": "1.1",
+      "const": "1.2",
       "title": "Schema Version",
       "type": "string"
     },

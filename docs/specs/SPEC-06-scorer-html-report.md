@@ -35,9 +35,12 @@ The writer accepts:
 - or a `Path` to a `results.json` file.
 
 All inputs are normalized through the SPEC-01 source-of-truth model. Historical
-schema 1.0 artifacts are upgraded in memory by changing their version marker to
-the current 1.1 contract before validation; this compatibility read does not
-rewrite the source file. Newly written artifacts always use schema 1.1.
+schema 1.0 and 1.1 artifacts are upgraded in memory to the current 1.2 contract.
+For a non-null historical target, the compatibility loader injects `labels:null`
+and `relationship_types:null` to mean that the older schema did not record the
+inventory. This compatibility read does not rewrite the source file. New runs
+always use schema 1.2 and populate both fields with sorted, unique arrays; `[]`
+means the probe completed and found no tokens.
 
 Current inputs are validated through:
 
@@ -68,6 +71,8 @@ It preserves:
 - run status and `partial_reason`,
 - `pass`, `fail`, `warn`, `errored`, and `skipped` verdicts as distinct states,
 - graph target metadata including fingerprint and database version,
+- canonical target label and relationship-type inventory, including the distinction between a
+  probed empty array and historical not-recorded null,
 - suite `source_sha`,
 - run timestamps,
 - check `compiled_query`,
@@ -117,11 +122,20 @@ use browser network APIs such as `fetch`, `XMLHttpRequest`, `WebSocket`, or
 
 The report shows:
 
-- a navbar status summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
-  former banner color retained in a status pill; unreachable Neo4j targets display as failed,
-  interrupted/incomplete runs and runs containing errored checks display as partial, while every
-  other run displays as complete and retains its issue counts,
+- a navbar lifecycle summary headed by `Run Complete.`, `Partial Run.`, or `Run Failed.`, with the
+  former banner color retained in a status pill, beside deterministic result language shared with
+  the CLI: fully evaluated all-pass runs say `No failures. All N selected checks passed.`, empty or
+  all-skipped runs say no checks were selected/evaluated, and incomplete clean runs state both the
+  evaluated count and incomplete coverage; failures, warnings, and execution errors retain their
+  exact stored counts and never use clean language,
+- a `Troubleshoot.` action for failed runs that opens an offline `Troubleshooting Steps` dialog with
+  the full stored problem and remediation steps; the overview does not duplicate that diagnostic,
+- a concise header for `neo4j.credential_not_read_only` while its full privilege detail remains in
+  the troubleshooting dialog,
 - target database, version, edition, node count, and relationship count when available,
+- a compact label and relationship-type summary sourced directly from `run.target`, with the exact
+  names available in an offline disclosure; a probed empty inventory displays zero while migrated
+  pre-1.2 null displays `Inventory not recorded`,
 - GraphCheck version,
 - pack version,
 - per-suite executed/selected counts,
@@ -131,8 +145,24 @@ The report shows:
 - each suite's `SCORE: <value>` badge, or `SCORE: N/A` when that suite has no
   calculated score, always as the rightmost badge in its status card,
 - a colored status marker for every rendered check,
-- an issue summary containing `fail`, `warn`, and `errored` checks; intentional
-  `skipped` checks are not issues,
+- a permanent `Not Evaluated` section after the suite overview that distinguishes failed-before-
+  evaluation, empty selection, complete evaluation, partial evaluation, and all-skipped runs,
+- every skipped check's name as a compact control that opens and highlights its full Checks
+  Explorer entry; the first five are visible and any remainder stays in the offline document
+  behind a native disclosure,
+- the stored `run.partial_reason` once as a coverage note when present, plus the exact stored suite
+  and tag selection boundary and a permanent statement that unconfigured graph behavior was not
+  evaluated,
+- a complete selected-check ledger containing every `results.checks` identity exactly once, with
+  the persisted verdict, `Not evaluated` state on skipped checks, pattern, expected value, and all
+  available measurement, estimate, query, evidence, or structured-error detail; severity remains
+  available in `results.json` but is not repeated in the explorer,
+- a visible `Reason` block on every skipped card with its generic shared explanation but without
+  the internal raw code; the renderer does not infer a more specific cause from run-level context,
+- a combined right-hand panel with accessible `Checks Explorer` and `Next Steps` heading tabs; the
+  Checks Explorer tab owns the complete ledger and the Next Steps tab always contains
+  exactly the same two generic practices—adding competency checks and tracking drift over time—
+  plus a statement that they are not recommendations derived from the run,
 - checks sorted failures-first,
 - report-history timestamps converted from stored UTC to the browser's local timezone and shown as
   `yyyy-mm-dd at hh:mm:ss`,
@@ -142,14 +172,24 @@ The report shows:
 - check errors when present,
 - evidence message and node/relationship or aggregate-scope IDs.
 
-The embedded script reveals the checks explorer, navigates from suite status
-markers to checks, filters checks by verdict or search text, states when the selected verdict
-category is empty, sorts the issue
-summary, toggles check details, and switches the inline CSS theme. Event handlers
-are registered with `addEventListener`; check identities are read from escaped
-data attributes and matched directly rather than interpolated into JavaScript or
-CSS selectors. These interactions operate only on the already-rendered document
-and do not load or transmit data.
+The target summary does not render property keys or property-coverage percentages and does not
+derive recommendations from inventory. It never reconstructs labels or relationship types from a
+fingerprint, checks, evidence, or baseline data.
+
+The embedded script reveals the combined panel, navigates from suite status markers to checks,
+filters checks by verdict or search text, provides an `Issues` union filter for `fail`, `warn`, and
+`errored`, states when the selected verdict category is empty, focuses the `Not Evaluated` section
+from partial-run navigation, toggles check details, and switches the inline CSS theme. `See issues`
+opens Checks/Issues, while `Explore checks` opens Checks/All. The tab interface exposes the required
+tablist, tab, and tabpanel relationships, uses roving tab stops, and supports Left/Right Arrow and
+Home/End activation. The heading tabs are the sole navigation between these views. Switching tabs
+within one report preserves the search, verdict filter, expanded details, and Checks scroll
+position. Soft navigation atomically replaces the combined panel, resets it to Checks, clears
+detail and scroll state from the prior run, retains a valid persisted filter preference, and keeps
+the panel open when it was already open. Event handlers are registered with `addEventListener`;
+check identities are read from escaped data attributes and matched directly rather than
+interpolated into JavaScript or CSS selectors. These report-local interactions operate only on the
+already-rendered document and do not load or transmit data.
 
 ### Ordering
 
@@ -173,8 +213,26 @@ completed artifact below the correspondingly named `runs/<report-name>/` directo
 then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 
+Its final summary prints the shared result sentence without a separate aggregate coverage line.
+When checks were skipped, the Result line introduces a concise borderless table with Suite, Check,
+and Reason columns. Suite names and the Check cell's human name are italicized, the stable check id
+remains visible, and Reason contains the persisted code and shared generic explanation. A blank
+line separates the table from the artifact path. Passing checks are not repeated after the
+progress display. The final exit-code line uses green for 0, red for 1 and 3, and yellow for 2.
+Borderless table header rules use a continuous `─` line, and interactive progress uses a green `━`
+completed segment followed by a grey `─` remaining segment rather than ASCII equals and dashes.
+When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
+check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
+passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
+and red for 0–49. Check coverage is green when evaluated equals selected and yellow otherwise;
+outcome colors apply only to non-zero values while headers remain white. Target metadata appears
+before interactive progress. Suite names are italicized, and incomplete coverage names every suite
+containing a skipped check in sorted order. Results and report paths collapse to one saved-directory
+line, and blank lines separate the lifecycle, score, result/artifact, and exit code blocks. One final
+blank line follows the exit-code line.
+
 History operations load and validate each run's `results.json`, including the
-schema 1.0 compatibility read described above. If `runs/latest` duplicates a
+schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
 historical run id, it appears only once in history. History is ordered
 chronologically by the validated UTC `run.finished_at`, newest first; ordering
 never compares timestamp strings lexically.
@@ -323,8 +381,9 @@ current HTML report.
 Reporting tests live in `tests/test_reporting.py`; report-command tests live in
 `tests/test_cli.py`.
 
-They use the existing SPEC-01 fixtures:
+The 1.2 test matrix uses these SPEC-01 fixtures:
 
+- `results.clean.json`
 - `results.complete.json`
 - `results.partial.json`
 - `results.generated-only.json`
@@ -336,13 +395,20 @@ The tests assert:
 - writer output validates against `results_schema()`,
 - malformed fail-without-evidence is rejected,
 - renderer output is self-contained,
+- rendered check-card identities and verdicts match the selected checks exactly for clean,
+  findings, partial, and generated-only fixtures,
+- evaluated state and all three persisted skip reasons render with shared human language,
+- the `Issues` filter and `See issues` action target fail, warn, and errored cards only,
 - failures render before warnings and passes,
 - compiled Cypher is visible,
 - evidence IDs are visible,
 - failed-run errors are visible,
+- failed runs remain failed in the header and history, expose troubleshooting in a dialog without
+  a duplicate overview callout, and abbreviate verbose credential privilege details only in the
+  header,
 - `report --open` selects the newest HTML report,
 - `report --open <id>` selects a historical report and a bare ID is rejected,
-- schema 1.0 historical artifacts load without being rewritten,
+- schema 1.0 and 1.1 historical artifacts load with null inventory without being rewritten,
 - the configured artifacts directory is honored,
 - missing reports and browser-launch failures exit non-zero,
 - report history is ordered and de-duplicates `runs/latest`,
@@ -351,12 +417,20 @@ The tests assert:
   overall machine score,
 - pruning preserves the requested newest runs, `runs/latest`, and unknown directories,
 - diagnostic reports contain failures, warnings, and errors but omit passing checks,
+- clean, findings, failed, and diagnostic reports contain byte-identical generic Next Steps
+  content; accessible tab markup, keyboard activation, same-report Checks
+  state preservation, and report-history replacement/reset behavior are covered,
 - scorer results are invariant to input order and use exact half-even rounding,
 - per-suite calculations use the same locked weights as the overall score,
 - reports show each suite score as the rightmost badge in its status card,
-  distinguish errored checks from failed checks, derive run messaging from status
-  and issue totals, state when no checks were evaluated, exclude skipped checks
-  from the issue summary, and render failure-first issue details.
+  distinguish execution errors from graph findings, project the same result sentence in the CLI
+  and HTML for failed, empty-selection, all-skipped, findings, incomplete-clean, and fully clean
+  runs, render every coverage state and skipped check name in `Not Evaluated`, preserve the stored
+  selection boundary, link coverage entries to failure-first check details, and avoid a duplicate
+  issue summary.
+- new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
+  probed empty arrays from historical not-recorded null, and never infer inventory from other
+  report data.
 
 ## Deferred Work
 
@@ -367,4 +441,5 @@ The following require C1, the fixture graph, or additional tooling:
 - Compute graph fingerprint, DB version, suite SHA, and timestamps at runtime.
 - Full pipeline fixture graph coverage.
 - Browser-level offline asset/network test.
-- MCP/C7 consumption tests.
+- MCP transport implementation beyond the approved requirement that every result-returning tool
+  and declared output schema consume the canonical SPEC-01 1.2 shape.

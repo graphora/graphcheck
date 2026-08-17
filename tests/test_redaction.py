@@ -28,6 +28,11 @@ def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
         suite["totals"] for suite in source_payload["suites"]
     ]
     assert payload["run"]["selection"]["suites"] == ["suite-1"]
+    assert payload["run"]["target"]["labels"] == ["label-1", "label-2"]
+    assert payload["run"]["target"]["relationship_types"] == [
+        "relationship-type-1",
+        "relationship-type-2",
+    ]
     assert payload["suites"][0]["id"] == "suite-1"
     assert payload["suites"][0]["source_sha"] == REDACTION_MASK
     assert {check["suite_id"] for check in payload["checks"]} == {"suite-1"}

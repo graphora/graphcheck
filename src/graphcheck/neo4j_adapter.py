@@ -16,7 +16,7 @@ from neo4j import GraphDatabase
 
 from graphcheck import __version__
 from graphcheck.connection_profiles import ConnectionProfile, validate_profile_uri
-from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
+from graphcheck.contracts.results import Capabilities, CheckError, ResultsTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
@@ -101,7 +101,7 @@ class BlockedCheck:
 @dataclass(frozen=True)
 class DebugTrace:
     profile: str
-    target: RunTarget
+    target: ResultsTarget
     visibility: Visibility
     counts: Counts
     blocked_checks: tuple[BlockedCheck, ...] = ()
@@ -299,7 +299,7 @@ class Neo4jClient:
         self._read_classifications = _ReadClassificationCache(read_guard_cache_capacity)
         self._probe_lock = threading.Lock()
         self._probe_inflight: threading.Event | None = None
-        self._probe_result: tuple[RunTarget, Visibility, Counts] | None = None
+        self._probe_result: tuple[ResultsTarget, Visibility, Counts] | None = None
         self._probe_request_durations_ms: list[int] | None = None
         self._last_probe_metrics: ProbeMetrics | None = None
         self._probe_cypher_version: str | None = None
@@ -558,7 +558,7 @@ class Neo4jClient:
         except Exception as exc:
             raise map_neo4j_error(exc, self._profile) from exc
 
-    def probe(self, *, timeout_s: float | None = None) -> tuple[RunTarget, Visibility, Counts]:
+    def probe(self, *, timeout_s: float | None = None) -> tuple[ResultsTarget, Visibility, Counts]:
         deadline = _timeout_deadline(timeout_s)
         probe_lock = self._ensure_probe_state()
         while True:
@@ -609,7 +609,7 @@ class Neo4jClient:
             self._probe_edition = None
         return self._probe_lock
 
-    def _probe_live(self, deadline: float | None) -> tuple[RunTarget, Visibility, Counts]:
+    def _probe_live(self, deadline: float | None) -> tuple[ResultsTarget, Visibility, Counts]:
         # The first bounded metadata query establishes connectivity. Calling
         # verify_connectivity() here would add an unbounded Bolt round trip outside this deadline.
         version, edition = _call_with_timeout(self._server_info, deadline)
@@ -658,12 +658,16 @@ class Neo4jClient:
                 labels, relationship_types = _call_with_timeout(self._schema_tokens, deadline)
                 count_store = _call_with_timeout(self._count_store_usable, deadline)
 
-        target = RunTarget(
+        target = ResultsTarget(
             database=self._profile.database,
             server_version=version,
             edition=edition,
             fingerprint=_fingerprint(labels, relationship_types, counts),
             capabilities=Capabilities(apoc=apoc, count_store=count_store),
+            labels=list(labels),
+            relationship_types=list(relationship_types),
+            nodes=counts.nodes,
+            relationships=counts.relationships,
         )
         _remaining_timeout(deadline)
         return target, Visibility(True, can_read, can_show_procedures), counts
@@ -1064,7 +1068,7 @@ def _ensure_supported_server(server_version: str) -> None:
     )
 
 
-def _support_versions(client: object, target: RunTarget) -> SupportVersions:
+def _support_versions(client: object, target: ResultsTarget) -> SupportVersions:
     return SupportVersions(
         graphcheck=__version__,
         neo4j_driver=str(getattr(neo4j, "__version__", "unknown")),

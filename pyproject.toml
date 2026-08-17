@@ -13,6 +13,7 @@ dependencies = [
     "instructor[anthropic,google-genai]==1.15.4",
     "neo4j>=5.20,<7",
     "prometheus-client>=0.20",
+    "rich>=13",
     "typer>=0.12",
     "pydantic>=2.6",
     "pyyaml>=6.0",

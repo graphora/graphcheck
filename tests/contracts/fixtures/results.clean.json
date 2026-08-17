@@ -1,14 +1,14 @@
 {
   "schema_version": "1.2",
   "run": {
-    "id": "run_01HXATZ",
+    "id": "run_01HXCLEAN",
     "started_at": "2026-07-06T09:00:00Z",
-    "finished_at": "2026-07-06T09:02:41Z",
+    "finished_at": "2026-07-06T09:00:01Z",
     "graphcheck_version": "0.1.0",
     "pack_version": "0.1.0",
-    "status": "partial",
-    "partial_reason": "time budget exceeded (30s)",
-    "exit_code": 2,
+    "status": "complete",
+    "partial_reason": null,
+    "exit_code": 0,
     "selection": {
       "suites": [
         "customer-360"
@@ -24,7 +24,7 @@
       "database": "neo4j",
       "server_version": "5.18.0",
       "edition": "community",
-      "fingerprint": "sha256:abc123",
+      "fingerprint": "sha256:clean123",
       "capabilities": {
         "apoc": true,
         "count_store": true
@@ -52,24 +52,24 @@
   },
   "totals": {
     "checks": 2,
-    "pass": 1,
+    "pass": 2,
     "fail": 0,
     "warn": 0,
     "errored": 0,
-    "skipped": 1
+    "skipped": 0
   },
   "suites": [
     {
       "id": "customer-360",
-      "source_sha": "a1b2c3",
+      "source_sha": "sha256:clean-suite",
       "score": 100,
       "totals": {
         "checks": 2,
-        "pass": 1,
+        "pass": 2,
         "fail": 0,
         "warn": 0,
         "errored": 0,
-        "skipped": 1
+        "skipped": 0
       }
     }
   ],
@@ -83,9 +83,9 @@
       "severity": "error",
       "verdict": "pass",
       "skip_reason": null,
-      "started_at": "2026-07-06T09:01:13Z",
+      "started_at": "2026-07-06T09:00:00Z",
       "duration_ms": 61,
-      "compiled_query": "MATCH (c:Customer) RETURN count(c) AS present",
+      "compiled_query": "MATCH (c:Customer) RETURN count(c) AS total, count(c.tax_id) AS present",
       "params": {},
       "measured": {
         "coverage": 1.0
@@ -98,21 +98,23 @@
       "error": null
     },
     {
-      "id": "account-no-orphans",
+      "id": "account-id-present",
       "suite_id": "customer-360",
       "pattern": "conformance",
-      "name": "Accounts are connected to a Customer",
+      "name": "Account.id is present",
       "provenance": null,
       "severity": "warn",
-      "verdict": "skipped",
-      "skip_reason": "not_run",
-      "started_at": null,
-      "duration_ms": null,
-      "compiled_query": null,
-      "params": null,
-      "measured": null,
+      "verdict": "pass",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:00:00Z",
+      "duration_ms": 42,
+      "compiled_query": "MATCH (a:Account) RETURN count(a) AS total, count(a.id) AS present",
+      "params": {},
+      "measured": {
+        "coverage": 1.0
+      },
       "expected": {
-        "orphans": 0
+        "threshold": 1.0
       },
       "estimate": false,
       "evidence": null,

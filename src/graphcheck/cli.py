@@ -5,7 +5,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
@@ -1617,18 +1617,78 @@ def run_command(
     artifact_started = time.monotonic()
     render_times: list[int] = []
     render_failed = False
+    check_count = 0
+    progress_scope = ExitStack()
+    run_progress_callback: Callable[[int, int, str], None] | None = None
 
     def observe_render(duration_ms: int, succeeded: bool) -> None:
         nonlocal render_failed
         render_times.append(duration_ms)
         render_failed = render_failed or not succeeded
 
+    def display_error(error: CheckError) -> CheckError:
+        # Mask the human-facing message and fix when the run is redacted.
+        return (
+            CheckError(code=error.code, message="[REDACTED]", fix="[REDACTED]")
+            if redacted
+            else error
+        )
+
     def export_run_artifacts(run_results, target_runs_dir, *, render_observer=None):
-        # Redact parameter, expected, query, and evidence literals in the written
-        # artifacts when --redact is set. The in-memory results stay unredacted so the
-        # terminal summary is unaffected.
+        # Redact parameter, expected, query, and evidence literals in the written artifacts
+        # when --redact is set. The in-memory results stay unredacted so telemetry and the
+        # engine result are unaffected.
         exported = redact_results(run_results) if redacted else run_results
         return _write_run_artifacts(exported, target_runs_dir, render_observer=render_observer)
+
+    def show_run_target(target: object) -> None:
+        # The shared service calls this once the target is probed and the credential is
+        # verified, before any check runs. Print the target header first (unless redacted),
+        # then open the progress bar so the header always precedes progress output.
+        nonlocal run_progress_callback
+        if not redacted:
+            _print_run_target(target)
+        run_progress_callback = progress_scope.enter_context(
+            _run_progress(check_count, redacted=redacted)
+        )
+
+    def forward_progress(completed: int, total: int, check_name: str) -> None:
+        if run_progress_callback is not None:
+            run_progress_callback(completed, total, check_name)
+
+    def report_artifact_failure(exc: Exception) -> None:
+        # Shared reporting for the two artifact-write failure paths. A render failure is
+        # reported as a report-render failure, not an artifact-write failure, and the printed
+        # cause is masked when the run is redacted.
+        if telemetry is not None:
+            telemetry.render_ms = sum(render_times) if render_times else None
+            telemetry.mark_artifacts(
+                artifact_started,
+                results=ArtifactOutcome.ERROR,
+                report=ArtifactOutcome.ERROR,
+                exclude_ms=sum(render_times),
+            )
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                CliFailureStage.REPORT_RENDER if render_failed else CliFailureStage.ARTIFACT_WRITE,
+                SafeErrorCode.REPORT_RENDER_FAILED
+                if render_failed
+                else SafeErrorCode.ARTIFACT_WRITE_FAILED,
+            )
+        if results.run.error is not None:
+            _print_setup_error(display_error(results.run.error))
+        typer.secho(
+            "run.artifact_failed: Could not write run artifacts: "
+            f"{'[REDACTED]' if redacted else exc}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(
+            "Fix: Check the configured artifacts path and filesystem permissions.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
     try:
         root = find_project_root()
@@ -1641,8 +1701,9 @@ def run_command(
             _project_path(root, config.checks),
             requested_suites,
         )
+        check_count = _selected_check_count(suite_inputs, tags)
 
-        with _run_progress(_selected_check_count(suite_inputs, tags)) as progress_callback:
+        with progress_scope:
             outcome = execute_run(
                 RunRequest(
                     profile=profile,
@@ -1652,11 +1713,12 @@ def run_command(
                     concurrency=concurrency,
                     verify_read_only_credential=True,
                 ),
-                progress_callback=progress_callback,
+                progress_callback=forward_progress,
                 event_sink=telemetry.event_sink if telemetry is not None else None,
                 render_observer=observe_render if telemetry is not None else None,
                 client_factory=_new_neo4j_client,
                 artifact_writer=export_run_artifacts,
+                target_observer=show_run_target,
             )
 
         results = outcome.results
@@ -1675,34 +1737,7 @@ def run_command(
             artifact_started = outcome.artifact_started_perf
 
         if outcome.artifact_error is not None:
-            if telemetry is not None:
-                telemetry.render_ms = sum(render_times) if render_times else None
-                telemetry.mark_artifacts(
-                    artifact_started,
-                    results=ArtifactOutcome.ERROR,
-                    report=ArtifactOutcome.ERROR,
-                    exclude_ms=sum(render_times),
-                )
-                telemetry.fail(
-                    ProcessOutcome.UNEXPECTED_ERROR,
-                    CliFailureStage.ARTIFACT_WRITE,
-                    SafeErrorCode.ARTIFACT_WRITE_FAILED,
-                )
-
-            if results.run.error is not None:
-                _print_setup_error(results.run.error)
-
-            typer.secho(
-                f"run.artifact_failed: Could not write run artifacts: {outcome.artifact_error}",
-                fg=typer.colors.RED,
-                bold=True,
-                err=True,
-            )
-            typer.secho(
-                "Fix: Check the configured artifacts path and filesystem permissions.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
+            report_artifact_failure(outcome.artifact_error)
             raise typer.Exit(3)
 
     except typer.Exit:
@@ -1718,7 +1753,7 @@ def run_command(
                 exc.error.code,
             )
         if runs_dir is None:
-            _print_setup_error(exc.error)
+            _print_setup_error(display_error(exc.error))
             raise typer.Exit(3) from exc
         results = failed_results(
             exc.error,
@@ -1754,7 +1789,7 @@ def run_command(
             fix="Fix the project configuration, then run `graphcheck debug` and try again.",
         )
         if runs_dir is None:
-            _print_setup_error(error)
+            _print_setup_error(display_error(error))
             raise typer.Exit(3) from exc
         results = failed_results(
             error,
@@ -1774,42 +1809,7 @@ def run_command(
                 render_observer=observe_render if telemetry is not None else None,
             )
         except Exception as artifact_exc:
-            if telemetry is not None:
-                telemetry.render_ms = sum(render_times) if render_times else None
-                telemetry.mark_artifacts(
-                    artifact_started,
-                    results=ArtifactOutcome.ERROR,
-                    report=ArtifactOutcome.ERROR,
-                    exclude_ms=sum(render_times),
-                )
-                telemetry.fail(
-                    ProcessOutcome.UNEXPECTED_ERROR,
-                    (
-                        CliFailureStage.REPORT_RENDER
-                        if render_failed
-                        else CliFailureStage.ARTIFACT_WRITE
-                    ),
-                    (
-                        SafeErrorCode.REPORT_RENDER_FAILED
-                        if render_failed
-                        else SafeErrorCode.ARTIFACT_WRITE_FAILED
-                    ),
-                )
-
-            if results.run.error is not None:
-                _print_setup_error(results.run.error)
-
-            typer.secho(
-                f"run.artifact_failed: Could not write run artifacts: {artifact_exc}",
-                fg=typer.colors.RED,
-                bold=True,
-                err=True,
-            )
-            typer.secho(
-                "Fix: Check the configured artifacts path and filesystem permissions.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
+            report_artifact_failure(artifact_exc)
             raise typer.Exit(3) from artifact_exc
 
     if (
@@ -1817,15 +1817,26 @@ def run_command(
         and telemetry is not None
         and telemetry.process_outcome is ProcessOutcome.SUCCESS
     ):
-        # A failed run.status here comes from the shared service converting a preflight or
-        # configuration GraphCheckError into a result — the engine never ran. Classify it
-        # by its error code so it is not reported as an engine error.
+        # A failed run.status here comes from the shared service converting a preflight,
+        # configuration, or unexpected-engine error into a result. Classify an engine fault as
+        # ENGINE / ENGINE_ERROR and everything else by its error code, so preflight failures
+        # are not mislabelled as engine errors and engine faults are not mislabelled as user
+        # configuration errors.
         error_code = results.run.error.code if results.run.error is not None else None
-        telemetry.fail(
-            ProcessOutcome.USER_ERROR,
-            _cli_stage_for_error(error_code) if error_code is not None else CliFailureStage.ENGINE,
-            error_code,
-        )
+        if error_code == "engine.unexpected":
+            telemetry.fail(
+                ProcessOutcome.ENGINE_ERROR,
+                CliFailureStage.ENGINE,
+                SafeErrorCode.ENGINE_UNEXPECTED,
+            )
+        else:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(error_code)
+                if error_code is not None
+                else CliFailureStage.ENGINE,
+                error_code,
+            )
 
     if telemetry is not None:
         telemetry.render_ms = sum(render_times)
@@ -1836,7 +1847,13 @@ def run_command(
             exclude_ms=sum(render_times),
         )
 
-    _print_run_summary(results, results_path, report_path)
+    exported_results = redact_results(results) if redacted else results
+    _print_run_summary(
+        exported_results,
+        results_path,
+        report_path,
+        display_run_id=results.run.id,
+    )
     raise typer.Exit(results.run.exit_code)
 
 
@@ -1891,15 +1908,6 @@ def _new_neo4j_client(profile, max_concurrency: int):
     )
 
 
-def _verify_cli_audit_credential(client: object) -> None:
-    verify = getattr(client, "verify_read_only_credential", None)
-    probe = getattr(client, "probe", None)
-    if callable(verify):
-        if callable(probe):
-            probe()
-        verify()
-
-
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
     return sum(
         1
@@ -1922,16 +1930,22 @@ def _progress_template(check_name: str) -> str:
     return "%(label)s  [%(bar)s]  %(info)s Complete | Checking: " + check_name.replace("%", "%%")
 
 
+_PROGRESS_FILL_CHAR = "━"
+_PROGRESS_EMPTY_CHAR = "─"
+
+
 @contextmanager
 def _run_progress(
     total_checks: int,
+    *,
+    redacted: bool = False,
 ) -> Iterator[Callable[[int, int, str], None] | None]:
     if total_checks == 0 or not _interactive_stderr():
         yield None
         return
 
     started = time.monotonic()
-    state = {"check": "Preparing graph checks"}
+    state = {"check": "Preparing redacted graph checks" if redacted else "Preparing graph checks"}
     lock = threading.Lock()
     stopped = threading.Event()
     with typer.progressbar(
@@ -1941,8 +1955,8 @@ def _run_progress(
         show_eta=False,
         show_percent=True,
         show_pos=True,
-        fill_char=typer.style("=", fg=typer.colors.GREEN),
-        empty_char=typer.style("-", fg=typer.colors.BRIGHT_BLACK),
+        fill_char=typer.style(_PROGRESS_FILL_CHAR, fg=typer.colors.GREEN),
+        empty_char=typer.style(_PROGRESS_EMPTY_CHAR, fg=typer.colors.BRIGHT_BLACK),
         width=28,
         color=True,
         bar_template=_progress_template(state["check"]),
@@ -1964,10 +1978,11 @@ def _run_progress(
         ticker.start()
 
         def update(completed: int, total: int, check_name: str) -> None:
+            display_name = "redacted check" if redacted else check_name
             with lock:
-                state["check"] = check_name
+                state["check"] = display_name
                 bar.label = _elapsed_clock(started)
-                bar.bar_template = _progress_template(check_name)
+                bar.bar_template = _progress_template(display_name)
                 bar.update(1)
 
         try:
@@ -2067,6 +2082,15 @@ def _run_status_color(status: str) -> str:
     }.get(status, typer.colors.WHITE)
 
 
+def _exit_code_color(exit_code: int) -> str:
+    return {
+        0: typer.colors.GREEN,
+        1: typer.colors.RED,
+        2: typer.colors.YELLOW,
+        3: typer.colors.RED,
+    }.get(exit_code, typer.colors.WHITE)
+
+
 def _check_summary(totals) -> str:
     values = (
         ("passed", totals.passed, typer.colors.GREEN),
@@ -2076,62 +2100,242 @@ def _check_summary(totals) -> str:
         ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
     )
     return "".join(
-        f" | {typer.style(f'{label} {value}', fg=color)}" for label, value, color in values
+        f" | {label} {typer.style(str(value), fg=color) if value else value}"
+        for label, value, color in values
     )
 
 
-def _print_run_summary(results: "Results", results_path: Path, report_path: Path) -> None:
+def _print_run_target(target) -> None:
+    if target is None:
+        return
+    nodes = "unavailable" if target.nodes is None else f"{target.nodes:,}"
+    relationships = "unavailable" if target.relationships is None else f"{target.relationships:,}"
+    typer.echo(
+        f"Target: {target.database} · Neo4j {target.server_version} {target.edition} · "
+        f"{nodes} nodes · {relationships} relationships"
+    )
+
+
+def _suite_score_style(score: int | None) -> str:
+    if score is None:
+        return "white"
+    if score == 100:
+        return "green"
+    return "yellow" if score >= 50 else "red"
+
+
+def _suite_coverage_style(evaluated: int, selected: int) -> str:
+    return "green" if evaluated == selected else "yellow"
+
+
+def _summary_table():
+    from rich import box
+    from rich.table import Table
+
+    return Table(
+        box=box.SIMPLE_HEAD,
+        safe_box=False,
+        show_edge=False,
+        show_lines=False,
+        pad_edge=False,
+        collapse_padding=True,
+        header_style="bold white",
+    )
+
+
+def _suite_score_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Score", justify="right", no_wrap=True)
+    table.add_column("Check Coverage", justify="right", no_wrap=True)
+    for heading in ("Passed", "Failed", "Warnings", "Errored", "Skipped"):
+        table.add_column(heading, justify="right", width=8, no_wrap=True)
+    if not results.suites:
+        table.add_row(*(Text("n/a", style="bright_black") for _ in range(8)))
+        return table
+    state_colors = ("green", "red", "yellow", "magenta", "bright_black")
+    for suite in results.suites:
+        score = "n/a" if suite.score is None else f"{suite.score}/100"
+        evaluated = suite.totals.checks - suite.totals.skipped
+        counts = (
+            suite.totals.passed,
+            suite.totals.fail,
+            suite.totals.warn,
+            suite.totals.errored,
+            suite.totals.skipped,
+        )
+        table.add_row(
+            Text(suite.id, style="italic"),
+            Text(score, style=_suite_score_style(suite.score)),
+            Text(
+                f"{evaluated}/{suite.totals.checks}",
+                style=_suite_coverage_style(evaluated, suite.totals.checks),
+            ),
+            *(
+                Text(str(count), style=color) if count else Text("-")
+                for count, color in zip(counts, state_colors, strict=True)
+            ),
+        )
+    return table
+
+
+def _print_suite_score_table(results: "Results") -> None:
+    from rich.console import Console
+
+    typer.echo("Score breakdown by check suite:")
+    typer.echo()
+    Console(highlight=False).print(_suite_score_table(results))
+
+
+def _result_text(presentation, *, has_not_evaluated: bool = False):
+    from rich.text import Text
+
+    text = Text(presentation.primary_sentence)
+    if has_not_evaluated:
+        text.append(
+            " Coverage is incomplete due to the following check(s) which have not been evaluated:"
+        )
+        return text
+    if not presentation.coverage_incomplete:
+        return text
+    text.append(" Coverage is incomplete.")
+    if not presentation.skipped_suites:
+        return text
+    text = Text(presentation.primary_sentence)
+    text.append(" Coverage is incomplete due to skipped check(s) from ")
+    for index, suite in enumerate(presentation.skipped_suites):
+        if index:
+            text.append(", ")
+        text.append(suite, style="italic")
+    text.append(".")
+    return text
+
+
+def _print_result(presentation, *, has_not_evaluated: bool = False) -> None:
+    from rich.console import Console
+    from rich.text import Text
+
+    Console(highlight=False).print(
+        Text("Result: ") + _result_text(presentation, has_not_evaluated=has_not_evaluated),
+        soft_wrap=True,
+    )
+
+
+def _not_evaluated_table(results: "Results"):
+    from rich.text import Text
+
+    from graphcheck.reporting.presentation import present_check
+
+    table = _summary_table()
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    skipped = sorted(
+        (check for check in results.checks if not check.executed),
+        key=lambda check: (check.suite_id, check.id),
+    )
+    for check in skipped:
+        reason = present_check(check).skip_reason
+        assert reason is not None
+        name = Text(check.name, style="italic")
+        name.append(f" ({check.id})", style="dim")
+        table.add_row(
+            Text(check.suite_id, style="italic"),
+            name,
+            f"{reason.code}: {reason.explanation}",
+        )
+    return table
+
+
+def _print_not_evaluated(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.skipped:
+        return
+    typer.echo()
+    Console(highlight=False).print(_not_evaluated_table(results))
+    typer.echo()
+
+
+def _execution_error_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
+    include_fix = not results.run.redaction.applied
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    if include_fix:
+        table.add_column("Fix")
+    for check in sorted(
+        (check for check in results.checks if check.error is not None),
+        key=lambda check: (check.suite_id, check.id),
+    ):
+        name = Text(check.name, style="italic white")
+        name.append(f" ({check.id})", style="dim white")
+        cells = [
+            Text(check.suite_id, style="italic white"),
+            name,
+            Text(f"{check.error.code}: {check.error.message}", style="magenta"),
+        ]
+        if include_fix:
+            cells.append(Text(check.error.fix, style="white"))
+        table.add_row(*cells)
+    return table
+
+
+def _print_execution_errors(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.errored:
+        return
+    typer.echo(
+        "The following check(s) have execution errors:"
+        if results.run.redaction.applied
+        else "The following check(s) have execution errors. Suggested fixes are provided:"
+    )
+    typer.echo()
+    Console(highlight=False).print(_execution_error_table(results))
+    typer.echo()
+
+
+def _print_run_summary(
+    results: "Results",
+    results_path: Path,
+    report_path: Path,
+    *,
+    display_run_id: str | None = None,
+) -> None:
     from graphcheck.reporting.history import display_run_status
+    from graphcheck.reporting.presentation import present_results
 
     totals = results.totals
+    presentation = present_results(results)
     score = "n/a" if results.score is None else str(results.score.value)
     status = display_run_status(results).value
+    run_label = "GraphCheck redacted run" if results.run.redaction.applied else "GraphCheck run"
     typer.echo(
-        f"GraphCheck run {results.run.id}: "
+        f"{run_label} {display_run_id or results.run.id}: "
         f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
     )
-    if results.run.target is not None:
-        nodes = "unavailable" if results.run.target.nodes is None else str(results.run.target.nodes)
-        relationships = (
-            "unavailable"
-            if results.run.target.relationships is None
-            else str(results.run.target.relationships)
-        )
-        typer.echo(
-            f"Target graph: {results.run.target.database} | nodes {nodes} | "
-            f"relationships {relationships}"
-        )
-    if len(results.suites) > 1:
-        for suite in results.suites:
-            suite_score = "n/a" if suite.score is None else str(suite.score)
-            typer.echo(
-                f"Suite {suite.id}: score {suite_score} | checks {suite.totals.checks} | "
-                f"{_check_summary(suite.totals).removeprefix(' | ')}"
-            )
-        typer.echo(f"Exit code: {results.run.exit_code}")
+    if len(results.suites) > 1 or results.run.status.value == "failed":
+        _print_suite_score_table(results)
     else:
         typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
-        typer.echo(f"Score: {score} | exit code: {results.run.exit_code}")
+        typer.echo(f"Score: {score}")
+    typer.echo()
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
+    _print_result(presentation, has_not_evaluated=bool(totals.skipped))
+    _print_not_evaluated(results)
     if results.run.error is not None:
         _print_setup_error(results.run.error)
-    seen_errors: set[tuple[str, str, str]] = set()
-    for check in results.checks:
-        if check.error is None:
-            continue
-        identity = (check.error.code, check.error.message, check.error.fix)
-        if identity in seen_errors:
-            continue
-        seen_errors.add(identity)
-        typer.secho(
-            f"{check.suite_id}/{check.id}: {check.error.code}: {check.error.message}",
-            fg=typer.colors.RED,
-            bold=True,
-            err=True,
-        )
-        typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
-    if not any(check.measured is not None for check in results.checks):
+    _print_execution_errors(results)
+    if not any(check.measured is not None for check in results.checks) and (
+        results.run.error is not None or any(check.error is not None for check in results.checks)
+    ):
         typer.echo(
             "Nothing to evaluate: no selected check produced a measured result. "
             "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
@@ -2145,5 +2349,10 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
             "Empty graph: checks were evaluated against zero nodes and relationships; "
             "load data if this was unexpected."
         )
-    typer.echo(f"Results: {results_path}")
-    typer.echo(f"Report: {report_path}")
+    typer.echo(f"Results and Report saved to: {results_path.parent}")
+    typer.secho(
+        f"Exit code: {results.run.exit_code}",
+        fg=_exit_code_color(results.run.exit_code),
+        bold=True,
+    )
+    typer.echo()

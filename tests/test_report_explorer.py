@@ -133,11 +133,11 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
         assert fragment_report["id"] == "run-old"
         assert fragment_report["href"] == "/report?id=run-old"
         assert fragment_report["title"] == "GraphCheck Dashboard - run-old"
-        assert set(fragments) == {"run_title", "overview", "checks"}
+        assert set(fragments) == {"run_title", "overview", "checks_next_steps"}
         assert "run-old" not in fragments["run_title"]
         assert "<strong>Partial Run.</strong>" in fragments["run_title"]
         assert '<section id="report-overview"' in fragments["overview"]
-        assert '<section id="checks-panel"' in fragments["checks"]
+        assert '<section id="checks-next-steps-panel"' in fragments["checks_next_steps"]
         assert 'id="report-explorer"' not in "".join(fragments.values())
 
         status, _, payload = _request(

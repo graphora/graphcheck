@@ -141,7 +141,7 @@ def report_name(results: Results) -> str:
 
 def display_run_status(results: Results) -> RunStatus:
     """Map machine run outcomes to user-facing statuses."""
-    if results.run.error is not None and results.run.error.code == "neo4j.unreachable":
+    if results.run.status is RunStatus.FAILED:
         return RunStatus.FAILED
     return (
         RunStatus.PARTIAL

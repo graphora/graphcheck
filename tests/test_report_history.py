@@ -384,9 +384,9 @@ def test_report_summary_maps_errored_checks_to_partial():
     assert summary["status"] == "partial"
 
 
-def test_report_summary_maps_unreachable_neo4j_to_failed():
+def test_report_summary_keeps_pre_check_failure_failed():
     raw = json.loads((FIXTURES / "results.failed.json").read_text(encoding="utf-8"))
-    raw["run"]["error"]["code"] = "neo4j.unreachable"
+    raw["run"]["error"]["code"] = "neo4j.credential_not_read_only"
 
     summary = json.loads(report_summary_json(load_results(raw)))
 
