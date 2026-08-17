@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from io import StringIO
@@ -283,6 +284,11 @@ competency:
     result = runner.invoke(app, ["run", redact_option])
 
     assert result.exit_code == 0
+    assert "Target:" not in result.stdout
+    assert "GraphCheck redacted run " in result.stdout
+    assert "GraphCheck run " not in result.stdout
+    assert "sensitive" not in result.stdout
+    assert "customer" not in result.stdout
     exported = (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(
         encoding="utf-8"
     )
@@ -535,6 +541,88 @@ competency:
     ]
 
 
+def test_redacted_multi_suite_output_uses_report_aliases(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "alpha.yml": """\
+suite: alpha
+competency:
+  - id: alpha-check
+    question: Does alpha return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+            "beta.yml": """\
+suite: beta
+competency:
+  - id: beta-check
+    question: Does beta return a value?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult([{"value": 2}], ("value",), ()),
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run", "--redact"])
+
+    payload = _payload(tmp_path)
+    report = _report(tmp_path)
+    suite_ids = [suite["id"] for suite in payload["suites"]]
+    assert result.exit_code == 0
+    assert suite_ids == ["suite-1", "suite-2"]
+    assert all(suite_id in result.stdout and suite_id in report for suite_id in suite_ids)
+    assert "alpha" not in result.stdout and "beta" not in result.stdout
+    assert "alpha-check" not in result.stdout and "beta-check" not in result.stdout
+    assert "alpha" not in report and "beta" not in report
+    assert "Target:" not in result.stdout
+    assert re.search(r"GraphCheck redacted run [^:]+: complete", result.stdout)
+
+
+def test_redacted_run_masks_check_error_output(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "secret.yml": """\
+suite: secret-suite
+competency:
+  - id: secret-check
+    question: Can the secret query execute?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class ErroredClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            raise GraphCheckError(
+                "neo4j.query_failed",
+                "Query failed for secret-check.",
+                "Fix secret-suite before retrying.",
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: ErroredClient())
+
+    result = runner.invoke(app, ["run", "--redact"])
+
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.exit_code == 1
+    assert "secret-suite" not in output and "secret-check" not in output
+    assert "suite-1/check-1" in output
+    assert "[REDACTED]" in output
+    assert "Target:" not in output
+
+
 def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values():
     results = load_results(FIXTURES / "results.clean.json")
     green = results.suites[0].model_copy(deep=True)
@@ -579,7 +667,7 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
     assert "\x1b[32m       2\x1b[0m" in rendered
     assert "\x1b[31m       1\x1b[0m" in rendered
     assert "\x1b[33m       1\x1b[0m" in rendered
-    assert "\x1b[90m      1\x1b[0m" in rendered
+    assert re.search(r"\x1b\[90m +1\x1b\[0m", rendered)
     assert all(f"\x1b[{code}m-\x1b[0m" not in rendered for code in (31, 32, 33, 35, 90))
 
     single_suite = _check_summary(results.totals)
@@ -601,6 +689,21 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
         width=140,
     ).print(_result_text(partial))
     assert "\x1b[3mcustomer-360\x1b[0m" in output.getvalue()
+
+
+def test_failed_suite_score_table_uses_grey_na_for_every_field():
+    output = StringIO()
+    table = _suite_score_table(load_results(FIXTURES / "results.failed.json"))
+
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(table)
+
+    assert len(re.findall(r"\x1b\[90m *n/a *\x1b\[0m", output.getvalue())) == 8
 
 
 def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):
@@ -724,6 +827,42 @@ def test_run_elapsed_clock_uses_minutes_and_seconds(monkeypatch):
     monkeypatch.setattr("graphcheck.cli.time.monotonic", lambda: 185.9)
 
     assert cli_module._elapsed_clock(60) == "02:05"
+
+
+def test_redacted_run_progress_hides_check_identity(monkeypatch):
+    captured: dict[str, object] = {"updates": []}
+
+    class FakeProgressBar:
+        label = ""
+        bar_template = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, amount):
+            captured["updates"].append((amount, self.bar_template))
+
+    def progressbar(**kwargs):
+        captured["initial_template"] = kwargs["bar_template"]
+        bar = FakeProgressBar()
+        bar.label = kwargs["label"]
+        bar.bar_template = kwargs["bar_template"]
+        return bar
+
+    monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
+    monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+
+    with cli_module._run_progress(1, redacted=True) as update:
+        assert update is not None
+        update(1, 1, "secret-suite/secret-check")
+
+    rendered = f"{captured['initial_template']} {captured['updates']}"
+    assert "Preparing redacted graph checks" in rendered
+    assert "Checking: redacted check" in rendered
+    assert "secret-suite" not in rendered and "secret-check" not in rendered
 
 
 def test_run_progress_template_escapes_percent_signs():
@@ -916,6 +1055,10 @@ competency:
     assert payload["run"]["error"]["code"] == "neo4j.unreachable"
     assert (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").exists()
     assert ": failed" in result.stdout
+    assert "Score breakdown by check suite:" in result.stdout
+    assert result.stdout.count("n/a") == 8
+    assert "Checks: 0" not in result.stdout
+    assert "Score: n/a" not in result.stdout
     assert "Result: Run failed before checks could complete." in result.stdout
     assert "Results and Report saved to:" in result.stdout
     assert result.stdout.index("Result:") < result.stdout.index("Results and Report saved to:")
