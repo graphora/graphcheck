@@ -1030,9 +1030,7 @@ competency:
         "The following check(s) have execution errors. Suggested fixes are provided:"
         in result.stdout
     )
-    assert all(
-        heading in result.stdout for heading in ("Suite", "Check", "Reason", "Fix")
-    )
+    assert all(heading in result.stdout for heading in ("Suite", "Check", "Reason", "Fix"))
     normalized = " ".join(result.stdout.split())
     assert all(
         value in normalized
