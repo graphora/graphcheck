@@ -336,6 +336,44 @@ def test_execute_run_classifies_unexpected_engine_fault_as_engine_unexpected(tmp
     assert len(writes) == 1
 
 
+def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypatch):
+    from graphcheck.application.run import RunRequest, execute_run
+
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+
+    class RejectingClient(FakeClient):
+        def verify_read_only_credential(self):
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "The configured Neo4j credential is not read-only.",
+                "Use a dedicated read-only credential, then run the suite again.",
+            )
+
+    client = RejectingClient([QueryResult([{"value": 1}], ("value",), ())])
+
+    def capture_writer(results, runs_dir, *, render_observer=None):
+        return runs_dir / "latest" / "results.json", runs_dir / "latest" / "report.html"
+
+    outcome = execute_run(
+        RunRequest(
+            profile=None,
+            suite_ids=["smoke"],
+            tags=[],
+            fail_fast=False,
+            verify_read_only_credential=True,
+        ),
+        client_factory=lambda profile, max_concurrency: client,
+        artifact_writer=capture_writer,
+    )
+
+    # The read-only guard runs and its rejection becomes the run failure; the engine never
+    # executes a query.
+    assert outcome.results.run.error is not None
+    assert outcome.results.run.error.code == "neo4j.credential_not_read_only"
+    assert client.read_calls == []
+
+
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
     _project(
         tmp_path,
