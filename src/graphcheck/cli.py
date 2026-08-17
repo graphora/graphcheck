@@ -2274,6 +2274,48 @@ def _print_not_evaluated(results: "Results") -> None:
     typer.echo()
 
 
+def _execution_error_table(results: "Results"):
+    from rich.text import Text
+
+    table = _summary_table()
+    include_fix = not results.run.redaction.applied
+    table.add_column("Suite", no_wrap=True)
+    table.add_column("Check")
+    table.add_column("Reason")
+    if include_fix:
+        table.add_column("Fix")
+    for check in sorted(
+        (check for check in results.checks if check.error is not None),
+        key=lambda check: (check.suite_id, check.id),
+    ):
+        name = Text(check.name, style="italic white")
+        name.append(f" ({check.id})", style="dim white")
+        cells = [
+            Text(check.suite_id, style="italic white"),
+            name,
+            Text(f"{check.error.code}: {check.error.message}", style="magenta"),
+        ]
+        if include_fix:
+            cells.append(Text(check.error.fix, style="white"))
+        table.add_row(*cells)
+    return table
+
+
+def _print_execution_errors(results: "Results") -> None:
+    from rich.console import Console
+
+    if not results.totals.errored:
+        return
+    typer.echo(
+        "The following check(s) have execution errors:"
+        if results.run.redaction.applied
+        else "The following check(s) have execution errors. Suggested fixes are provided:"
+    )
+    typer.echo()
+    Console(highlight=False).print(_execution_error_table(results))
+    typer.echo()
+
+
 def _print_run_summary(
     results: "Results",
     results_path: Path,
@@ -2305,21 +2347,7 @@ def _print_run_summary(
     _print_not_evaluated(results)
     if results.run.error is not None:
         _print_setup_error(results.run.error)
-    seen_errors: set[tuple[str, str, str]] = set()
-    for check in results.checks:
-        if check.error is None:
-            continue
-        identity = (check.error.code, check.error.message, check.error.fix)
-        if identity in seen_errors:
-            continue
-        seen_errors.add(identity)
-        typer.secho(
-            f"{check.suite_id}/{check.id}: {check.error.code}: {check.error.message}",
-            fg=typer.colors.RED,
-            bold=True,
-            err=True,
-        )
-        typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
+    _print_execution_errors(results)
     if not any(check.measured is not None for check in results.checks) and (
         results.run.error is not None or any(check.error is not None for check in results.checks)
     ):

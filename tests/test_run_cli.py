@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from graphcheck import cli as cli_module
 from graphcheck.cli import (
     _check_summary,
+    _execution_error_table,
     _exit_code_color,
     _load_suite_inputs,
     _not_evaluated_table,
@@ -618,9 +619,13 @@ competency:
     output = f"{result.stdout}\n{result.stderr}"
     assert result.exit_code == 1
     assert "secret-suite" not in output and "secret-check" not in output
-    assert "suite-1/check-1" in output
+    assert "suite-1" in output and "check-1" in output
     assert "[REDACTED]" in output
     assert "Target:" not in output
+    assert "The following check(s) have execution errors:" in output
+    assert "Suggested fixes are provided" not in output
+    table = _execution_error_table(load_results(_payload(tmp_path)))
+    assert [column.header for column in table.columns] == ["Suite", "Check", "Reason"]
 
 
 def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values():
@@ -1021,6 +1026,46 @@ competency:
     assert ": partial" in result.stdout
     assert "Result: 1 execution error. Coverage is incomplete." in result.stdout
     assert "errored 1" in result.stdout
+    assert (
+        "The following check(s) have execution errors. Suggested fixes are provided:"
+        in result.stdout
+    )
+    assert all(
+        heading in result.stdout for heading in ("Suite", "Check", "Reason", "Fix")
+    )
+    normalized = " ".join(result.stdout.split())
+    assert all(
+        value in normalized
+        for value in (
+            "errored",
+            "Can the query execute",
+            "broken-query",
+            "Fix the query.",
+        )
+    ), normalized
+    assert not result.stderr
+
+    table = _execution_error_table(load_results(_payload(tmp_path)))
+    assert table.columns[2]._cells[0].plain == "neo4j.query_failed: Query failed."
+    assert [str(column._cells[0].style) for column in table.columns] == [
+        "italic white",
+        "italic white",
+        "magenta",
+        "white",
+    ]
+
+    output = StringIO()
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(table)
+    rendered = output.getvalue()
+    assert "\x1b[3;37m" in rendered
+    assert "\x1b[35m" in rendered
+    assert "\x1b[37m" in rendered
 
 
 def test_run_connection_failure_is_exit_three_and_still_writes_reports(tmp_path, monkeypatch):
@@ -1323,8 +1368,9 @@ conformance:
         payload,
     )
     assert payload["checks"][0]["error"]["code"] == "engine.schema_reference_missing"
-    assert "nothing to evaluate" in result.stderr
-    assert "Fix: Correct the label/type" in result.stderr
+    table = _execution_error_table(load_results(payload))
+    assert "nothing to evaluate" in table.columns[2]._cells[0].plain
+    assert "Correct the label/type" in table.columns[3]._cells[0].plain
     assert "nothing to evaluate" in _report(tmp_path)
     _assert_no_traceback(result)
 
@@ -1367,8 +1413,9 @@ competency:
         payload,
     )
     assert payload["checks"][0]["error"]["code"] == "neo4j.permission_denied"
-    assert "neo4j.permission_denied" in result.stderr
-    assert "Fix: Grant read access" in result.stderr
+    table = _execution_error_table(load_results(payload))
+    assert "neo4j.permission_denied" in table.columns[2]._cells[0].plain
+    assert "Grant read access" in table.columns[3]._cells[0].plain
     assert "Grant read access" in _report(tmp_path)
     assert "Nothing to evaluate" in result.stdout
     assert "no selected check produced a measured result" in result.stdout
