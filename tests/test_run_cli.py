@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -10,8 +11,11 @@ from graphcheck import cli as cli_module
 from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.contracts.results import Capabilities, RunTarget
-from graphcheck.errors import GraphCheckError
+from graphcheck.engine import Engine as CoreEngine
+from graphcheck.engine import EngineConfig
+from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import Counts, QueryResult
+from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 from graphcheck.project import write_default_project
 from graphcheck.reporting.history import discover_report_runs
 from graphcheck.reporting.writer import json_compatible, load_results
@@ -28,16 +32,18 @@ TARGET = RunTarget(
 
 
 class FakeClient:
-    def __init__(self, results=(), *, probe_error=None):
+    def __init__(self, results=(), *, probe_error=None, target=TARGET, counts=None):
         self.results = list(results)
         self.probe_error = probe_error
+        self.target = target
+        self.counts = counts or Counts(nodes=1250, relationships=3480)
         self.read_calls = []
         self.closed = False
 
     def probe(self, *, timeout_s=None):
         if self.probe_error is not None:
             raise self.probe_error
-        return TARGET, object(), Counts(nodes=1250, relationships=3480)
+        return self.target, object(), self.counts
 
     def run_read_result(self, query, params, *, timeout_s=None):
         self.read_calls.append((query, params, timeout_s))
@@ -59,6 +65,16 @@ def _payload(tmp_path: Path) -> dict:
     return json.loads(
         (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(encoding="utf-8")
     )
+
+
+def _report(tmp_path: Path) -> str:
+    return (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
+        encoding="utf-8"
+    )
+
+
+def _assert_no_traceback(result) -> None:
+    assert "Traceback" not in f"{result.stdout}\n{result.stderr}"
 
 
 def test_artifact_value_normalization_is_deterministic_for_yaml_sets():
@@ -878,3 +894,236 @@ def test_run_invalid_suite_is_configuration_failure(tmp_path, monkeypatch):
     assert result.exit_code == 3
     payload = _payload(tmp_path)
     assert payload["run"]["error"]["code"] == "run.suite_invalid"
+
+
+def test_graceful_failure_matrix_missing_apoc_names_fix_and_continues(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "apoc.yml": """\
+suite: apoc-required
+conformance:
+  - id: customer-names
+    check: completeness
+    with: {label: Customer, property: name}
+"""
+        },
+    )
+    installed = builtin_pack_catalog()
+    checks = dict(installed.checks)
+    checks["completeness"] = replace(checks["completeness"], requires=("read", "apoc"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.engine.compiler.builtin_pack_catalog",
+        lambda: PackCatalog(checks=checks, pii=installed.pii),
+    )
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: FakeClient())
+
+    result = runner.invoke(app, ["run"])
+
+    payload = _payload(tmp_path)
+    assert result.exit_code == payload["run"]["exit_code"] == 2
+    assert payload["checks"][0]["verdict"] == "skipped"
+    assert payload["checks"][0]["skip_reason"] == "unsupported"
+    assert "Install APOC" in result.stdout
+    assert "Install APOC" in _report(tmp_path)
+    _assert_no_traceback(result)
+
+
+def test_graceful_failure_matrix_empty_schema_is_actionable_error(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "schema.yml": """\
+suite: expected-schema
+conformance:
+  - id: customer-names
+    check: completeness
+    with: {label: Customer, property: name}
+"""
+        },
+    )
+    summary = {
+        "schema_ok": False,
+        "missing_labels": ["Customer"],
+        "missing_relationship_types": [],
+        "missing_properties": [],
+        "coverage": 1.0,
+        "population": 0,
+        "conforming_count": 0,
+        "violation_count": 0,
+        "evidence": [],
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient",
+        lambda profile: FakeClient([QueryResult([summary], tuple(summary), (), observed_rows=1)]),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    payload = _payload(tmp_path)
+    assert result.exit_code == payload["run"]["exit_code"] == 1, (
+        result.stdout,
+        result.stderr,
+        payload,
+    )
+    assert payload["checks"][0]["error"]["code"] == "engine.schema_reference_missing"
+    assert "nothing to evaluate" in result.stderr
+    assert "Fix: Correct the label/type" in result.stderr
+    assert "nothing to evaluate" in _report(tmp_path)
+    _assert_no_traceback(result)
+
+
+def test_graceful_failure_matrix_permission_denied_names_fix(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "read.yml": """\
+suite: read-access
+competency:
+  - id: readable
+    question: Can the configured user read?
+    query: MATCH (n) RETURN n LIMIT 1
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class PermissionDeniedClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            raise GraphCheckError(
+                "neo4j.permission_denied",
+                "Neo4j denied a read query for the configured user.",
+                "Grant read access to the configured user, then run `graphcheck debug`.",
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient",
+        lambda profile: PermissionDeniedClient(counts=Counts(nodes=0, relationships=0)),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    payload = _payload(tmp_path)
+    assert result.exit_code == payload["run"]["exit_code"] == 1, (
+        result.stdout,
+        result.stderr,
+        payload,
+    )
+    assert payload["checks"][0]["error"]["code"] == "neo4j.permission_denied"
+    assert "neo4j.permission_denied" in result.stderr
+    assert "Fix: Grant read access" in result.stderr
+    assert "Grant read access" in _report(tmp_path)
+    assert "Nothing to evaluate" in result.stdout
+    assert "no selected check produced a measured result" in result.stdout
+    assert "Empty graph" not in result.stdout
+    assert "Nothing to evaluate" in _report(tmp_path)
+    assert "Empty graph" not in _report(tmp_path)
+    _assert_no_traceback(result)
+
+
+def test_graceful_failure_matrix_deadline_is_partial_exit_two(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "deadline.yml": """\
+suite: deadline
+competency:
+  - id: finishes-late
+    question: Does the check finish?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class DeadlineEngine:
+        def __init__(self, client, *args, **kwargs):
+            self.client = client
+
+        def run(self, suites, **kwargs):
+            ticks = iter((0.0, 0.0, 0.0, 0.0, 1.1, 1.1))
+            return CoreEngine(
+                self.client,
+                config=EngineConfig(time_budget_s=1.0),
+                monotonic=lambda: next(ticks, 1.1),
+            ).run(
+                suites,
+                target=TARGET,
+                **kwargs,
+            )
+
+    class DeadlineClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            self.read_calls.append((query, params, timeout_s))
+            raise GraphCheckTimeoutError(
+                "neo4j.query_failed",
+                "Neo4j timed out the in-flight query.",
+                "Narrow the check or increase the run time budget.",
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.engine.Engine", DeadlineEngine)
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient",
+        lambda profile: DeadlineClient(),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    payload = _payload(tmp_path)
+    assert result.exit_code == payload["run"]["exit_code"] == 2
+    assert payload["run"]["status"] == "partial"
+    assert payload["checks"][0]["verdict"] == "errored"
+    assert payload["checks"][0]["error"]["code"] == "engine.timeout"
+    assert "1-second run budget was exhausted" in payload["run"]["partial_reason"]
+    assert "Fix: select fewer checks" in result.stdout
+    assert "Partial reason" in _report(tmp_path)
+    _assert_no_traceback(result)
+
+
+def test_graceful_failure_matrix_empty_graph_is_trustworthy_clean(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "empty.yml": """\
+suite: empty-graph
+conformance:
+  - id: customer-names
+    check: completeness
+    with: {label: Customer, property: name}
+"""
+        },
+    )
+    summary = {
+        "schema_ok": False,
+        "missing_labels": ["Customer"],
+        "missing_relationship_types": [],
+        "missing_properties": [],
+        "coverage": 1.0,
+        "population": 0,
+        "conforming_count": 0,
+        "violation_count": 0,
+        "evidence": [],
+    }
+    client = FakeClient(
+        [QueryResult([summary], tuple(summary), (), observed_rows=1)],
+        counts=Counts(nodes=0, relationships=0),
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    payload = _payload(tmp_path)
+    assert result.exit_code == payload["run"]["exit_code"] == 0
+    assert payload["checks"][0]["verdict"] == "pass"
+    assert payload["checks"][0]["measured"]["population"] == 0
+    assert "CALL db.labels()" in client.read_calls[0][0]
+    assert client.read_calls[0][1]["required_labels"] == ["Customer"]
+    assert "Empty graph" in result.stdout
+    assert "load data if this was unexpected" in result.stdout
+    assert "Empty graph" in _report(tmp_path)
+    _assert_no_traceback(result)

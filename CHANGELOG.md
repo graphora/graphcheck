@@ -204,6 +204,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Empty Neo4j databases now evaluate conformance checks vacuously with real zero-population
+  measurements while drift and populated graphs with unfamiliar schema still report
+  `engine.schema_reference_missing`; in-flight run-budget timeouts now produce partial exit 2, and
+  terminal/HTML diagnostics reserve “checks were evaluated” for measured runs.
 - Neo4j driver deprecation notifications no longer flood GraphCheck CLI output; GraphCheck still
   consumes the notification metadata needed to reject missing schema references.
 - Report history and rendering now read schema 1.0 artifacts by upgrading them to schema 1.1 in

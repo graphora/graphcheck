@@ -2108,5 +2108,34 @@ def _print_run_summary(results: "Results", results_path: Path, report_path: Path
         typer.echo(f"Partial: {results.run.partial_reason}")
     if results.run.error is not None:
         _print_setup_error(results.run.error)
+    seen_errors: set[tuple[str, str, str]] = set()
+    for check in results.checks:
+        if check.error is None:
+            continue
+        identity = (check.error.code, check.error.message, check.error.fix)
+        if identity in seen_errors:
+            continue
+        seen_errors.add(identity)
+        typer.secho(
+            f"{check.suite_id}/{check.id}: {check.error.code}: {check.error.message}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(f"Fix: {check.error.fix}", fg=typer.colors.YELLOW, err=True)
+    if not any(check.measured is not None for check in results.checks):
+        typer.echo(
+            "Nothing to evaluate: no selected check produced a measured result. "
+            "Fix: adjust the selection or resolve the reported errors or skip reasons, then rerun."
+        )
+    elif (
+        results.run.target is not None
+        and results.run.target.nodes == 0
+        and results.run.target.relationships == 0
+    ):
+        typer.echo(
+            "Empty graph: checks were evaluated against zero nodes and relationships; "
+            "load data if this was unexpected."
+        )
     typer.echo(f"Results: {results_path}")
     typer.echo(f"Report: {report_path}")
