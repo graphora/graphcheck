@@ -120,17 +120,36 @@ drift:
 ## PII pack
 
 The PII pack is a separate, executable heuristic pack. Findings are sampled and heuristic —
-this pack never claims complete PII discovery. The fraud-ring fixture plants both a
-name-alias field (`national_id`) and value-pattern-matchable data (Singapore NRIC-style and
-Indian Aadhaar-style, alternating per customer).
+this pack never claims complete PII discovery. The fraud-ring fixture plants a name-alias field
+(`email`) and value-pattern-matchable data on `national_id` (Singapore NRIC-style and Indian
+Aadhaar-style, alternating per customer) — note that `national_id` itself is not a recognized
+name alias, so it is only caught by `pii_value_match`, not `pii_name_match`.
 
 | Check | Catches | Does not catch |
 | --- | --- | --- |
-| `pii_name_match` | Sampled property occurrences whose keys match known personal-data aliases (for example `ssn`, `dob`, `email`, `aadhaar`, `passport`) | Personal data stored under unknown or ambiguous property names |
-| `pii_value_match` | Sampled string property values matching known PII formats and required checksums (email, E.164 phone, NRIC, Aadhaar with Verhoeff checksum, credit card with Luhn checksum) | Encoded, encrypted, unrecognized, or unsampled personal-data values |
+| `pii_name_match` | Sampled property occurrences whose keys match known personal-data aliases (`ssn`, `dob`, `email`, `phone`, `nric`, and others in the pack's alias catalog — `national_id` is not one of them) | Personal data stored under unknown or ambiguous property names |
+| `pii_value_match` | Sampled string property values matching known PII formats and required checksums (`email`, `e164_phone`, `nric`, `aadhaar` with Verhoeff checksum, `credit_card` with Luhn checksum) | Encoded, encrypted, unrecognized, or unsampled personal-data values |
 
-Both PII checks are sampled and require an `estimate` for the sampled population, same as
-`hub_outlier`.
+Both checks accept an optional `label` and `sample_size`, plus an optional `patterns` list to
+restrict which aliases or formats are checked; `pii_value_match` also accepts an optional
+`properties` list to restrict which property keys are scanned.
+
+Example — scanning the fraud-ring fixture's `Customer` nodes:
+
+```yaml
+conformance:
+  - id: customer-email-alias-present
+    check: pii_name_match
+    with:
+      label: Customer
+      sample_size: 200
+  - id: customer-national-id-value-match
+    check: pii_value_match
+    with:
+      label: Customer
+      patterns: [nric, aadhaar]
+      sample_size: 200
+```
 
 ## Severity and defaults
 
