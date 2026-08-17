@@ -106,6 +106,26 @@ def test_artifact_writer_preserves_runs_completed_within_the_same_second(tmp_pat
     }
 
 
+def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):
+    results = load_results(FIXTURES / "results.complete.json")
+    results.run.target.database = "patient-prod"
+    results.checks[0].params["customer_id"] = "redacted_20260706T090241000000Z"
+    redacted = cli_module.redact_results(results)
+    runs_dir = tmp_path / "runs"
+
+    latest_results, latest_report = _write_run_artifacts(redacted, runs_dir)
+
+    run_id = "redacted_collision1_20260706T090241000000Z"
+    exported = latest_results.read_text(encoding="utf-8")
+    html = latest_report.read_text(encoding="utf-8")
+    assert (runs_dir / run_id / "results.json").is_file()
+    assert load_results(latest_results).run.id == run_id
+    assert "patient-prod" not in html
+    assert "redacted_20260706T090241000000Z" not in html
+    assert "redacted_20260706T090241000000Z" not in exported
+    assert "patient-prod" not in json.loads(exported)["run"]["id"]
+
+
 def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path, monkeypatch):
     first = load_results(FIXTURES / "results.complete.json")
     second = load_results(FIXTURES / "results.complete.json")
@@ -205,6 +225,61 @@ competency:
     assert (historical / "results.json").is_file()
     assert (historical / "report.html").is_file()
     assert [check["id"] for check in payload["checks"]] == ["production"]
+
+
+@pytest.mark.parametrize("redact_option", ["--redact", "--redacted"])
+def test_run_redact_writes_only_verified_masked_literals(tmp_path, monkeypatch, redact_option):
+    _project(
+        tmp_path,
+        {
+            "sensitive.yml": """\
+suite: sensitive
+competency:
+  - id: customer
+    question: Does the customer exist?
+    query: RETURN $customer_id AS value
+    params: {customer_id: CUST-SECRET-901}
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    client = FakeClient([QueryResult([{"value": "CUST-SECRET-901"}], ("value",), ())])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run", redact_option])
+
+    assert result.exit_code == 0
+    exported = (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(
+        encoding="utf-8"
+    )
+    payload = json.loads(exported)
+    assert "CUST-SECRET-901" not in exported
+    assert payload["run"]["redaction"] == {"applied": True, "policy": "mask"}
+    assert payload["checks"][0]["params"] == {"customer_id": "[REDACTED]"}
+    assert payload["checks"][0]["measured"] == {
+        "columns": ["[REDACTED]"],
+        "empty": "[REDACTED]",
+        "rows": "[REDACTED]",
+    }
+    assert payload["checks"][0]["verdict"] == "pass"
+    assert payload["totals"]["pass"] == 1
+    report = (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
+        encoding="utf-8"
+    )
+    assert "CUST-SECRET-901" not in report
+    assert '<meta name="graphcheck-redaction" content="mask">' in report
+    assert '<span class="status-pill status-pill-redacted">DETAILS REDACTED</span>' in report
+    assert "<h2>Graph Health Overview</h2>" in report
+    assert '<span class="meta-label">Target Graph</span>' not in report
+    assert '<span class="meta-label">Nodes</span>' not in report
+    assert '<span class="meta-label">Relationships</span>' not in report
+    assert "<strong>Expected:</strong>" not in report
+    assert "<strong>Measured:</strong>" not in report
+    assert "<h4>Compiled Cypher</h4>" not in report
+    assert "View Details & Evidence" not in report
+    assert 'id="toggle-details-btn"' not in report
+    assert '<span class="check-pattern">Pattern: <code>competency-shape</code></span>' in report
 
 
 @pytest.mark.parametrize(
