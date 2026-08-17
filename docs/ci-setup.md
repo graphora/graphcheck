@@ -1,4 +1,4 @@
-﻿# Running GraphCheck in CI
+# Running GraphCheck in CI
 
 GraphCheck ships as a reusable composite GitHub Action at
 `.github/actions/graphcheck-action`. It installs a pinned GraphCheck version, connects to your
@@ -7,6 +7,9 @@ graph, runs your checks, and reports pass/fail/error results directly in the PR'
 ## Usage
 
 ```yaml
+- uses: actions/checkout@v4
+- name: Install GraphCheck from source
+  run: pip install .
 - uses: ./.github/actions/graphcheck-action
   with:
     profile: ci
@@ -14,13 +17,16 @@ graph, runs your checks, and reports pass/fail/error results directly in the PR'
     user: neo4j
     database: neo4j
     fail-fast: false
-    version: 0.1.0
+    version: ''        # skip PyPI install; use the source build above
   env:
     NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
 ```
 
-Not yet published to the GitHub Marketplace. Pin to a commit SHA when using this Action from
-another repository:
+Not yet published to PyPI or the GitHub Marketplace. This example installs GraphCheck from source
+in the same job, matching this repo's own `.github/workflows/graphcheck.yml`. Once [Release] ships
+a published version, `version: 0.1.0` (or the current release) becomes the simpler default and the
+source-install step is no longer required. Pin to a commit SHA when using this Action from another
+repository:
 
 ```yaml
 - uses: graphora/graphcheck/.github/actions/graphcheck-action@COMMIT_SHA
@@ -49,7 +55,7 @@ steps - those steps always run (`if: always()`), but never mask or overwrite the
 
 | Exit | Meaning | Job status |
 | --- | --- | --- |
-| 0 | Complete run, all checks passed or were skipped | green |
+| 0 | Complete run with at least one evaluated check, where every evaluated check passed; generated skips may also be present | green |
 | 1 | A check failed, or an error-severity check errored | red |
 | 2 | Incomplete coverage, or a warning | red |
 | 3 | The run could not execute (bad config, no connection, setup failure) | red |
