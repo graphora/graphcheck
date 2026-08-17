@@ -1,4 +1,4 @@
-x-neo4j-image: &neo4j-image neo4j:5.18
+x-neo4j-image: &neo4j-image neo4j:5.26.28
 
 services:
   neo4j:

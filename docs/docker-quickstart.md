@@ -12,7 +12,7 @@ For general installation and project usage, see the [main README](../README.md).
   `uv sync --group dev` and prefix GraphCheck commands with `uv run`.
 - Local ports `7474` and `7687` available.
 
-The demo uses Neo4j 5.18 with database `graphcheck-demo`. Its disposable local credentials are
+The demo uses Neo4j 5.26.28 with database `graphcheck-demo`. Its disposable local credentials are
 `neo4j` / `Password@123`, and Bolt is available only on `bolt://localhost:7687`.
 
 ## Start and load the fixture

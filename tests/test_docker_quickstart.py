@@ -22,7 +22,7 @@ def test_compose_pins_local_neo4j_and_demo_database():
     compose = _compose()
     neo4j = compose["services"]["neo4j"]
 
-    assert neo4j["image"] == "neo4j:5.18"
+    assert neo4j["image"] == "neo4j:5.26.28"
     assert neo4j["environment"] == {
         "NEO4J_AUTH": "neo4j/Password@123",
         "NEO4J_initial_dbms_default__database": "graphcheck-demo",
@@ -47,7 +47,7 @@ def test_compose_fetches_and_verifies_the_pinned_canonical_seed():
     assert f'fixture_url="{FIXTURE_URL}"' in fetch_command
     assert SEED_SHA256 in fetch_command
     assert "sha256sum -c" in fetch_command
-    assert seed["image"] == "neo4j:5.18"
+    assert seed["image"] == "neo4j:5.26.28"
     assert seed["depends_on"]["neo4j"]["condition"] == "service_healthy"
     assert seed["depends_on"]["fixture-fetch"]["condition"] == ("service_completed_successfully")
     assert "-d graphcheck-demo" in seed_command
@@ -60,21 +60,21 @@ def test_quickstart_does_not_use_a_git_submodule():
     assert not (ROOT / ".gitmodules").exists()
 
 
-def test_committed_local_profile_matches_compose_demo():
+def test_committed_profiles_match_local_quickstart_and_ci():
     profiles = yaml.safe_load((ROOT / "profiles.yml").read_text(encoding="utf-8"))
 
-    assert profiles == {
-        "default": "local",
-        "profiles": {
-            "local": {
-                "uri": "bolt://localhost:7687",
-                "user": "neo4j",
-                "password": "Password@123",
-                "password_env": None,
-                "database": "graphcheck-demo",
-            }
-        },
+    assert profiles["default"] == "local"
+    assert profiles["profiles"]["local"] == {
+        "uri": "bolt://localhost:7687",
+        "user": "neo4j",
+        "password": "Password@123",
+        "password_env": None,
+        "database": "graphcheck-demo",
     }
+    ci = profiles["profiles"]["ci"]
+    assert ci["database"] == "neo4j"
+    assert ci["password_env"] == "NEO4J_PASSWORD"
+    assert ci.get("password") is None
 
 
 def test_default_checks_are_baseline_free_and_include_fraud_ring_suite():
