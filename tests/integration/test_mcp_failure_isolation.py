@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import select
+import queue
 import subprocess
+import threading
 import time
 
 import pytest
@@ -39,17 +40,29 @@ class _StubClient:
         self.closed = True
 
 
-def _rpc_readline(process: subprocess.Popen, timeout: float = 20.0) -> dict:
-    """Read one newline-delimited JSON-RPC message from the server, with a timeout."""
+def _pump_lines(stream, lines: queue.Queue) -> None:
+    # A background reader so message reads are bounded by a timeout on every platform;
+    # select() on a pipe handle is not supported on Windows.
+    try:
+        for line in stream:
+            lines.put(line)
+    finally:
+        lines.put(None)  # EOF sentinel
+
+
+def _next_message(lines: queue.Queue, timeout: float = 20.0) -> dict:
+    """Read one newline-delimited JSON-RPC message from the reader queue, with a timeout."""
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("no MCP response from the server")
-        ready, _, _ = select.select([process.stdout], [], [], remaining)
-        if not ready:
-            raise TimeoutError("no MCP response from the server")
-        line = process.stdout.readline()
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            raise TimeoutError("no MCP response from the server") from None
+        if line is None:
+            raise EOFError("the MCP server closed its stdout")
         if line.strip():
             return json.loads(line)
 
@@ -105,6 +118,8 @@ def test_killing_an_active_mcp_session_does_not_break_independent_engine_runs(
         text=True,
         bufsize=1,
     )
+    lines: queue.Queue = queue.Queue()
+    threading.Thread(target=_pump_lines, args=(victim.stdout, lines), daemon=True).start()
     try:
         # Establish a working session: initialize, then a real tool call that succeeds. This
         # proves the victim reached the serving state before it is killed.
@@ -124,7 +139,7 @@ def test_killing_an_active_mcp_session_does_not_break_independent_engine_runs(
             + "\n"
         )
         victim.stdin.flush()
-        init = _rpc_readline(victim)
+        init = _next_message(lines)
         assert init.get("id") == 1
         assert "result" in init
 
@@ -143,7 +158,7 @@ def test_killing_an_active_mcp_session_does_not_break_independent_engine_runs(
             + "\n"
         )
         victim.stdin.flush()
-        called = _rpc_readline(victim)
+        called = _next_message(lines)
         assert called.get("id") == 2
         assert called["result"]["isError"] is False
     finally:
