@@ -95,15 +95,35 @@ finds `graphcheck.yml`.
 
 ### 2. Configure Neo4j
 
-Edit `profiles.yml`. Prefer an environment variable over a committed or shell-history password:
+First check the edition of the running DBMS:
+
+```cypher
+CALL dbms.components()
+YIELD versions, edition
+RETURN versions, edition;
+```
+
+The credential requirement depends on that result:
+
+| Neo4j edition | Credential GraphCheck accepts | Protection model |
+| --- | --- | --- |
+| Enterprise, including Desktop Developer Edition | A dedicated server-enforced read-only user | Neo4j RBAC plus GraphCheck's query guard |
+| Community | The configured Community user, which is necessarily admin-equivalent | GraphCheck's query guard; Community cannot enforce read-only roles |
+
+For Enterprise/Developer, an administrator provisions the audit user once; everyone running
+GraphCheck can then use that service credential through an environment variable or secret manager.
+Do not configure an Enterprise `admin`, `architect`, `publisher`, or `editor` account: GraphCheck
+rejects credentials with effective write or administrative privileges.
+
+Edit `profiles.yml`. This Enterprise/Developer example uses the dedicated user created below:
 
 ```yaml
 default: local
 profiles:
   local:
     uri: bolt://localhost:7687
-    user: neo4j
-    password_env: NEO4J_PASSWORD
+    user: graphcheck
+    password_env: GRAPHCHECK_NEO4J_PASSWORD
     database: neo4j
 ```
 
@@ -112,7 +132,8 @@ is absent, GraphCheck falls back to `password` when one is configured. For the q
 setup, edit the generated inline `password` value. For CI or shared environments, remove the inline
 value, keep `password_env`, and export that variable in the process that runs GraphCheck.
 
-On Neo4j Enterprise, the account must be a dedicated, server-enforced read-only audit credential.
+On Neo4j Enterprise/Developer, the account must be a dedicated, server-enforced read-only audit
+credential.
 During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
 privileges and permits only database access, graph reads, the default non-mutating `LOAD ON ALL
 DATA` grant, and non-boosted procedure/function execution. Graph writes, boosted execution,
@@ -127,17 +148,34 @@ separately planned with `EXPLAIN`; GraphCheck executes only Neo4j query type `r`
 query is rejected without modifying the graph. Driver read routing alone is not an authorization
 boundary.
 
-On Neo4j Enterprise, an administrator can provision the audit role for database `neo4j` with:
+In Desktop 2, open the instance's **Query** tool as the existing `neo4j` administrator. On Neo4j
+Enterprise/Developer, provision a new user and narrowly scoped role for database `neo4j` with:
 
 ```cypher
 CREATE ROLE graphcheck_auditor IF NOT EXISTS;
+CREATE USER graphcheck SET PASSWORD 'replace-with-a-strong-password' CHANGE NOT REQUIRED;
 GRANT ACCESS ON DATABASE neo4j TO graphcheck_auditor;
 GRANT MATCH {*} ON GRAPH neo4j ELEMENTS * TO graphcheck_auditor;
-GRANT ROLE graphcheck_auditor TO graphcheck_user;
+GRANT ROLE graphcheck_auditor TO graphcheck;
 ```
 
-Create `graphcheck_user` separately with your organization’s password policy, and grant no write,
-boosted execution, schema, database, DBMS-admin, or broader inherited role.
+Grant this user no write, boosted execution, schema, database-administration, DBMS-administration,
+or broader inherited role. In particular, do not add the built-in `admin`, `architect`, `publisher`,
+`editor`, or `reader` role; the custom role intentionally contains only the privileges GraphCheck
+needs. If the user already exists, use `ALTER USER graphcheck SET PASSWORD
+'replace-with-a-strong-password' CHANGE NOT REQUIRED` instead of `CREATE USER`.
+
+Set the matching password in the same shell that starts GraphCheck:
+
+```powershell
+$env:GRAPHCHECK_NEO4J_PASSWORD = "replace-with-a-strong-password"
+graphcheck debug
+graphcheck run
+```
+
+For Community Edition, keep the generated `user: neo4j` (or another Community user) and configure
+its password normally. Community users are admin-equivalent by design, so GraphCheck skips the
+unavailable RBAC audit and relies on its planner guard described above.
 
 Use `bolt://host:7687` for a direct non-TLS local server. Use `neo4j+s://host:7687` for routing with
 CA-validated TLS (including the URI supplied by Aura), or `neo4j+ssc://host:7687` only when the

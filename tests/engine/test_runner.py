@@ -20,14 +20,16 @@ from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import QueryResult
 from graphcheck.packs import PACK_VERSION
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
-EMPTY_TARGET = ResultsTarget(**TARGET.model_dump(), nodes=0, relationships=0)
+EMPTY_TARGET = TARGET.model_copy(update={"nodes": 0, "relationships": 0})
 
 PASSING_SUITE = """\
 suite: customer-quality
@@ -239,7 +241,7 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     payload = results.model_dump(mode="json", by_alias=True, exclude_none=False)
 
     assert set(payload) == {"schema_version", "run", "score", "totals", "suites", "checks"}
-    assert results.schema_version == "1.1"
+    assert results.schema_version == "1.2"
     assert results.run.id == "run-123"
     assert results.run.started_at == "2026-07-13T10:00:00Z"
     assert results.run.finished_at == "2026-07-13T10:00:02Z"
@@ -247,7 +249,9 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert results.run.pack_version == PACK_VERSION
     assert results.run.status is RunStatus.COMPLETE
     assert results.run.target is not None
-    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump()
+    assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump(
+        exclude={"nodes", "relationships"}
+    )
     assert results.run.selection.suites == ["customer-quality"]
     assert results.run.selection.fail_fast is False
     assert results.run.redaction.policy.value == "none"
@@ -272,6 +276,24 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     assert client.probe_calls == 1
     assert len(client.read_calls) == 1
     assert client.read_calls[0][2] > 0
+
+
+def test_supplied_target_without_inventory_fails_before_checks():
+    target = RunTarget(
+        database="neo4j",
+        server_version="5.18.0",
+        edition="community",
+        fingerprint="sha256:legacy-target",
+        capabilities=Capabilities(apoc=False, count_store=True),
+    )
+
+    results = _engine(RichClient([_passing_conformance_result()])).run_yaml(
+        PASSING_SUITE, target=target
+    )
+
+    assert results.run.status is RunStatus.FAILED
+    assert results.run.error is not None
+    assert results.run.error.code == "engine.target_inventory_missing"
 
 
 def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():

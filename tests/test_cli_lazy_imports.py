@@ -43,12 +43,10 @@ _VERSION_FORBIDDEN_MODULES = _TELEMETRY_MODEL_MODULES | {
 @pytest.mark.parametrize("arguments", [["--help"], ["--version"]])
 def test_fast_cli_paths_do_not_import_command_modules(arguments):
     source = Path(__file__).parents[1] / "src"
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        path for path in (str(source), environment.get("PYTHONPATH")) if path
-    )
+    environment = _isolated_environment()
     script = (
         "import json,sys;"
+        f"sys.path.insert(0,{str(source)!r});"
         "from typer.testing import CliRunner;"
         "from graphcheck.cli import app;"
         f"result=CliRunner().invoke(app,{arguments!r});"
@@ -57,7 +55,7 @@ def test_fast_cli_paths_do_not_import_command_modules(arguments):
     )
 
     completed = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-I", "-c", script],
         capture_output=True,
         check=False,
         env=environment,
@@ -122,6 +120,20 @@ def test_enabled_consent_loads_full_telemetry_only_after_bootstrap(tmp_path, per
     assert "graphcheck.telemetry.runtime" in _modules(completed)
 
 
+def test_bootstrap_probe_ignores_parent_pythonpath_sitecustomize(tmp_path, monkeypatch):
+    contaminator = tmp_path / "contaminator"
+    contaminator.mkdir()
+    (contaminator / "sitecustomize.py").write_text(
+        "import graphcheck.telemetry.runtime\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(contaminator))
+
+    completed = _run_bootstrap(["--help"], telemetry="0")
+
+    assert completed.returncode == 0, completed.stderr
+    assert _modules(completed) == []
+
+
 def _run_bootstrap(
     arguments,
     *,
@@ -130,10 +142,7 @@ def _run_bootstrap(
     patch_delivery=False,
 ):
     source = Path(__file__).parents[1] / "src"
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        path for path in (str(source), environment.get("PYTHONPATH")) if path
-    )
+    environment = _isolated_environment()
     if telemetry is None:
         environment.pop("GRAPHCHECK_TELEMETRY", None)
     else:
@@ -148,6 +157,7 @@ def _run_bootstrap(
     )
     script = (
         "import json,sys;"
+        f"sys.path.insert(0,{str(source)!r});"
         f"sys.argv={['graphcheck', *arguments]!r};"
         f"{delivery_patch}"
         "from graphcheck.bootstrap import cli;"
@@ -157,7 +167,7 @@ def _run_bootstrap(
         f"print(json.dumps({{'exit_code':exit_code,'modules':sorted({modules!r}&sys.modules.keys())}}))"
     )
     return subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-I", "-c", script],
         capture_output=True,
         check=False,
         env=environment,
@@ -167,3 +177,11 @@ def _run_bootstrap(
 
 def _modules(completed):
     return json.loads(completed.stdout.splitlines()[-1])["modules"]
+
+
+def _isolated_environment():
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if name == "PYTHONPATH" or name.startswith(("COVERAGE_", "COV_CORE_", "PYTEST_")):
+            environment.pop(name)
+    return environment

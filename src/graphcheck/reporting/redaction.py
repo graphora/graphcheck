@@ -9,7 +9,7 @@ from graphcheck.contracts.results import RedactionPolicy, Results, parse_utc_tim
 from graphcheck.reporting.writer import load_results
 
 REDACTION_MASK = "[REDACTED]"
-_ALIAS_PATTERN = re.compile(r"(?:suite|check|tag)-[1-9][0-9]*\Z")
+_ALIAS_PATTERN = re.compile(r"(?:suite|check|tag|label|relationship-type)-[1-9][0-9]*\Z")
 
 
 def _mask_values(value: object) -> Any:
@@ -37,7 +37,14 @@ def _sensitive_source_literals(payload: dict[str, Any]) -> set[str]:
         run["error"],
     ]
     if run["target"] is not None:
-        values.extend((run["target"]["database"], run["target"]["fingerprint"]))
+        values.extend(
+            (
+                run["target"]["database"],
+                run["target"]["fingerprint"],
+                run["target"]["labels"],
+                run["target"]["relationship_types"],
+            )
+        )
     values.extend((suite["id"], suite["source_sha"]) for suite in payload["suites"])
     for check in payload["checks"]:
         values.extend(
@@ -91,6 +98,12 @@ def _alias_identifiers(payload: dict[str, Any], sensitive: set[str]) -> None:
     if target := payload["run"]["target"]:
         target["database"] = REDACTION_MASK
         target["fingerprint"] = REDACTION_MASK
+        if target["labels"] is not None:
+            target["labels"] = list(_aliases(target["labels"], "label", sensitive).values())
+        if target["relationship_types"] is not None:
+            target["relationship_types"] = list(
+                _aliases(target["relationship_types"], "relationship-type", sensitive).values()
+            )
 
 
 def _is_safe_literal_path(path: tuple[str | int, ...]) -> bool:
@@ -266,6 +279,16 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
     if results.run.target is not None:
         _verify_masked(results.run.target.database, "run.target.database")
         _verify_masked(results.run.target.fingerprint, "run.target.fingerprint")
+        if results.run.target.labels is not None:
+            for index, label in enumerate(results.run.target.labels):
+                _verify_alias(label, "label", f"run.target.labels[{index}]")
+        if results.run.target.relationship_types is not None:
+            for index, rel_type in enumerate(results.run.target.relationship_types):
+                _verify_alias(
+                    rel_type,
+                    "relationship-type",
+                    f"run.target.relationship_types[{index}]",
+                )
     for index, suite in enumerate(results.suites):
         _verify_alias(suite.id, "suite", f"suites[{index}].id")
         _verify_masked(suite.source_sha, f"suites[{index}].source_sha")

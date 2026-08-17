@@ -1,16 +1,32 @@
 import json
 import logging
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from io import StringIO
 from pathlib import Path
 
 import pytest
+import typer
+from rich.console import Console
 from typer.testing import CliRunner
 
 from graphcheck import cli as cli_module
-from graphcheck.cli import _load_suite_inputs, _write_run_artifacts, app
+from graphcheck.cli import (
+    _check_summary,
+    _execution_error_table,
+    _exit_code_color,
+    _load_suite_inputs,
+    _not_evaluated_table,
+    _result_text,
+    _suite_coverage_style,
+    _suite_score_style,
+    _suite_score_table,
+    _write_run_artifacts,
+    app,
+)
 from graphcheck.connection_profiles import write_default_profiles
-from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.engine import Engine as CoreEngine
 from graphcheck.engine import EngineConfig
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
@@ -18,16 +34,19 @@ from graphcheck.neo4j_adapter import Counts, QueryResult
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 from graphcheck.project import write_default_project
 from graphcheck.reporting.history import discover_report_runs
+from graphcheck.reporting.presentation import present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
     edition="community",
     fingerprint="sha256:test-graph",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=[],
+    relationship_types=[],
 )
 
 
@@ -266,6 +285,11 @@ competency:
     result = runner.invoke(app, ["run", redact_option])
 
     assert result.exit_code == 0
+    assert "Target:" not in result.stdout
+    assert "GraphCheck redacted run " in result.stdout
+    assert "GraphCheck run " not in result.stdout
+    assert "sensitive" not in result.stdout
+    assert "customer" not in result.stdout
     exported = (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(
         encoding="utf-8"
     )
@@ -342,14 +366,92 @@ competency:
     assert html.count("<script>") == 1
     assert "function filterChecks()" in html
     assert ' src="' not in html and ' href="' not in html
+    assert "Result: No failures. All 1 selected check passed." in result.stdout
+    assert "Coverage:" not in result.stdout
+    target = "Target: neo4j · Neo4j 5.18.0 community · 1,250 nodes · 3,480 relationships"
+    assert target in result.stdout
+    assert result.stdout.index(target) < result.stdout.index("GraphCheck run ")
+    assert f"{target}\nGraphCheck run " in result.stdout
     assert "Checks: 1 | passed 1" in result.stdout
-    assert "exit code: 0" in result.stdout
+    assert "Exit code: 0" in result.stdout
+    assert result.stdout.endswith("\n\n")
+    assert "Results and Report saved to:" in result.stdout
+    assert "Results:" not in result.stdout
+    assert "Report:" not in result.stdout
     assert "Suite selected:" not in result.stdout
     assert len(client.read_calls) == 1
     assert client.closed is True
 
 
-def test_run_prints_each_suite_summary_without_multi_suite_aggregate(tmp_path, monkeypatch):
+def test_run_lists_generated_check_as_not_evaluated_without_repeating_passes(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "generated.yml": """\
+suite: generated-suite
+generated: true
+competency:
+  - id: draft-check
+    question: Does the draft return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+        },
+    )
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    normalized = " ".join(result.stdout.split())
+    assert "Not evaluated:" not in result.stdout
+    assert "Suite" in result.stdout and "Check" in result.stdout and "Reason" in result.stdout
+    assert "draft-check" in result.stdout
+    assert "generated:" in normalized
+    assert "draft-check — pass" not in result.stdout
+    lines = result.stdout.splitlines()
+    artifacts_line = next(i for i, line in enumerate(lines) if "Results and Report saved" in line)
+    assert lines[artifacts_line - 1] == ""
+    assert client.read_calls == []
+
+
+def test_not_evaluated_table_italicizes_check_names():
+    results = load_results(FIXTURES / "results.generated-only.json")
+    output = StringIO()
+    table = _not_evaluated_table(results)
+    table.columns[1].no_wrap = True
+
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=180,
+    ).print(table)
+
+    rendered = output.getvalue()
+    assert "Suite" in rendered and "Check" in rendered and "Reason" in rendered
+    assert "\x1b[3mcustomer-360\x1b[0m" in rendered
+    assert "\x1b[3mdraft competency check awaiting approval\x1b[0m" in rendered
+    assert "cq-draft" in rendered
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "color"),
+    [
+        (0, typer.colors.GREEN),
+        (1, typer.colors.RED),
+        (2, typer.colors.YELLOW),
+        (3, typer.colors.RED),
+    ],
+)
+def test_exit_code_uses_semantic_color(exit_code, color):
+    assert _exit_code_color(exit_code) == color
+
+
+def test_run_prints_aligned_multi_suite_score_table(tmp_path, monkeypatch):
     _project(
         tmp_path,
         {
@@ -397,22 +499,216 @@ competency:
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 2
-    assert (
-        "Suite alpha: score 100 | checks 1 | passed 1 | failed 0 | warnings 0 | "
-        "errored 0 | skipped 0"
-    ) in result.stdout
-    assert (
-        "Suite beta: score 0 | checks 1 | passed 0 | failed 0 | warnings 1 | errored 0 | skipped 0"
-    ) in result.stdout
+    assert "Score breakdown by check suite:" in result.stdout
+    assert "Suite" in result.stdout
+    assert "Score" in result.stdout
+    assert "Check Coverage" in result.stdout
+    assert "Passed" in result.stdout
+    assert "Failed" in result.stdout
+    assert "Warnings" in result.stdout
+    assert "Errored" in result.stdout
+    assert "Skipped" in result.stdout
+    assert "alpha" in result.stdout
+    assert "100/100" in result.stdout
+    assert "beta" in result.stdout
+    assert "0/100" in result.stdout
+    assert "Suite alpha:" not in result.stdout
+    assert "│" not in result.stdout
+    assert "┼" not in result.stdout
+    assert "+" not in result.stdout
+    assert "|" not in result.stdout
+    assert sum(bool(line) and set(line) == {"─"} for line in result.stdout.splitlines()) == 1
+    assert not any(bool(line) and set(line) == {"-"} for line in result.stdout.splitlines())
+    assert result.stdout.count("1/1") == 2
     assert "Overall:" not in result.stdout
     assert "Checks: 2" not in result.stdout
     assert "Score: 75" not in result.stdout
     assert "Exit code: 2" in result.stdout
+    assert "Result: 1 warning." in result.stdout
+    assert "Coverage:" not in result.stdout
+    assert result.stdout.index("GraphCheck run ") < result.stdout.index(
+        "Score breakdown by check suite:"
+    )
+    assert result.stdout.index("Score breakdown by check suite:") < result.stdout.index("Result:")
+    assert result.stdout.index("Result:") < result.stdout.index("Results and Report saved to:")
+    assert result.stdout.index("Results and Report saved to:") < result.stdout.index("Exit code: 2")
+    assert "\n\nResult: 1 warning." in result.stdout
+    assert "\nResults and Report saved to:" in result.stdout
+    assert "\nExit code: 2" in result.stdout
     payload = _payload(tmp_path)
     assert [(suite["id"], suite["score"]) for suite in payload["suites"]] == [
         ("alpha", 100),
         ("beta", 0),
     ]
+
+
+def test_redacted_multi_suite_output_uses_report_aliases(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "alpha.yml": """\
+suite: alpha
+competency:
+  - id: alpha-check
+    question: Does alpha return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+            "beta.yml": """\
+suite: beta
+competency:
+  - id: beta-check
+    question: Does beta return a value?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+""",
+        },
+    )
+    client = FakeClient(
+        [
+            QueryResult([{"value": 1}], ("value",), ()),
+            QueryResult([{"value": 2}], ("value",), ()),
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+
+    result = runner.invoke(app, ["run", "--redact"])
+
+    payload = _payload(tmp_path)
+    report = _report(tmp_path)
+    suite_ids = [suite["id"] for suite in payload["suites"]]
+    assert result.exit_code == 0
+    assert suite_ids == ["suite-1", "suite-2"]
+    assert all(suite_id in result.stdout and suite_id in report for suite_id in suite_ids)
+    assert "alpha" not in result.stdout and "beta" not in result.stdout
+    assert "alpha-check" not in result.stdout and "beta-check" not in result.stdout
+    assert "alpha" not in report and "beta" not in report
+    assert "Target:" not in result.stdout
+    assert re.search(r"GraphCheck redacted run [^:]+: complete", result.stdout)
+
+
+def test_redacted_run_masks_check_error_output(tmp_path, monkeypatch):
+    _project(
+        tmp_path,
+        {
+            "secret.yml": """\
+suite: secret-suite
+competency:
+  - id: secret-check
+    question: Can the secret query execute?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+"""
+        },
+    )
+
+    class ErroredClient(FakeClient):
+        def run_read_result(self, query, params, *, timeout_s=None):
+            raise GraphCheckError(
+                "neo4j.query_failed",
+                "Query failed for secret-check.",
+                "Fix secret-suite before retrying.",
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: ErroredClient())
+
+    result = runner.invoke(app, ["run", "--redact"])
+
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.exit_code == 1
+    assert "secret-suite" not in output and "secret-check" not in output
+    assert "suite-1" in output and "check-1" in output
+    assert "[REDACTED]" in output
+    assert "Target:" not in output
+    assert "The following check(s) have execution errors:" in output
+    assert "Suggested fixes are provided" not in output
+    table = _execution_error_table(load_results(_payload(tmp_path)))
+    assert [column.header for column in table.columns] == ["Suite", "Check", "Reason"]
+
+
+def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values():
+    results = load_results(FIXTURES / "results.clean.json")
+    green = results.suites[0].model_copy(deep=True)
+    green.id = "green"
+    yellow = load_results(FIXTURES / "results.complete.json").suites[0].model_copy(deep=True)
+    yellow.id = "yellow"
+    yellow.score = 86
+    red = load_results(FIXTURES / "results.generated-only.json").suites[0].model_copy(deep=True)
+    red.id = "red"
+    red.score = 49
+    results.suites = [green, yellow, red]
+    output = StringIO()
+
+    table = _suite_score_table(results)
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(table)
+    rendered = output.getvalue()
+
+    assert {column.width for column in table.columns[3:]} == {8}
+    assert _suite_score_style(None) == "white"
+    assert _suite_score_style(100) == "green"
+    assert _suite_score_style(99) == "yellow"
+    assert _suite_score_style(50) == "yellow"
+    assert _suite_score_style(49) == "red"
+    assert _suite_coverage_style(2, 2) == "green"
+    assert _suite_coverage_style(0, 1) == "yellow"
+    assert "\x1b[1;37mSuite " in rendered
+    assert "\x1b[3mgreen" in rendered
+    assert "\x1b[3myellow" in rendered
+    assert "\x1b[3mred" in rendered
+    assert "\x1b[32m100/100\x1b[0m" in rendered
+    assert "\x1b[33m 86/100\x1b[0m" in rendered
+    assert "\x1b[31m 49/100\x1b[0m" in rendered
+    assert "\x1b[32m           2/2\x1b[0m" in rendered
+    assert "\x1b[32m           3/3\x1b[0m" in rendered
+    assert "\x1b[33m           0/1\x1b[0m" in rendered
+    assert "\x1b[32m       2\x1b[0m" in rendered
+    assert "\x1b[31m       1\x1b[0m" in rendered
+    assert "\x1b[33m       1\x1b[0m" in rendered
+    assert re.search(r"\x1b\[90m +1\x1b\[0m", rendered)
+    assert all(f"\x1b[{code}m-\x1b[0m" not in rendered for code in (31, 32, 33, 35, 90))
+
+    single_suite = _check_summary(results.totals)
+    assert "passed \x1b[32m2\x1b[0m" in single_suite
+    assert "failed 0 | warnings 0 | errored 0 | skipped 0" in single_suite
+    assert all(
+        f"\x1b[{code}m{label}" not in single_suite
+        for code in (31, 32, 33, 35, 90)
+        for label in ("passed", "failed", "warnings", "errored", "skipped")
+    )
+
+    partial = present_results(load_results(FIXTURES / "results.partial.json"))
+    output = StringIO()
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(_result_text(partial))
+    assert "\x1b[3mcustomer-360\x1b[0m" in output.getvalue()
+
+
+def test_failed_suite_score_table_uses_grey_na_for_every_field():
+    output = StringIO()
+    table = _suite_score_table(load_results(FIXTURES / "results.failed.json"))
+
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(table)
+
+    assert len(re.findall(r"\x1b\[90m *n/a *\x1b\[0m", output.getvalue())) == 8
 
 
 def test_run_suppresses_neo4j_driver_notification_logs(tmp_path, monkeypatch, caplog):
@@ -474,6 +770,7 @@ competency:
         ]
     )
     progress: dict[str, object] = {"updates": []}
+    lifecycle = []
 
     class FakeProgressBar:
         label = ""
@@ -489,6 +786,7 @@ competency:
             progress["updates"].append((amount, self.label, self.bar_template))
 
     def progressbar(**kwargs):
+        lifecycle.append("progress")
         progress["options"] = kwargs
         bar = FakeProgressBar()
         bar.label = kwargs["label"]
@@ -499,10 +797,18 @@ competency:
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
     monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
     monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+    real_print_target = cli_module._print_run_target
+
+    def print_target(target):
+        lifecycle.append("target")
+        real_print_target(target)
+
+    monkeypatch.setattr("graphcheck.cli._print_run_target", print_target)
 
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == 0
+    assert lifecycle[:2] == ["target", "progress"]
     assert progress["options"]["length"] == 2
     assert progress["options"]["label"] == "00:00"
     assert progress["options"]["show_eta"] is False
@@ -528,8 +834,49 @@ def test_run_elapsed_clock_uses_minutes_and_seconds(monkeypatch):
     assert cli_module._elapsed_clock(60) == "02:05"
 
 
+def test_redacted_run_progress_hides_check_identity(monkeypatch):
+    captured: dict[str, object] = {"updates": []}
+
+    class FakeProgressBar:
+        label = ""
+        bar_template = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, amount):
+            captured["updates"].append((amount, self.bar_template))
+
+    def progressbar(**kwargs):
+        captured["initial_template"] = kwargs["bar_template"]
+        bar = FakeProgressBar()
+        bar.label = kwargs["label"]
+        bar.bar_template = kwargs["bar_template"]
+        return bar
+
+    monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
+    monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
+
+    with cli_module._run_progress(1, redacted=True) as update:
+        assert update is not None
+        update(1, 1, "secret-suite/secret-check")
+
+    rendered = f"{captured['initial_template']} {captured['updates']}"
+    assert "Preparing redacted graph checks" in rendered
+    assert "Checking: redacted check" in rendered
+    assert "secret-suite" not in rendered and "secret-check" not in rendered
+
+
 def test_run_progress_template_escapes_percent_signs():
     assert cli_module._progress_template("suite/check%name").endswith("suite/check%%name")
+
+
+def test_run_progress_uses_continuous_line_glyphs():
+    assert cli_module._PROGRESS_FILL_CHAR == "━"
+    assert cli_module._PROGRESS_EMPTY_CHAR == "─"
 
 
 def test_run_artifacts_serialize_yaml_temporal_and_binary_values_consistently(
@@ -644,6 +991,8 @@ competency:
     result = runner.invoke(app, ["run"])
 
     assert result.exit_code == expected_exit
+    assert f"Result: 1 {'failure' if verdict == 'fail' else 'warning'}." in result.stdout
+    assert "Coverage:" not in result.stdout
     payload = _payload(tmp_path)
     assert payload["run"]["exit_code"] == expected_exit
     assert payload["checks"][0]["verdict"] == verdict
@@ -675,7 +1024,46 @@ competency:
 
     assert result.exit_code == 1
     assert ": partial" in result.stdout
+    assert "Result: 1 execution error. Coverage is incomplete." in result.stdout
     assert "errored 1" in result.stdout
+    assert (
+        "The following check(s) have execution errors. Suggested fixes are provided:"
+        in result.stdout
+    )
+    assert all(heading in result.stdout for heading in ("Suite", "Check", "Reason", "Fix"))
+    normalized = " ".join(result.stdout.split())
+    assert all(
+        value in normalized
+        for value in (
+            "errored",
+            "Can the query execute",
+            "broken-query",
+            "Fix the query.",
+        )
+    ), normalized
+    assert not result.stderr
+
+    table = _execution_error_table(load_results(_payload(tmp_path)))
+    assert table.columns[2]._cells[0].plain == "neo4j.query_failed: Query failed."
+    assert [str(column._cells[0].style) for column in table.columns] == [
+        "italic white",
+        "italic white",
+        "magenta",
+        "white",
+    ]
+
+    output = StringIO()
+    Console(
+        file=output,
+        force_terminal=True,
+        no_color=False,
+        color_system="standard",
+        width=140,
+    ).print(table)
+    rendered = output.getvalue()
+    assert "\x1b[3;37m" in rendered
+    assert "\x1b[35m" in rendered
+    assert "\x1b[37m" in rendered
 
 
 def test_run_connection_failure_is_exit_three_and_still_writes_reports(tmp_path, monkeypatch):
@@ -710,6 +1098,14 @@ competency:
     assert payload["run"]["error"]["code"] == "neo4j.unreachable"
     assert (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").exists()
     assert ": failed" in result.stdout
+    assert "Score breakdown by check suite:" in result.stdout
+    assert result.stdout.count("n/a") == 8
+    assert "Checks: 0" not in result.stdout
+    assert "Score: n/a" not in result.stdout
+    assert "Result: Run failed before checks could complete." in result.stdout
+    assert "Results and Report saved to:" in result.stdout
+    assert result.stdout.index("Result:") < result.stdout.index("Results and Report saved to:")
+    assert result.stdout.index("Results and Report saved to:") < result.stdout.index("Exit code: 3")
     assert "neo4j.unreachable: Neo4j could not be reached." in result.stderr
     assert "Fix: Start Neo4j" in result.stderr
     assert client.closed is True
@@ -749,8 +1145,9 @@ competency:
     report = (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
         encoding="utf-8"
     )
-    assert "Action required" in report
-    assert "Use a dedicated read-only user." in report
+    assert "Troubleshooting Steps" in report
+    assert "The credential has WRITE." in report
+    assert "Action required" not in report
     assert client.read_calls == []
 
 
@@ -969,8 +1366,9 @@ conformance:
         payload,
     )
     assert payload["checks"][0]["error"]["code"] == "engine.schema_reference_missing"
-    assert "nothing to evaluate" in result.stderr
-    assert "Fix: Correct the label/type" in result.stderr
+    table = _execution_error_table(load_results(payload))
+    assert "nothing to evaluate" in table.columns[2]._cells[0].plain
+    assert "Correct the label/type" in table.columns[3]._cells[0].plain
     assert "nothing to evaluate" in _report(tmp_path)
     _assert_no_traceback(result)
 
@@ -1013,8 +1411,9 @@ competency:
         payload,
     )
     assert payload["checks"][0]["error"]["code"] == "neo4j.permission_denied"
-    assert "neo4j.permission_denied" in result.stderr
-    assert "Fix: Grant read access" in result.stderr
+    table = _execution_error_table(load_results(payload))
+    assert "neo4j.permission_denied" in table.columns[2]._cells[0].plain
+    assert "Grant read access" in table.columns[3]._cells[0].plain
     assert "Grant read access" in _report(tmp_path)
     assert "Nothing to evaluate" in result.stdout
     assert "no selected check produced a measured result" in result.stdout

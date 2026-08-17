@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from graphcheck.contracts.results import Capabilities, RunTarget
+from graphcheck.contracts.results import Capabilities, ResultsTarget
 from graphcheck.engine.runner import Engine, EngineConfig, SuiteInput
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import QueryResult
@@ -18,12 +18,14 @@ from graphcheck.telemetry.events import (
     TargetProbeFinished,
 )
 
-TARGET = RunTarget(
+TARGET = ResultsTarget(
     database="secret-database",
     server_version="5.18.7",
     edition="enterprise",
     fingerprint="sha256:secret-fingerprint",
     capabilities=Capabilities(apoc=False, count_store=True),
+    labels=["PrivateLabel"],
+    relationship_types=["PRIVATE_RELATIONSHIP"],
 )
 SUITE = """\
 suite: private-suite

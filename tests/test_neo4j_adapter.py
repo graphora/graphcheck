@@ -4,7 +4,7 @@ import time
 import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
-from graphcheck.contracts.results import Capabilities, CheckError, RunTarget
+from graphcheck.contracts.results import Capabilities, CheckError, ResultsTarget, RunTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import (
     Counts,
@@ -289,12 +289,16 @@ def test_neo4j_44_is_rejected_with_an_upgrade_target():
 def test_debug_trace_json_shape_matches_spec():
     trace = DebugTrace(
         profile="local",
-        target=RunTarget(
+        target=ResultsTarget(
             database="neo4j",
             server_version="5.18.0",
             edition="enterprise",
             fingerprint="abc123",
             capabilities=Capabilities(apoc=False, count_store=True),
+            nodes=7,
+            relationships=11,
+            labels=["Account", "Customer"],
+            relationship_types=["OWNS"],
         ),
         visibility=Visibility(can_connect=True, can_read=True, can_show_procedures=True),
         counts=Counts(nodes=7, relationships=11),
@@ -311,6 +315,10 @@ def test_debug_trace_json_shape_matches_spec():
             "edition": "enterprise",
             "fingerprint": "abc123",
             "capabilities": {"apoc": False, "count_store": True},
+            "nodes": 7,
+            "relationships": 11,
+            "labels": ["Account", "Customer"],
+            "relationship_types": ["OWNS"],
         },
         "visibility": {
             "can_connect": True,
@@ -325,12 +333,16 @@ def test_debug_trace_json_shape_matches_spec():
 def test_debug_trace_reports_probe_round_trips_and_elapsed_time():
     trace = DebugTrace(
         profile="local",
-        target=RunTarget(
+        target=ResultsTarget(
             database="neo4j",
             server_version="5.26.0",
             edition="community",
             fingerprint="abc123",
             capabilities=Capabilities(apoc=False, count_store=True),
+            nodes=7,
+            relationships=11,
+            labels=["Customer"],
+            relationship_types=["OWNS"],
         ),
         visibility=Visibility(True, True, True),
         counts=Counts(7, 11),
@@ -826,6 +838,8 @@ def test_probe_handles_permission_denied_apoc_probe():
 
     assert target.capabilities.apoc is False
     assert target.capabilities.count_store is True
+    assert target.labels == ["Customer"]
+    assert target.relationship_types == ["OWNS"]
     assert visibility.can_show_procedures is False
     assert counts == Counts(nodes=1, relationships=2)
 

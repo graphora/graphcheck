@@ -155,7 +155,9 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 
 ## Capability probe
 
-The probe returns a `RunTarget` compatible with SPEC-01:
+The probe returns a schema 1.2 `ResultsTarget` compatible with SPEC-01. In addition to connection
+identity and capabilities, it carries graph counts and the canonical schema-token inventory
+collected by the same probe:
 
 ```json
 {
@@ -166,9 +168,20 @@ The probe returns a `RunTarget` compatible with SPEC-01:
   "capabilities": {
     "apoc": true,
     "count_store": true
-  }
+  },
+  "nodes": 1250,
+  "relationships": 3480,
+  "labels": ["Account", "Customer"],
+  "relationship_types": ["CONTROLS", "OWNS"]
 }
 ```
+
+`labels` and `relationship_types` are sorted, duplicate-free arrays. When `visibility.can_read` is
+true, empty arrays mean the inventory probe completed and found no tokens. When read visibility is
+false, the diagnostic probe returns empty inventory arrays with null counts and explicitly reports
+`can_read:false`; the run engine rejects that target before producing a non-failed result. A public
+probe never uses `null` inventory, which remains reserved for pre-1.2 result artifacts loaded under
+SPEC-01.
 
 APOC is binary: `true` only when an APOC procedure can be called successfully. The CLI performs
 this APOC procedure check during both `graphcheck init` and `graphcheck debug` so setup feedback
@@ -247,7 +260,9 @@ as blocked whenever the live probe reports `apoc: false`.
 ## Stable debug JSON
 
 `graphcheck debug --json` emits the following trace. Debug verifies connectivity, server metadata,
-APOC usability, count-store usability, graph counts, and check capability blockers.
+APOC usability, count-store usability, graph counts, schema-token inventory, and check capability
+blockers. The top-level `counts` object remains for compatibility and mirrors `target.nodes` and
+`target.relationships`.
 
 Success:
 
@@ -263,7 +278,11 @@ Success:
     "capabilities": {
       "apoc": true,
       "count_store": true
-    }
+    },
+    "nodes": 0,
+    "relationships": 0,
+    "labels": [],
+    "relationship_types": []
   },
   "visibility": {
     "can_connect": true,
