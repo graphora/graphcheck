@@ -23,7 +23,7 @@ graph, runs your checks, and reports pass/fail/error results directly in the PR'
 ```
 
 Not yet published to PyPI or the GitHub Marketplace. This example installs GraphCheck from source
-in the same job, matching this repo's own `.github/workflows/graphcheck.yml`. Once [Release] ships
+in the same job, matching this repo's own `.github/workflows/graphcheck.yml`. Once the release ships
 a published version, `version: 0.1.0` (or the current release) becomes the simpler default and the
 source-install step is no longer required. Pin to a commit SHA when using this Action from another
 repository:
