@@ -82,6 +82,7 @@ jobs:
           uv run pytest
           tests/integration/test_integration_neo4j_adapter.py
           tests/integration/test_integration_engine.py
+          tests/integration/test_mcp_neo4j_workflow.py
           tests/integration/test_performance_plans.py
           -v
 
