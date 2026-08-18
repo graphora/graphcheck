@@ -5,6 +5,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- An in-repo agent guide covering the three-tool MCP surface, validated `results.json`
+  consumption (verdicts, evidence, and the `0/1/2/3` exit-code contract), programmatic SPEC-02
+  check authoring, and the human-approval gate for inert generated checks.
 - Contributor docs: dev setup, tests/lint, and PR flow sections in CONTRIBUTING.md, plus bug/feature/docs issue templates and three good-first-issue labels.
 - A shared, immutable result-presentation layer now gives the CLI and HTML report the same
   deterministic language for clean, findings, incomplete, empty, all-skipped, and failed runs.
