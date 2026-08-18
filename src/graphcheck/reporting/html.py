@@ -267,7 +267,7 @@ def _run_title(results: Results) -> str:
 
 def _run_error_summary(code: str, message: str) -> str:
     if code == "neo4j.credential_not_read_only":
-        return "The configured Neo4j credential has privileges outside the allowed read-only model."
+        return "The configured Neo4j credential does not use only the built-in READER role."
     return message
 
 
@@ -287,9 +287,9 @@ def _troubleshooting_dialog(results: Results) -> str:
         return ""
     if error.code == "neo4j.credential_not_read_only":
         steps = (
-            "Create a dedicated Neo4j user for GraphCheck.",
-            "Grant it only ACCESS and MATCH (or READ/TRAVERSE) on the target database and graph.",
-            "Update user and password/password_env in profiles.yml to use that account.",
+            "Grant Neo4j's built-in reader role to the configured user.",
+            "Revoke every other assigned role except PUBLIC.",
+            "Update user and password/password_env in profiles.yml if you select another account.",
             "Run graphcheck debug, then graphcheck run.",
         )
     else:

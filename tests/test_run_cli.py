@@ -336,7 +336,7 @@ def test_execute_run_classifies_unexpected_engine_fault_as_engine_unexpected(tmp
     assert len(writes) == 1
 
 
-def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypatch):
+def test_execute_run_surfaces_reader_role_rejection(tmp_path, monkeypatch):
     from graphcheck.application.run import RunRequest, execute_run
 
     _project(tmp_path, _SMOKE_SUITE)
@@ -346,8 +346,8 @@ def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypat
         def verify_read_only_credential(self):
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The configured Neo4j credential is not read-only.",
-                "Use a dedicated read-only credential, then run the suite again.",
+                "The configured Neo4j credential does not use only READER.",
+                "Grant the built-in reader role, then run the suite again.",
             )
 
     client = RejectingClient([QueryResult([{"value": 1}], ("value",), ())])
@@ -1280,7 +1280,7 @@ competency:
     assert client.closed is True
 
 
-def test_run_rejects_write_capable_credential_and_reports_visible_fix(tmp_path, monkeypatch):
+def test_run_rejects_credential_without_reader_role_and_reports_visible_fix(tmp_path, monkeypatch):
     _project(
         tmp_path,
         {
@@ -1295,15 +1295,15 @@ competency:
         },
     )
 
-    class WriteCapableClient(FakeClient):
+    class WrongRoleClient(FakeClient):
         def verify_read_only_credential(self):
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The credential has WRITE.",
-                "Use a dedicated read-only user.",
+                "The credential has role EDITOR instead of READER.",
+                "Grant the built-in reader role.",
             )
 
-    client = WriteCapableClient()
+    client = WrongRoleClient()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
 
@@ -1315,7 +1315,7 @@ competency:
         encoding="utf-8"
     )
     assert "Troubleshooting Steps" in report
-    assert "The credential has WRITE." in report
+    assert "The credential has role EDITOR instead of READER." in report
     assert "Action required" not in report
     assert client.read_calls == []
 

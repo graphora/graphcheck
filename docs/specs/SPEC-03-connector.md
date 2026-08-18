@@ -64,12 +64,10 @@ Rules:
 6. The URI scheme is one of `bolt`, `bolt+s`, `bolt+ssc`, `neo4j`, `neo4j+s`, or `neo4j+ssc`, and
    the URI must include a host. `bolt://` is the generated direct/local default; `neo4j+s://` is
    the CA-validated TLS/routing form.
-7. On Enterprise, the selected credential is a dedicated, server-enforced read-only audit
-   credential. Init, debug, and CLI run inspect `SHOW USER PRIVILEGES` and allow only database
-   access, graph reads, the default non-mutating `LOAD ON ALL DATA` grant, and non-boosted
-   procedure/function execution. Graph writes, boosted execution, schema/database/DBMS
-   administration, and write-capable built-in roles fail as `neo4j.credential_not_read_only`;
-   missing privilege evidence fails closed as
+7. On Enterprise, the selected credential has only Neo4j's built-in `reader` role and the
+   automatic `PUBLIC` role. Init, debug, and CLI run inspect `SHOW CURRENT USER`; a missing
+   `reader` role or any additional role fails as `neo4j.credential_not_read_only`. Missing or
+   malformed role evidence fails closed as
    `neo4j.credential_read_only_unverified`. Community has no RBAC and all users have implied
    administrator privileges, so its edition policy skips this unavailable gate and retains the
    per-query `EXPLAIN` read guard.
@@ -94,10 +92,11 @@ read_transaction(*, timeout_s: float | None = None)
 ```
 
 Read sessions use Neo4j read access mode for routing. Driver access mode is not an access-control
-boundary. The CLI connection preflight therefore inspects the supplied audit credential's reported
-privileges, and `run_read_result` separately asks the server to plan `EXPLAIN <query>` before it
-executes customer-authored Cypher. Only query type `r` executes; write, read/write, schema, missing,
-or unknown classifications fail closed. GraphCheck does not parse Cypher or use a keyword blocklist.
+boundary. The CLI connection preflight therefore requires the supplied Enterprise credential's
+reported role set to be `reader` plus `PUBLIC`, and `run_read_result` separately asks the server to
+plan `EXPLAIN <query>` before it executes customer-authored Cypher. Only query type `r` executes;
+write, read/write, schema, missing, or unknown classifications fail closed. GraphCheck does not
+parse Cypher or use a keyword blocklist.
 
 `ResultPolicy(max_rows, require_complete)` bounds retained rows. Bounded results expose `rows`,
 `columns`, `complete`, `observed_rows`, `limit`, notifications, server timings, and read-guard
@@ -144,8 +143,8 @@ Adapter errors use the same `{ code, message, fix }` shape as SPEC-01 `CheckErro
 | `neo4j.auth_failed` | Credentials were rejected. |
 | `neo4j.database_not_found` | The configured database does not exist or is unavailable. |
 | `neo4j.tls_mismatch` | The endpoint TLS/certificate mode does not match the URI scheme. |
-| `neo4j.credential_not_read_only` | Enterprise grants fall outside the explicit read-only model. |
-| `neo4j.credential_read_only_unverified` | Enterprise current-user privileges were unavailable. |
+| `neo4j.credential_not_read_only` | Enterprise credential lacks `reader` or has a role besides `reader`/`PUBLIC`. |
+| `neo4j.credential_read_only_unverified` | Enterprise current-user roles were unavailable or malformed. |
 | `neo4j.unsupported_version` | The server predates the supported Neo4j 5/CalVer lines. |
 | `neo4j.permission_denied` | Credentials do not permit the requested read/probe. |
 | `neo4j.query_failed` | A read query failed after connection succeeded. |
@@ -209,11 +208,11 @@ RETURN nodes, relationships
 ```
 
 The two compatible count-store reads execute as one request and one snapshot. Server metadata,
-schema tokens, privileges, APOC, and count-store planning remain independently distinguishable
-requests because their permission and fallback behavior differs. Capability checks are deferred
-until connectivity is established; count-store planning is omitted when full read visibility is
-unavailable. Public complete probes still resolve both capability booleans rather than treating an
-unprobed capability as `false`.
+schema tokens, current-user roles, effective graph privileges, APOC, and count-store planning
+remain independently distinguishable requests because their permission and fallback behavior
+differs. Capability checks are deferred until connectivity is established; count-store planning is
+omitted when full read visibility is unavailable. Public complete probes still resolve both
+capability booleans rather than treating an unprobed capability as `false`.
 
 On Enterprise Edition, the probe checks the current user's effective graph privileges independently
 of these count queries. Full read visibility requires unrestricted access to all properties on both

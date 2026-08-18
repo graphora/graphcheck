@@ -375,8 +375,9 @@ C1 does not attempt to parse or block write keywords. C2 creates every session w
 `neo4j.READ_ACCESS` for routing, then submits `EXPLAIN <query>` and executes the original statement
 only if Neo4j classifies the plan as read-only. Write/read-write/schema or unknown classifications
 fail closed as `neo4j.write_rejected` or `neo4j.read_guard_unavailable`; no customer write statement
-is submitted. A dedicated Neo4j credential without write privileges remains required deployment
-defense in depth because driver access mode by itself is not an authorization boundary.
+is submitted. On Enterprise, a credential assigned only Neo4j's built-in `reader` role (plus
+`PUBLIC`) remains required deployment defense in depth because driver access mode by itself is not
+an authorization boundary.
 
 Every target probe, token lookup, population preflight, and check query receives the current
 remaining run budget when the connector method accepts `timeout_s`. Timeout, broken Cypher, auth,

@@ -130,7 +130,7 @@ The report shows:
   exact stored counts and never use clean language,
 - a `Troubleshoot.` action for failed runs that opens an offline `Troubleshooting Steps` dialog with
   the full stored problem and remediation steps; the overview does not duplicate that diagnostic,
-- a concise header for `neo4j.credential_not_read_only` while its full privilege detail remains in
+- a concise header for `neo4j.credential_not_read_only` while its full role detail remains in
   the troubleshooting dialog,
 - target database, version, edition, node count, and relationship count when available,
 - a compact label and relationship-type summary sourced directly from `run.target`, with the exact
@@ -404,7 +404,7 @@ The tests assert:
 - evidence IDs are visible,
 - failed-run errors are visible,
 - failed runs remain failed in the header and history, expose troubleshooting in a dialog without
-  a duplicate overview callout, and abbreviate verbose credential privilege details only in the
+  a duplicate overview callout, and abbreviate verbose credential role details only in the
   header,
 - `report --open` selects the newest HTML report,
 - `report --open <id>` selects a historical report and a bare ID is rejected,
