@@ -222,11 +222,13 @@ path = Path("checks/agent-proposal.yml")
 payload = {
     "suite": "agent-proposal",
     "generated": True,
-    "conformance": [{
-        "id": "customer-id-unique",
-        "check": "uniqueness",
-        "with": {"label": "Customer", "property": "customer_id"},
-    }],
+    "conformance": [
+        {
+            "id": "customer-id-unique",
+            "check": "uniqueness",
+            "with": {"label": "Customer", "property": "customer_id"},
+        }
+    ],
 }
 text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
 load_suite(text, source=str(path))
