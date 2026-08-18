@@ -21,8 +21,9 @@ read-access sessions, explicit transactions, `neo4j.Query` timeouts, result summ
 query-type classification, notifications, and GQL status objects with compatibility fallbacks.
 
 Server images are exact rather than floating: `neo4j:5.26.28` and `neo4j:2026.06.0`, with matching
-`-enterprise` images for privilege, HOME database, and restricted-credential checks. The current
-server runs separate database-default Cypher 5 and Cypher 25 lanes. See Neo4j's
+`-enterprise` images for the built-in `reader` role gate, effective privileges, HOME database, and
+restricted-credential checks. The current server runs separate database-default Cypher 5 and
+Cypher 25 lanes. See Neo4j's
 [server archive](https://neo4j.com/docs/reference/docs-archive/),
 [driver API](https://neo4j.com/docs/api/python-driver/current/), and
 [Cypher version configuration](https://neo4j.com/docs/operations-manual/current/configuration/cypher-version-configuration/).
