@@ -296,7 +296,9 @@ baseline JSON from `<artifacts>/baselines/`, which is `.graphcheck/baselines/` b
 - `baseline: latest` selects the lexicographically newest `.json` filename.
 
 `graphcheck profile` captures timestamped baselines in that directory. A missing, invalid, or
-incomplete requested measurement is an explicit check error, never a pass. See
+incomplete requested measurement is an explicit check error, never a pass. A valid requested
+measurement can still be used when another part of its profile is incomplete; that unrelated
+profile gap does not make the check run partial. See
 [SPEC-04](docs/specs/SPEC-04%20Engine.md#baselines) for the accepted baseline shapes and resolution
 rules.
 

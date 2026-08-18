@@ -17,8 +17,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Offline reports now include a compact target summary with graph size, schema inventory, and
   capability availability; a permanent `Not Evaluated` coverage section; and an accessible,
   tabbed `Checks Explorer` / `Next Steps` panel with fixed non-personalized guidance.
-- Multi-suite CLI runs now include a borderless score and coverage table, while runs with skipped
-  checks include a concise table naming each unevaluated check and its persisted reason.
+- CLI runs now include a borderless per-suite score and coverage table, including single-suite
+  runs, while runs with skipped checks include a concise table naming each unevaluated check and
+  its persisted reason.
+- Drift checks can complete using a present, valid measurement from an otherwise partial baseline;
+  missing measurements from partial baselines remain explicit partial-run errors.
 - A clean all-pass results fixture and CR1–5 implementation roadmap document the new outcome,
   coverage, target, ledger, navigation, and generic-guidance acceptance contracts.
 - Verified mask-redacted exports through `graphcheck run --redact` (alias `--redacted`) and
