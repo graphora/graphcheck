@@ -6,6 +6,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 - In-repo reference docs: CI setup, check reference (all core/PII checks with fraud-ring fixture examples), install/quickstart pointer, and a troubleshooting FAQ covering profile/connection/read-only errors.
+- An in-repo agent guide covering the three-tool MCP surface, validated `results.json`
+  consumption (verdicts, evidence, and the `0/1/2/3` exit-code contract), programmatic SPEC-02
+  check authoring, and the human-approval gate for inert generated checks.
 - Contributor docs: dev setup, tests/lint, and PR flow sections in CONTRIBUTING.md, plus bug/feature/docs issue templates and three good-first-issue labels.
 - A shared, immutable result-presentation layer now gives the CLI and HTML report the same
   deterministic language for clean, findings, incomplete, empty, all-skipped, and failed runs.
@@ -26,6 +29,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
   target-derived run IDs.
 - Added relationship-preserving aliases for free-form identifiers and a source-aware final-artifact
   literal scan with an explicit structural allowlist.
+- A purely local Docker Compose quickstart with pinned Neo4j 5.26.28 and automatic loading of the
+  canonical reproducible fraud-ring fixture.
+- Baseline-free fraud-ring conformance checks for the local demo, alongside the existing
+  connection smoke check.
 - Repository scaffold: packaging, minimal CLI, CI, governance.
 - SPEC-01 `results.json` and SPEC-02 check YAML contracts: Pydantic models (source of truth), generated JSON Schemas, machine-valid fixtures, and validation tests.
 - SPEC-03 for the neo4j connector.
@@ -123,11 +130,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
   install has an actionable path from `graphcheck init` to `graphcheck debug`.
 - Stable connection-profile diagnostics for invalid URIs, TLS/certificate mismatches, unavailable
   databases, credentials whose Enterprise read-only status cannot be verified, and credentials
-  with privileges outside GraphCheck's explicit read-only model. The new safe error codes are also
-  covered by telemetry policy and report rendering.
+  missing the required built-in `reader` role or carrying additional roles. The new safe error
+  codes are also covered by telemetry policy and report rendering.
 - Live Neo4j integration coverage for Community Edition `debug` and `run`, Enterprise administrator
-  rejection, and custom boosted-procedure/schema-administration rejection across the supported
-  Neo4j/Cypher matrix.
+  rejection, built-in `reader` acceptance, and missing/additional-role rejection across the
+  supported Neo4j/Cypher matrix.
 
 ### Changed
 
@@ -143,7 +150,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
   coverage instead of using broad `All clear` / `No issues found` language or a duplicate Issue
   Summary table.
 - Expanded the README's Neo4j setup guidance with edition-specific credential requirements,
-  Enterprise read-only user provisioning, and Community Edition's planner-guarded security model.
+  Enterprise built-in `reader` role provisioning, and Community Edition's planner-guarded
+  security model.
 - `graphcheck report --open [ID]` now opens the latest report when no ID is supplied and replaces
   the separate `--run ID` selector when opening a historical report.
 - Offline reports now present each suite's independently calculated score alongside execution
@@ -219,9 +227,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
   actionable diagnostics. Init reports whether Neo4j was detected and directs unsuccessful setup
   to `graphcheck debug`; debug preserves the same error shape in human and JSON output.
 - Init, debug, and run now share a credential preflight. Community Edition follows an explicit
-  planner-guarded policy because it has no RBAC, while Enterprise permits only database access,
-  graph reads, the default non-mutating `LOAD ON ALL DATA` grant, and non-boosted
-  procedure/function execution and fails closed when privilege evidence is unavailable.
+  planner-guarded policy because it has no RBAC, while Enterprise requires exactly Neo4j's
+  built-in `reader` role plus `PUBLIC` and fails closed when current-user role evidence is
+  unavailable or malformed.
 - Neo4j error mapping now considers driver error codes, nested causes, and the selected profile to
   distinguish authentication, reachability, TLS, permission, query, and database failures and to
   provide profile-specific remediation.
@@ -291,15 +299,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Test configuration now isolates telemetry consent, installation identity, process overrides, and
   delivery keys per test, so persisted user configuration cannot construct a real telemetry client
   or change CLI/profile test behavior.
-- Restored the supported Community Edition path by skipping the unavailable Enterprise privilege
-  query after edition probing while retaining the per-query `EXPLAIN` read guard. This also fixes
+- Restored the supported Community Edition path by skipping the unavailable Enterprise role gate
+  after edition probing while retaining the per-query `EXPLAIN` read guard. This also fixes
   the Community-backed GraphCheck CI smoke job failing setup with exit code 3.
-- Closed the custom-role privilege bypass by inspecting privilege action, resource, and segment and
-  rejecting boosted execution plus graph-write, schema, database, transaction-management, and
-  DBMS-administrative grants instead of relying on built-in role names alone.
-- Accepted Neo4j's default `PUBLIC`-role `LOAD ON ALL DATA` privilege as non-mutating while still
-  rejecting scoped `LOAD ON CIDR` grants, preventing valid restricted Enterprise credentials from
-  failing every supported Neo4j/Cypher integration lane.
 - Run preflight now rejects unsafe or unverifiable Enterprise credentials before any checks execute
   and preserves the resulting error and fix in `results.json`, console output, and the HTML report.
 - Corrected Neo4j 5/Cypher 5 and current Neo4j/Cypher 25 diagnostics so missing or unavailable APOC

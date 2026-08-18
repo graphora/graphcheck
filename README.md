@@ -107,15 +107,15 @@ The credential requirement depends on that result:
 
 | Neo4j edition | Credential GraphCheck accepts | Protection model |
 | --- | --- | --- |
-| Enterprise, including Desktop Developer Edition | A dedicated server-enforced read-only user | Neo4j RBAC plus GraphCheck's query guard |
+| Enterprise, including Desktop Developer Edition | A user assigned only the built-in `reader` role (plus `PUBLIC`) | Neo4j RBAC plus GraphCheck's query guard |
 | Community | The configured Community user, which is necessarily admin-equivalent | GraphCheck's query guard; Community cannot enforce read-only roles |
 
-For Enterprise/Developer, an administrator provisions the audit user once; everyone running
-GraphCheck can then use that service credential through an environment variable or secret manager.
-Do not configure an Enterprise `admin`, `architect`, `publisher`, or `editor` account: GraphCheck
-rejects credentials with effective write or administrative privileges.
+For Enterprise/Developer, an administrator assigns Neo4j's built-in `reader` role to the account
+used by GraphCheck. That account must have no other assigned role except the automatic `PUBLIC`
+role. GraphCheck therefore rejects `admin`, `architect`, `publisher`, `editor`, and custom roles.
 
-Edit `profiles.yml`. This Enterprise/Developer example uses the dedicated user created below:
+Edit `profiles.yml`. This Enterprise/Developer example uses an account assigned the built-in
+`reader` role:
 
 ```yaml
 default: local
@@ -132,13 +132,10 @@ is absent, GraphCheck falls back to `password` when one is configured. For the q
 setup, edit the generated inline `password` value. For CI or shared environments, remove the inline
 value, keep `password_env`, and export that variable in the process that runs GraphCheck.
 
-On Neo4j Enterprise/Developer, the account must be a dedicated, server-enforced read-only audit
-credential.
-During `init`, `debug`, and the CLI run preflight, GraphCheck reads the current user's effective
-privileges and permits only database access, graph reads, the default non-mutating `LOAD ON ALL
-DATA` grant, and non-boosted procedure/function execution. Graph writes, boosted execution,
-schema/database/DBMS administration, and elevated built-in roles are rejected as
-`neo4j.credential_not_read_only`. If Enterprise cannot return the reported privileges, GraphCheck
+On Neo4j Enterprise/Developer, the account must have only the built-in `reader` role and the
+automatic `PUBLIC` role. During `init`, `debug`, and the CLI run preflight, GraphCheck reads the
+current user's roles with `SHOW CURRENT USER`. A missing `reader` role or any additional role is
+rejected as `neo4j.credential_not_read_only`. If Enterprise cannot return the roles, GraphCheck
 fails closed as `neo4j.credential_read_only_unverified`.
 
 Neo4j Community has no roles and gives every user implied administrator privileges, so it cannot
@@ -149,21 +146,15 @@ query is rejected without modifying the graph. Driver read routing alone is not 
 boundary.
 
 In Desktop 2, open the instance's **Query** tool as the existing `neo4j` administrator. On Neo4j
-Enterprise/Developer, provision a new user and narrowly scoped role for database `neo4j` with:
+Enterprise/Developer, grant the built-in role to the user configured in `profiles.yml`:
 
 ```cypher
-CREATE ROLE graphcheck_auditor IF NOT EXISTS;
-CREATE USER graphcheck SET PASSWORD 'replace-with-a-strong-password' CHANGE NOT REQUIRED;
-GRANT ACCESS ON DATABASE neo4j TO graphcheck_auditor;
-GRANT MATCH {*} ON GRAPH neo4j ELEMENTS * TO graphcheck_auditor;
-GRANT ROLE graphcheck_auditor TO graphcheck;
+GRANT ROLE reader TO graphcheck;
 ```
 
-Grant this user no write, boosted execution, schema, database-administration, DBMS-administration,
-or broader inherited role. In particular, do not add the built-in `admin`, `architect`, `publisher`,
-`editor`, or `reader` role; the custom role intentionally contains only the privileges GraphCheck
-needs. If the user already exists, use `ALTER USER graphcheck SET PASSWORD
-'replace-with-a-strong-password' CHANGE NOT REQUIRED` instead of `CREATE USER`.
+Revoke any `admin`, `architect`, `publisher`, `editor`, or custom role from that user; `reader` and
+the automatic `PUBLIC` role must be its complete role set. GraphCheck no longer requires custom
+roles or individually granted privileges.
 
 Set the matching password in the same shell that starts GraphCheck:
 
@@ -377,8 +368,8 @@ thresholds, and cost before removing both applicable markers to activate a check
 ## Reliability and safety
 
 - Neo4j execution is read-only and fails closed unless the planner classifies a statement as read.
-- The connection preflight fails if Neo4j reports a graph-write grant or write-capable built-in
-  role for the audit credential, or if GraphCheck cannot inspect the user's reported privileges.
+- The Enterprise connection preflight fails unless Neo4j reports only the built-in `reader` role
+  and `PUBLIC`, or if GraphCheck cannot inspect the current user's roles.
 - Built-in Cypher keeps labels, relationship types, property names, regexes, thresholds, and values
   in parameters rather than interpolating user data into query text.
 - One broken query or evaluator error is isolated to its check unless fail-fast or the run deadline
@@ -421,6 +412,9 @@ recursive and includes `.yml` and `.yaml` files. Every discovered suite is read 
 directly on each command before suite-id filtering; GraphCheck does not create a suite-discovery
 cache file. `concurrency` is a positive worker limit; the default is `1`, and
 `graphcheck run --concurrency N` overrides the project value.
+
+For agent integration, result consumption, and programmatic check authoring, see the
+[GraphCheck agent guide](docs/agents.md).
 
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 
