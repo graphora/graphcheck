@@ -35,13 +35,13 @@ def shape_cases(draw):
         ],
     }
     rows = [{"node_element_id": f"node-{index}"} for index in range(row_count)]
-    return yaml.safe_dump(data), rows, minimum <= row_count <= maximum
+    return data, rows, minimum <= row_count <= maximum
 
 
 @given(shape_cases())
 def test_shape_evaluation_matches_all_declared_predicates(case):
-    suite_yaml, rows, expected_pass = case
-    check = load_suite(suite_yaml).checks[0]
+    data, rows, expected_pass = case
+    check = load_suite(yaml.safe_dump(data)).checks[0]
     compiled = compile_check(check)
 
     if not rows and not expected_pass:
@@ -62,7 +62,8 @@ def test_shape_evaluation_matches_all_declared_predicates(case):
 
 @given(shape_cases())
 def test_same_yaml_and_graph_rows_produce_the_same_evaluation(case):
-    suite_yaml, rows, _ = case
+    data, rows, _ = case
+    suite_yaml = yaml.safe_dump(data)
     first = compile_check(load_suite(suite_yaml).checks[0])
     second = compile_check(load_suite(suite_yaml).checks[0])
 

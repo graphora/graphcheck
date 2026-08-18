@@ -733,6 +733,33 @@ def test_report_render_failure_marks_requested_artifact_and_stage(
     assert "private render failure" not in repr(command)
 
 
+def test_run_render_failure_is_reported_as_report_render_not_artifact_write(
+    tmp_path,
+    monkeypatch,
+    recording_transport,
+):
+    _project(tmp_path, severity="error")
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+
+    def fail_render(model):
+        raise OSError("private render failure")
+
+    monkeypatch.setattr("graphcheck.reporting.html.render_validated_html_report", fail_render)
+
+    exit_code = _invoke_entrypoint(monkeypatch, "run")
+
+    assert exit_code == 3
+    command = _command_event(recording_transport)
+    assert command["process_outcome"] == "unexpected_error"
+    # An HTML-render failure must be attributed to report rendering, not artifact writing.
+    assert command["failure_stage"] == "report_render"
+    assert command["safe_error_code"] == "report.render_failed"
+    assert command["report_artifact"] == "error"
+    assert "private render failure" not in repr(command)
+
+
 @pytest.mark.parametrize(
     "network_error",
     [
