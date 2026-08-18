@@ -2,10 +2,10 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased 07-07-2026]
+## [Unreleased]
 
 ### Added
-
+- Contributor docs: dev setup, tests/lint, and PR flow sections in CONTRIBUTING.md, plus bug/feature/docs issue templates and three good-first-issue labels.
 - A shared, immutable result-presentation layer now gives the CLI and HTML report the same
   deterministic language for clean, findings, incomplete, empty, all-skipped, and failed runs.
 - Complete HTML check ledgers now show every selected check's stable identity and verdict, with
