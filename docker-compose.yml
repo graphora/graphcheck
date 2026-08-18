@@ -1,0 +1,57 @@
+x-neo4j-image: &neo4j-image neo4j:5.26.28
+
+services:
+  neo4j:
+    image: *neo4j-image
+    environment:
+      NEO4J_AUTH: neo4j/Password@123
+      NEO4J_initial_dbms_default__database: graphcheck-demo
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -a bolt://localhost:7687 -u neo4j -p 'Password@123'
+          -d graphcheck-demo 'RETURN 1' >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  fixture-fetch:
+    image: alpine:3.21.3
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        fixture_url="https://raw.githubusercontent.com/graphora/graphcheck-fraud-ring-fixture/d2b8c76c2d2940f53f71491703619961a699c293/fixtures/fraud-ring/seed.cypher"
+        rm -f /fixture/seed.cypher
+        wget -q -O /fixture/seed.cypher "$${fixture_url}"
+        echo "d955dbf08a3821a53e3b39f4f5234c16d13eb08c33b2a573fe422c85d5dcd90a  /fixture/seed.cypher" | sha256sum -c -
+    volumes:
+      - fixture-data:/fixture
+    restart: "no"
+
+  fixture-seed:
+    image: *neo4j-image
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        cypher-shell -a bolt://neo4j:7687 -u neo4j -p 'Password@123' \
+          -d graphcheck-demo --fail-fast -f /fixture/seed.cypher
+        echo "Fraud-ring fixture seeded successfully."
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      fixture-fetch:
+        condition: service_completed_successfully
+    volumes:
+      - fixture-data:/fixture:ro
+    restart: "no"
+
+volumes:
+  neo4j-data:
+  fixture-data:

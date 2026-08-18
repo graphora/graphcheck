@@ -88,108 +88,56 @@ def _credential_probe_client(rows, *, edition="enterprise"):
     return client
 
 
-def test_read_only_credential_probe_accepts_explicit_read_only_model():
-    _credential_probe_client(
-        [
-            {
-                "access": "GRANTED",
-                "action": "ACCESS",
-                "graph": "neo4j",
-                "resource": "database",
-                "segment": "database",
-            },
-            {
-                "access": "GRANTED",
-                "action": "MATCH",
-                "graph": "neo4j",
-                "resource": "all_properties",
-                "segment": "NODE(*)",
-            },
-            {
-                "access": "GRANTED",
-                "action": "execute",
-                "graph": "*",
-                "resource": "database",
-                "segment": "PROCEDURE(*)",
-            },
-            {
-                "access": "GRANTED",
-                "action": "load",
-                "graph": "*",
-                "resource": "all_data",
-                "segment": "ALL DATA",
-                "role": "PUBLIC",
-            },
-        ]
-    ).verify_read_only_credential()
+@pytest.mark.parametrize("roles", [["PUBLIC", "reader"], ["reader", "public"]])
+def test_read_only_credential_probe_accepts_only_builtin_reader_role(roles):
+    _credential_probe_client([{"roles": roles}]).verify_read_only_credential()
 
 
-@pytest.mark.parametrize("action", ["CREATE", "WRITE", "ALL_GRAPH_PRIVILEGES"])
-def test_read_only_credential_probe_rejects_granted_write_privilege(action):
-    client = _credential_probe_client([{"access": "GRANTED", "action": action, "graph": "neo4j"}])
+def test_read_only_credential_probe_uses_current_user_roles():
+    client = _credential_probe_client([])
+    queries = []
+    client.run_read = lambda query: queries.append(query) or [{"roles": ["PUBLIC", "reader"]}]
 
-    with pytest.raises(GraphCheckError) as caught:
-        client.verify_read_only_credential()
+    client.verify_read_only_credential()
 
-    assert caught.value.error.code == "neo4j.credential_not_read_only"
-    assert "dedicated Neo4j user" in caught.value.error.fix
-
-
-def test_read_only_credential_probe_rejects_write_capable_builtin_role():
-    client = _credential_probe_client(
-        [
-            {
-                "access": "GRANTED",
-                "action": "ACCESS",
-                "graph": "*",
-                "resource": "database",
-                "segment": "database",
-                "role": "admin",
-            }
-        ]
-    )
-
-    with pytest.raises(GraphCheckError) as caught:
-        client.verify_read_only_credential()
-
-    assert caught.value.error.code == "neo4j.credential_not_read_only"
-    assert "ROLE ADMIN" in caught.value.error.message
+    assert queries == ["SHOW CURRENT USER YIELD roles RETURN roles"]
 
 
 @pytest.mark.parametrize(
-    ("action", "resource", "segment"),
+    "roles",
     [
-        ("execute_boosted", "database", "PROCEDURE(*)"),
-        ("execute", "database", "BOOSTED PROCEDURE(*)"),
-        ("dbms_actions", "database", "database"),
-        ("index", "database", "database"),
-        ("constraint", "database", "database"),
-        ("token", "database", "database"),
-        ("transaction_management", "database", "USER(*)"),
-        ("load", "cidr", "CIDR(10.0.0.0/8)"),
+        [],
+        ["PUBLIC"],
+        ["READER"],
+        ["PUBLIC", "custom_reader"],
+        ["PUBLIC", "reader", "editor"],
+        ["PUBLIC", "reader", "custom_role"],
     ],
 )
-def test_read_only_credential_probe_rejects_boosted_and_administrative_grants(
-    action, resource, segment
-):
-    client = _credential_probe_client(
-        [
-            {
-                "access": "GRANTED",
-                "action": action,
-                "graph": "*",
-                "resource": resource,
-                "segment": segment,
-                "role": "custom_role",
-            }
-        ]
-    )
+def test_read_only_credential_probe_rejects_missing_or_additional_roles(roles):
+    client = _credential_probe_client([{"roles": roles}])
 
     with pytest.raises(GraphCheckError) as caught:
         client.verify_read_only_credential()
 
     assert caught.value.error.code == "neo4j.credential_not_read_only"
-    assert segment.upper() in caught.value.error.message
+    assert "built-in READER role" in caught.value.error.message
+    assert "Grant the built-in reader role" in caught.value.error.fix
+
+
+def test_read_only_credential_probe_reports_unverifiable_roles_when_query_fails():
+    client = _credential_probe_client([])
+
+    def fail(_query):
+        raise GraphCheckError("neo4j.permission_denied", "denied", "fix")
+
+    client.run_read = fail
+
+    with pytest.raises(GraphCheckError) as caught:
+        client.verify_read_only_credential()
+
+    assert caught.value.error.code == "neo4j.credential_read_only_unverified"
+    assert caught.value.error.message == "Neo4j could not return the configured user's roles."
 
 
 def test_read_only_credential_probe_accepts_community_without_rbac_query():
@@ -199,12 +147,13 @@ def test_read_only_credential_probe_accepts_community_without_rbac_query():
     client.verify_read_only_credential()
 
 
-def test_read_only_credential_probe_fails_closed_without_privilege_evidence():
+@pytest.mark.parametrize("rows", [[], [{"roles": None}], [{"roles": "reader"}]])
+def test_read_only_credential_probe_fails_closed_without_role_evidence(rows):
     with pytest.raises(GraphCheckError) as caught:
-        _credential_probe_client([]).verify_read_only_credential()
+        _credential_probe_client(rows).verify_read_only_credential()
 
     assert caught.value.error.code == "neo4j.credential_read_only_unverified"
-    assert "inspect its own privileges" in caught.value.error.fix
+    assert "built-in reader role" in caught.value.error.fix
 
 
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
@@ -1131,8 +1080,8 @@ def test_debug_trace_rejects_write_capable_credential_and_closes_client(monkeypa
         def verify_read_only_credential(self):
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "Credential has WRITE.",
-                "Use a read-only credential.",
+                "Credential lacks the built-in READER role.",
+                "Grant the built-in reader role.",
             )
 
         def close(self):
