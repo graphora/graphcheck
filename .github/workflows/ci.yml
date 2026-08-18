@@ -187,6 +187,7 @@ jobs:
           "$neo4j_home/bin/neo4j-admin" dbms set-initial-password graphora
           "$neo4j_home/bin/neo4j" start
           trap '"$neo4j_home/bin/neo4j" stop' EXIT
+          sed -i 's/\r$//' .github/scripts/first-run.sh
           GRAPHCHECK_BIN=/tmp/graphcheck-first-run-venv/bin/graphcheck GRAPHCHECK_PYTHON=/tmp/graphcheck-first-run-venv/bin/python FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl" bash .github/scripts/first-run.sh
       - name: Retain first-run evidence
         if: always()
