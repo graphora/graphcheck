@@ -37,6 +37,31 @@ uv run ruff check --fix .
 uv run ruff format .
 ```
 
+## Canonical sample reports
+
+The canonical report artifacts are `docs/samples/report-findings.html` and
+`docs/samples/report-clean.html`. Docker Engine or Docker Desktop must be running, and the pinned
+`vendor/graphcheck-fraud-ring-fixture` submodule must be initialized at the committed gitlink.
+
+```bash
+git submodule update --init --recursive
+```
+
+The generator creates and removes its own disposable Neo4j 5.26.28 Testcontainers instance. It
+does not use `profiles.yml` or the persistent Docker Compose database. Regenerate the artifacts:
+
+```bash
+uv run python scripts/generate_sample_reports.py
+```
+
+Verify them byte-for-byte without writing:
+
+```bash
+uv run python scripts/generate_sample_reports.py --check
+```
+
+Hosting or serving the reports is outside the scope of this workflow.
+
 ## PR flow
 
 1. Branch off `development` (never off `main`, and never push directly to either).
