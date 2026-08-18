@@ -51,15 +51,11 @@ OUTPUTS = {
 
 
 def _git_output(*args: str, cwd: Path = ROOT) -> str:
-    completed = subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    )
+    completed = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
     return completed.stdout.strip()
 
 
-def verify_fixture_checkout(
-    *, git_output: Callable[..., str] = _git_output
-) -> dict[str, Any]:
+def verify_fixture_checkout(*, git_output: Callable[..., str] = _git_output) -> dict[str, Any]:
     gitlink = git_output("rev-parse", "HEAD:vendor/graphcheck-fraud-ring-fixture", cwd=ROOT)
     if not FIXTURE_ROOT.is_dir() or not (FIXTURE_ROOT / ".git").exists():
         raise RuntimeError(
@@ -102,9 +98,7 @@ def verify_fixture_checkout(
 
     suite = SuiteInput.from_yaml(SUITE_PATH.read_text(encoding="utf-8"), source=str(SUITE_PATH))
     if suite.suite.suite != SUITE_ID:
-        raise RuntimeError(
-            f"canonical suite must be {SUITE_ID!r}, got {suite.suite.suite!r}"
-        )
+        raise RuntimeError(f"canonical suite must be {SUITE_ID!r}, got {suite.suite.suite!r}")
     return manifest
 
 
@@ -230,9 +224,7 @@ class _ReferenceParser(HTMLParser):
         self.has_link_element = False
         self.inline_styles: list[str] = []
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.has_link_element = self.has_link_element or tag.casefold() == "link"
         for name, value in attrs:
             normalized = name.casefold().rsplit(":", 1)[-1]

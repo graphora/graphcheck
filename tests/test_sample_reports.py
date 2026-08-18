@@ -104,9 +104,7 @@ def test_self_containment_validation_rejects_references(bad: str):
 
 
 def test_self_containment_validation_accepts_renderer_output():
-    html = render_validated_html_report(
-        samples.canonicalize_results(_results("clean"), "clean")
-    )
+    html = render_validated_html_report(samples.canonicalize_results(_results("clean"), "clean"))
     samples.assert_self_contained_html(html)
 
 
@@ -235,9 +233,7 @@ def test_report_publication_stages_every_file_before_replacing(tmp_path: Path):
     assert outputs["clean"].read_bytes() == b"old-clean"
     assert not list(tmp_path.glob("*.tmp"))
 
-    samples.publish_reports(
-        {"findings": b"new-findings", "clean": b"new-clean"}, outputs=outputs
-    )
+    samples.publish_reports({"findings": b"new-findings", "clean": b"new-clean"}, outputs=outputs)
     assert outputs["findings"].read_bytes() == b"new-findings"
     assert outputs["clean"].read_bytes() == b"new-clean"
     assert not list(tmp_path.glob("*.tmp"))
@@ -257,9 +253,7 @@ def test_committed_sample_is_complete_and_self_contained(variant: str):
 
 
 def test_committed_samples_embed_current_renderer_assets():
-    current = render_validated_html_report(
-        samples.canonicalize_results(_results("clean"), "clean")
-    )
+    current = render_validated_html_report(samples.canonicalize_results(_results("clean"), "clean"))
 
     def embedded_assets(html: str) -> tuple[str, str]:
         style = re.search(r"<style>\n(.*?)\n</style>", html, re.DOTALL)
