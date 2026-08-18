@@ -6,6 +6,28 @@ on:
     branches: [development, main]
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch every branch
+        run: git fetch --prune --no-tags origin "+refs/heads/*:refs/remotes/origin/*"
+      - name: Install checksum-verified gitleaks
+        env:
+          GITLEAKS_VERSION: 8.29.1
+          GITLEAKS_SHA256: e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924
+        run: >-
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"; curl --fail --silent --show-error --location
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          --output "$archive"; echo "$GITLEAKS_SHA256  $archive" | sha256sum --check -;
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks; echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan complete Git history
+        run: gitleaks git --redact --log-opts="--all" .
+
   lint:
     runs-on: ubuntu-latest
     steps:
