@@ -20,35 +20,7 @@ from graphcheck.contracts.results import Capabilities, CheckError, ResultsTarget
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 
 READ_GUARD_CACHE_CAPACITY = 256
-WRITE_CAPABLE_BUILTIN_ROLES = frozenset({"ADMIN", "ARCHITECT", "EDITOR", "PUBLISHER"})
-READ_ONLY_GRAPH_PRIVILEGE_ACTIONS = frozenset({"MATCH", "READ", "TRAVERSE"})
-
-
-def _privilege_field(row: Mapping[str, object], name: str) -> str:
-    return str(row.get(name, "")).replace("_", " ").upper()
-
-
-def _is_allowed_read_only_privilege(row: Mapping[str, object]) -> bool:
-    action = _privilege_field(row, "action")
-    resource = _privilege_field(row, "resource")
-    segment = _privilege_field(row, "segment")
-    if action == "ACCESS":
-        return resource == "DATABASE" and segment == "DATABASE"
-    if action in READ_ONLY_GRAPH_PRIVILEGE_ACTIONS:
-        return resource in {"ALL PROPERTIES", "GRAPH", "PROPERTY"}
-    if action == "LOAD":
-        return segment == "ALL DATA"
-    return (
-        action == "EXECUTE"
-        and resource == "DATABASE"
-        and segment.startswith(("FUNCTION(", "PROCEDURE("))
-    )
-
-
-def _privilege_description(row: Mapping[str, object]) -> str:
-    action = _privilege_field(row, "action") or "UNKNOWN"
-    segment = _privilege_field(row, "segment")
-    return f"{action} {segment}".strip()
+REQUIRED_READER_ROLES = frozenset({"PUBLIC", "READER"})
 
 
 @dataclass(frozen=True)
@@ -673,7 +645,7 @@ class Neo4jClient:
         return target, Visibility(True, can_read, can_show_procedures), counts
 
     def verify_read_only_credential(self, *, timeout_s: float | None = None) -> None:
-        """Enforce Enterprise RBAC; Community relies on the per-query planner guard."""
+        """Require Enterprise's built-in reader role; Community uses the planner guard."""
 
         edition = self._probe_edition
         if edition is None:
@@ -684,49 +656,33 @@ class Neo4jClient:
         try:
             rows = _run_read_with_timeout(
                 self,
-                "SHOW USER PRIVILEGES YIELD access, action, graph, resource, segment, role "
-                "RETURN access, action, graph, resource, segment, role",
+                "SHOW CURRENT USER YIELD roles RETURN roles",
                 timeout_s,
             )
         except GraphCheckError as exc:
             raise GraphCheckError(
                 "neo4j.credential_read_only_unverified",
-                "Neo4j could not return the configured user's reported privileges.",
-                "Use Neo4j Enterprise with a native user that can inspect its own privileges and "
-                "has only ACCESS and MATCH, then run `graphcheck debug` again.",
+                "Neo4j could not return the configured user's roles.",
+                "Use Neo4j Enterprise with a user assigned only the built-in reader role (plus "
+                "PUBLIC), then run `graphcheck debug` again.",
             ) from exc
-        if not rows:
+        reported_roles = rows[0].get("roles") if rows else None
+        if not isinstance(reported_roles, (list, tuple)):
             raise GraphCheckError(
                 "neo4j.credential_read_only_unverified",
-                "Neo4j did not return the configured user's reported privileges.",
-                "Allow the user to inspect its own privileges, or use a native Neo4j user with "
-                "only ACCESS and MATCH, then run `graphcheck debug` again.",
+                "Neo4j did not return the configured user's roles.",
+                "Use Neo4j Enterprise with a user assigned only the built-in reader role (plus "
+                "PUBLIC), then run `graphcheck debug` again.",
             )
-        disallowed_grants = sorted(
-            {
-                _privilege_description(row)
-                for row in rows
-                if str(row.get("access", "")).upper() == "GRANTED"
-                and not _is_allowed_read_only_privilege(row)
-            }
-        )
-        write_roles = sorted(
-            {
-                str(row.get("role", "")).upper()
-                for row in rows
-                if str(row.get("role", "")).upper() in WRITE_CAPABLE_BUILTIN_ROLES
-            }
-        )
-        if disallowed_grants or write_roles:
-            details = [*disallowed_grants, *(f"ROLE {role}" for role in write_roles)]
+        roles = {str(role).upper() for role in reported_roles}
+        if roles != REQUIRED_READER_ROLES:
+            details = ", ".join(sorted(roles)) or "none"
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The configured Neo4j credential has privileges outside the allowed read-only "
-                "model "
-                f"({', '.join(details)}) and is not server-enforced read-only.",
-                "Create a dedicated Neo4j user with only ACCESS and MATCH (or READ/TRAVERSE), "
-                "update `user` and its password in profiles.yml, then run `graphcheck debug` "
-                "again.",
+                "The configured Neo4j credential must have only Neo4j's built-in READER role "
+                f"(plus PUBLIC); reported roles: {details}.",
+                "Grant the built-in reader role to the configured user, revoke every role except "
+                "reader and PUBLIC, then run `graphcheck debug` again.",
             )
 
     def _server_info(self, *, timeout_s: float | None = None) -> tuple[str, str]:
@@ -1180,7 +1136,7 @@ def _assert_server_classified_read(
         raise GraphCheckError(
             "neo4j.read_guard_unavailable",
             "The Neo4j session cannot perform the server-side read-only preflight.",
-            "Use the supported Neo4j driver and a dedicated read-only database credential.",
+            "Use the supported Neo4j driver and a credential with the built-in reader role.",
         )
     text = _explain_query(query)
     driver_query = (
@@ -1202,13 +1158,13 @@ def _assert_server_classified_read(
         raise GraphCheckError(
             "neo4j.write_rejected",
             "GraphCheck rejected a query that Neo4j classified as write-capable.",
-            "Replace the query with read-only Cypher and use a credential without write "
-            "privileges.",
+            "Replace the query with read-only Cypher; on Enterprise, use a credential with only "
+            "the built-in reader role plus PUBLIC.",
         )
     raise GraphCheckError(
         "neo4j.read_guard_unavailable",
         f"Neo4j returned unknown query type {query_type!r} for the read-only preflight.",
-        "Use a supported Neo4j server/driver and a dedicated read-only database credential.",
+        "Use a supported Neo4j server/driver and a credential with the built-in reader role.",
     )
 
 
@@ -1465,8 +1421,8 @@ def map_neo4j_error(exc: Exception, profile: ConnectionProfile | None = None) ->
         return GraphCheckError(
             "neo4j.permission_denied",
             "Neo4j denied a read or probe query for the configured user.",
-            "Grant the dedicated user ACCESS plus MATCH (or READ/TRAVERSE) on the configured "
-            "database, then run `graphcheck debug` again.",
+            "On Enterprise, grant the built-in reader role to the configured user; then run "
+            "`graphcheck debug` again.",
         )
     return GraphCheckError(
         "neo4j.query_failed",

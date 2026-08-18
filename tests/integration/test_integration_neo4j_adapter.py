@@ -110,7 +110,22 @@ competency:
     assert payload["run"]["exit_code"] == 0
 
 
-def test_restricted_user_real_probe_reports_blocked_read_check(
+def test_debug_accepts_real_builtin_reader_role(neo4j_enterprise_profiles, tmp_path, monkeypatch):
+    write_default_project(tmp_path)
+    write_example_suite(tmp_path)
+    reader = neo4j_enterprise_profiles["graphcheck_reader"]
+    _write_cli_profile(tmp_path, "reader", reader)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["debug", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["visibility"]["can_connect"] is True
+    assert payload["visibility"]["can_read"] is True
+
+
+def test_debug_rejects_real_user_without_reader_role(
     neo4j_restricted_profile, tmp_path, monkeypatch
 ):
     write_default_project(tmp_path)
@@ -120,15 +135,10 @@ def test_restricted_user_real_probe_reports_blocked_read_check(
 
     result = runner.invoke(app, ["debug", "--json"])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["visibility"]["can_connect"] is True
-    assert payload["visibility"]["can_read"] is False
-    assert payload["counts"] == {"nodes": None, "relationships": None}
-    assert any(
-        blocked["check_id"] == "customer-name-present" and blocked["missing_capability"] == "read"
-        for blocked in payload["blocked_checks"]
-    )
+    assert payload["error"]["code"] == "neo4j.credential_not_read_only"
+    assert "READER" in payload["error"]["message"]
 
 
 def test_debug_rejects_real_write_capable_admin_credential(
@@ -148,9 +158,7 @@ def test_debug_rejects_real_write_capable_admin_credential(
     assert payload["error"]["fix"]
 
 
-def test_debug_rejects_real_custom_boosted_and_administrative_role(
-    neo4j_enterprise_profiles, tmp_path, monkeypatch
-):
+def test_debug_rejects_real_custom_role(neo4j_enterprise_profiles, tmp_path, monkeypatch):
     write_default_project(tmp_path)
     write_example_suite(tmp_path)
     boosted = neo4j_enterprise_profiles["graphcheck_boosted"]
@@ -162,7 +170,7 @@ def test_debug_rejects_real_custom_boosted_and_administrative_role(
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["error"]["code"] == "neo4j.credential_not_read_only"
-    assert "BOOSTED" in payload["error"]["message"]
+    assert "GRAPHCHECK_BOOSTED_ROLE" in payload["error"]["message"]
 
 
 def test_home_graph_grant_and_scoped_denial_use_resolved_home_database(

@@ -925,8 +925,8 @@ def test_html_renderer_displays_unreachable_neo4j_as_failed():
         ("neo4j.tls_mismatch", "TLS mode mismatch.", "Match the URI scheme to TLS."),
         (
             "neo4j.credential_not_read_only",
-            "Credential is write-capable.",
-            "Use a server-enforced read-only user.",
+            "Credential does not use only READER.",
+            "Grant the built-in reader role.",
         ),
     ],
 )
@@ -943,22 +943,22 @@ def test_html_renderer_shows_connection_troubleshooting_dialog(code, message, fi
     assert message in html
     assert "<h3>Steps</h3>" in html
     if code == "neo4j.credential_not_read_only":
-        assert "Create a dedicated Neo4j user for GraphCheck." in html
+        assert "Grant Neo4j&#x27;s built-in reader role" in html
     else:
         assert f"<li>{fix}</li>" in html
     assert "Action required" not in html
 
 
-def test_html_renderer_shortens_read_only_error_header_and_keeps_detail_in_dialog():
+def test_html_renderer_shortens_reader_role_error_header_and_keeps_detail_in_dialog():
     raw = json.loads(_fixture("failed").read_text(encoding="utf-8"))
     detail = (
-        "The configured Neo4j credential has privileges outside the allowed read-only model "
-        "(WRITE NODE(*), ROLE ADMIN) and is not server-enforced read-only."
+        "The configured Neo4j credential must have only Neo4j's built-in READER role "
+        "(plus PUBLIC); reported roles: ADMIN, PUBLIC."
     )
     raw["run"]["error"] = {
         "code": "neo4j.credential_not_read_only",
         "message": detail,
-        "fix": "Create a dedicated read-only user.",
+        "fix": "Grant the built-in reader role.",
     }
 
     html = render_html_report(raw)
@@ -968,13 +968,10 @@ def test_html_renderer_shortens_read_only_error_header_and_keeps_detail_in_dialo
         )
     ]
 
-    assert (
-        "The configured Neo4j credential has privileges outside the allowed read-only model."
-        in header
-    )
-    assert "WRITE NODE(*)" not in header
-    assert detail in html
-    assert "Update user and password/password_env in profiles.yml" in html
+    assert "The configured Neo4j credential does not use only the built-in READER role." in header
+    assert "ADMIN, PUBLIC" not in header
+    assert escape(detail) in html
+    assert "Revoke every other assigned role except PUBLIC." in html
 
 
 def test_html_renderer_can_limit_checks_to_diagnostic_verdicts():
