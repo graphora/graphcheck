@@ -422,6 +422,9 @@ directly on each command before suite-id filtering; GraphCheck does not create a
 cache file. `concurrency` is a positive worker limit; the default is `1`, and
 `graphcheck run --concurrency N` overrides the project value.
 
+For agent integration, result consumption, and programmatic check authoring, see the
+[GraphCheck agent guide](docs/agents.md).
+
 The complete frozen contracts and generated schemas live in [`docs/specs`](docs/specs/):
 
 - [SPEC-01 — results.json](docs/specs/SPEC-01-results-json.md)

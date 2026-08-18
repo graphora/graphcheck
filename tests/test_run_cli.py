@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import threading
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from io import StringIO
@@ -141,6 +142,53 @@ def test_artifact_writer_preserves_runs_completed_within_the_same_second(tmp_pat
     }
 
 
+def test_concurrent_latest_publication_is_serialized(tmp_path):
+    # MCP 2.0 runs synchronous tools in worker threads, so two runs can publish the shared
+    # `latest` alias at the same time. The publication lock must keep the exists/move/swap
+    # sequence from interleaving, so neither publisher fails and `latest` is a complete pair
+    # from exactly one run.
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True)
+
+    def make(finished_at: str):
+        results = load_results(FIXTURES / "results.complete.json")
+        results.run.finished_at = finished_at
+        return results
+
+    run_ids = {
+        "2026-07-06T09:03:41.100000Z": "neo4j_20260706T090341100000Z",
+        "2026-07-06T09:03:41.900000Z": "neo4j_20260706T090341900000Z",
+    }
+    payloads = [make(finished_at) for finished_at in run_ids]
+
+    barrier = threading.Barrier(len(payloads))
+    errors: list[Exception] = []
+    errors_lock = threading.Lock()
+
+    def publish(results):
+        try:
+            barrier.wait()
+            _write_run_artifacts(results, runs_dir)
+        except Exception as exc:
+            with errors_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=publish, args=(results,)) for results in payloads]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"concurrent publication raised: {errors}"
+
+    latest_results = runs_dir / "latest" / "results.json"
+    latest_report = runs_dir / "latest" / "report.html"
+    assert latest_results.is_file()
+    assert latest_report.is_file()
+    assert load_results(latest_results).run.id in set(run_ids.values())
+    assert {record.id for record in discover_report_runs(runs_dir)} == set(run_ids.values())
+
+
 def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):
     results = load_results(FIXTURES / "results.complete.json")
     results.run.target.database = "patient-prod"
@@ -169,14 +217,16 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
     latest_results, latest_report = _write_run_artifacts(first, runs_dir)
     previous_results = latest_results.read_bytes()
     previous_report = latest_report.read_bytes()
-    real_publish = cli_module._publish_run_directory
+    from graphcheck.application import artifacts as artifacts_module
+
+    real_publish = artifacts_module.publish_run_directory
 
     def fail_latest_refresh(artifacts, directory):
         if directory.name == "latest":
             raise OSError("simulated latest report failure")
         return real_publish(artifacts, directory)
 
-    monkeypatch.setattr(cli_module, "_publish_run_directory", fail_latest_refresh)
+    monkeypatch.setattr(artifacts_module, "publish_run_directory", fail_latest_refresh)
 
     with pytest.raises(OSError, match="simulated latest report failure"):
         _write_run_artifacts(second, runs_dir)
@@ -189,20 +239,139 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
 
 
 def test_artifact_writer_renders_once_for_history_and_latest(tmp_path, monkeypatch):
+    from graphcheck.application import artifacts as artifacts_module
+
     results = load_results(FIXTURES / "results.complete.json")
     calls = 0
-    real_render = cli_module.render_run_artifacts
+    real_render = artifacts_module.render_run_artifacts
 
-    def render_once(value):
+    def render_once(value, **kwargs):
         nonlocal calls
         calls += 1
-        return real_render(value)
+        return real_render(value, **kwargs)
 
-    monkeypatch.setattr(cli_module, "render_run_artifacts", render_once)
+    monkeypatch.setattr(artifacts_module, "render_run_artifacts", render_once)
 
     _write_run_artifacts(results, tmp_path / "runs")
 
     assert calls == 1
+
+
+_SMOKE_SUITE = {
+    "smoke.yml": """\
+suite: smoke
+competency:
+  - id: smoke
+    question: Does the graph return a value?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}, columns: [value]}
+"""
+}
+
+
+def test_execute_run_publishes_once_and_preserves_result_on_artifact_failure(tmp_path, monkeypatch):
+    from graphcheck.application.run import RunRequest, execute_run
+
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+    client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
+
+    writer_calls = 0
+
+    def failing_writer(results, runs_dir, *, render_observer=None):
+        nonlocal writer_calls
+        writer_calls += 1
+        raise OSError("simulated artifact write failure")
+
+    outcome = execute_run(
+        RunRequest(profile=None, suite_ids=["smoke"], tags=[], fail_fast=False),
+        client_factory=lambda profile, max_concurrency: client,
+        artifact_writer=failing_writer,
+    )
+
+    # Publication is attempted exactly once, never retried through the exception translation.
+    assert writer_calls == 1
+    # The completed engine result is preserved, not replaced by a run.configuration failure.
+    assert outcome.results.run.error is None
+    assert outcome.results.run.status.value != "failed"
+    # The failure surfaces as artifact_error with a real artifact-write timing boundary.
+    assert isinstance(outcome.artifact_error, OSError)
+    assert outcome.results_path is None
+    assert outcome.artifact_started_perf is not None
+
+
+def test_execute_run_classifies_unexpected_engine_fault_as_engine_unexpected(tmp_path, monkeypatch):
+    from graphcheck.application import run as run_module
+    from graphcheck.application.run import RunRequest, execute_run
+
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+    client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
+
+    class ExplodingEngine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            raise RuntimeError("unexpected engine fault")
+
+    monkeypatch.setattr(run_module, "Engine", ExplodingEngine)
+
+    writes: list[object] = []
+
+    def capture_writer(results, runs_dir, *, render_observer=None):
+        writes.append(results)
+        return runs_dir / "latest" / "results.json", runs_dir / "latest" / "report.html"
+
+    outcome = execute_run(
+        RunRequest(profile=None, suite_ids=["smoke"], tags=[], fail_fast=False),
+        client_factory=lambda profile, max_concurrency: client,
+        artifact_writer=capture_writer,
+    )
+
+    # An unexpected Engine.run() fault is an engine error, not a configuration error, and the
+    # failed result is written exactly once.
+    assert outcome.results.run.error is not None
+    assert outcome.results.run.error.code == "engine.unexpected"
+    assert len(writes) == 1
+
+
+def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypatch):
+    from graphcheck.application.run import RunRequest, execute_run
+
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+
+    class RejectingClient(FakeClient):
+        def verify_read_only_credential(self):
+            raise GraphCheckError(
+                "neo4j.credential_not_read_only",
+                "The configured Neo4j credential is not read-only.",
+                "Use a dedicated read-only credential, then run the suite again.",
+            )
+
+    client = RejectingClient([QueryResult([{"value": 1}], ("value",), ())])
+
+    def capture_writer(results, runs_dir, *, render_observer=None):
+        return runs_dir / "latest" / "results.json", runs_dir / "latest" / "report.html"
+
+    outcome = execute_run(
+        RunRequest(
+            profile=None,
+            suite_ids=["smoke"],
+            tags=[],
+            fail_fast=False,
+            verify_read_only_credential=True,
+        ),
+        client_factory=lambda profile, max_concurrency: client,
+        artifact_writer=capture_writer,
+    )
+
+    # The read-only guard runs and its rejection becomes the run failure; the engine never
+    # executes a query.
+    assert outcome.results.run.error is not None
+    assert outcome.results.run.error.code == "neo4j.credential_not_read_only"
+    assert client.read_calls == []
 
 
 def test_run_filters_suite_and_tag_writes_artifacts_and_prints_summary(tmp_path, monkeypatch):
@@ -1464,7 +1633,9 @@ competency:
             )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.engine.Engine", DeadlineEngine)
+    # The run command drives the engine through the shared application.run service, so the
+    # deadline-limited engine must be substituted where execute_run binds it.
+    monkeypatch.setattr("graphcheck.application.run.Engine", DeadlineEngine)
     monkeypatch.setattr(
         "graphcheck.cli.Neo4jClient",
         lambda profile: DeadlineClient(),
