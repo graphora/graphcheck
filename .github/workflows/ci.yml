@@ -164,9 +164,6 @@ jobs:
   first-run-wsl:
     runs-on: windows-2025
     timeout-minutes: 20
-    env:
-      GRAPHCHECK_TELEMETRY: "0"
-      NEO4J_VERSION: 5.26.28
     steps:
       - uses: actions/checkout@v4
       - name: Install a clean Ubuntu WSL environment
@@ -179,11 +176,13 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          export GRAPHCHECK_TELEMETRY=0
+          neo4j_version=5.26.28
           python3 -m venv /tmp/graphcheck-first-run-venv
           /tmp/graphcheck-first-run-venv/bin/pip install .
-          curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${NEO4J_VERSION}-unix.tar.gz" --output /tmp/neo4j.tar.gz
+          curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${neo4j_version}-unix.tar.gz" --output /tmp/neo4j.tar.gz
           tar -xzf /tmp/neo4j.tar.gz -C /tmp
-          neo4j_home="/tmp/neo4j-community-${NEO4J_VERSION}"
+          neo4j_home="/tmp/neo4j-community-${neo4j_version}"
           printf '\nserver.memory.heap.initial_size=128m\nserver.memory.heap.max_size=256m\nserver.memory.pagecache.size=128m\n' >> "$neo4j_home/conf/neo4j.conf"
           "$neo4j_home/bin/neo4j-admin" dbms set-initial-password graphora
           "$neo4j_home/bin/neo4j" start
