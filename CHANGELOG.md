@@ -5,6 +5,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- A release-oriented top-level README with a versioned project header, embedded CLI demo,
+  concise problem statement, quickstart, check-suite example, explicit non-goals, and a preserved
+  full user guide for detailed operational workflows.
 - An in-repo agent guide covering the three-tool MCP surface, validated `results.json`
   consumption (verdicts, evidence, and the `0/1/2/3` exit-code contract), programmatic SPEC-02
   check authoring, and the human-approval gate for inert generated checks.
