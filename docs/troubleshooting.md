@@ -1,8 +1,8 @@
 # Troubleshooting
 
 GraphCheck fails closed: every error has a stable `code`, a `message`, and a `fix`. Run
-`graphcheck debug` first for almost any problem below - it surfaces the same diagnostics without
-running your checks.
+`graphcheck debug` first for almost any problem below - it loads and validates your check suites
+and probes the connection, without executing your checks.
 
 ## Project and profile setup
 
@@ -46,17 +46,24 @@ checks the configured user's actual privileges before any checks run.
 | --- | --- | --- |
 | `run.invalid_selector` | `--select` was given something other than `tag:<name>` | Use `--select tag:<name>` (repeatable); use `--suite <id>` to run a specific suite by id |
 | `checks.invalid` | A suite file under your checks path failed to load | Fix the check YAML named in the message, then run `graphcheck debug` again |
-| `engine.timeout` | The run hit its wall-clock time budget mid-check | This is expected under a tight budget, not a bug - the run still completes as `partial` with exit 2. Narrow the check selection, enable sampling, or increase the run's time budget |
+| `engine.timeout` | A check was still running when the run's wall-clock budget ran out | Narrow the check selection with `--suite`/`--select`, or enable sampling on the check if it supports it |
 
-`engine.timeout` is handled gracefully: it doesn't crash the run or produce a hard failure. The run
-finishes, marks itself partial, and exits `2`, so CI can distinguish "some checks didn't get to run
-in time" from a genuine error.
+`engine.timeout` on its own does not fail the run: the timed-out check is marked partial rather
+than erroring the whole run. But it does not override an unrelated error - if an earlier
+error-severity `fail` or `errored` check already occurred, the run still exits `1` for that
+reason. A run affected only by `engine.timeout` (nothing else wrong) exits `2`. There is currently
+no CLI flag or `graphcheck.yml` field to raise the time budget directly; narrowing what you select
+or run, or sampling, are the only user-facing levers today.
 
 ## Where to look next
 
 - `graphcheck debug` (or `graphcheck debug --json` for machine-readable output) re-runs the same
-  connection and capability probes GraphCheck uses internally, without touching your checks.
-- Every run's `results.json` and offline HTML report include the same `code`/`message`/`fix` for
-  whatever stopped the run, in the `run.error` field.
+  connection and capability probes GraphCheck uses internally, and validates your check suites,
+  without executing any checks.
+- Errors show up in different places depending on what failed. A run that couldn't start at all
+  (`status: failed`) carries its error in `run.error`. A run that completed or went partial
+  (`status: complete`/`partial`) carries per-check errors in that check's own `checks[].error`
+  instead, and `run.partial_reason` gives the run-level summary of why coverage is incomplete.
+- Every run's `results.json` and offline HTML report expose all of the above.
 - See [CI setup](ci-setup.md) for how these map onto exit codes in a pipeline, and
   [Check reference](check-reference.md) for check-specific `catches`/`does not catch` behavior.
