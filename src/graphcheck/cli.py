@@ -1,13 +1,11 @@
 import json
 import logging
-import shutil
 import sys
 import threading
 import time
-import uuid
 import webbrowser
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
@@ -116,17 +114,6 @@ def run_monitor(*args, **kwargs):
     return _call("graphcheck.observability.runner", "run_monitor", *args, **kwargs)
 
 
-def render_run_artifacts(results: "Results") -> tuple[bytes, bytes, bytes]:
-    model, rendered_json = _call("graphcheck.reporting.writer", "validated_results_json", results)
-    rendered_html = _call("graphcheck.reporting.html", "render_validated_html_report", model)
-    rendered_summary = _call("graphcheck.reporting.history", "report_summary_json", model)
-    return (
-        rendered_json.encode("utf-8"),
-        rendered_html.encode("utf-8"),
-        rendered_summary.encode("utf-8"),
-    )
-
-
 app = typer.Typer(
     name="graphcheck",
     help="Semantic observability for property graphs.",
@@ -134,6 +121,10 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+
+mcp_app = typer.Typer(help="Model Context Protocol commands.")
+app.add_typer(mcp_app, name="mcp")
+
 telemetry_app = typer.Typer(
     name="telemetry",
     help="Manage anonymous opt-in product telemetry.",
@@ -1569,6 +1560,12 @@ def _open_html_report(path: Path) -> None:
     typer.secho(f"Opened {path}", fg=typer.colors.CYAN)
 
 
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Start the GraphCheck MCP server."""
+    _call("graphcheck.mcp.server", "run")
+
+
 @app.command("run")
 @_telemetry_command(CommandName.RUN)
 def run_command(
@@ -1602,8 +1599,9 @@ def run_command(
     ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
+    from graphcheck.application.run import RunRequest, execute_run
     from graphcheck.contracts.results import CheckError
-    from graphcheck.engine import DirectoryBaselineProvider, Engine, EngineConfig, failed_results
+    from graphcheck.engine import failed_results
     from graphcheck.errors import GraphCheckError
     from graphcheck.project import ARTIFACTS_DIR, load_project_config
 
@@ -1611,15 +1609,85 @@ def run_command(
     root: Path | None = None
     runs_dir: Path | None = None
     tags: list[str] = []
-    client: Neo4jClient | None = None
+    results_path: Path | None = None
+    report_path: Path | None = None
     setup_started = time.monotonic()
     telemetry = _command_telemetry()
 
+    artifact_started = time.monotonic()
+    render_times: list[int] = []
+    render_failed = False
+    check_count = 0
+    progress_scope = ExitStack()
+    run_progress_callback: Callable[[int, int, str], None] | None = None
+
+    def observe_render(duration_ms: int, succeeded: bool) -> None:
+        nonlocal render_failed
+        render_times.append(duration_ms)
+        render_failed = render_failed or not succeeded
+
     def display_error(error: CheckError) -> CheckError:
+        # Mask the human-facing message and fix when the run is redacted.
         return (
             CheckError(code=error.code, message="[REDACTED]", fix="[REDACTED]")
             if redacted
             else error
+        )
+
+    def export_run_artifacts(run_results, target_runs_dir, *, render_observer=None):
+        # Redact parameter, expected, query, and evidence literals in the written artifacts
+        # when --redact is set. The in-memory results stay unredacted so telemetry and the
+        # engine result are unaffected.
+        exported = redact_results(run_results) if redacted else run_results
+        return _write_run_artifacts(exported, target_runs_dir, render_observer=render_observer)
+
+    def show_run_target(target: object) -> None:
+        # The shared service calls this once the target is probed and the credential is
+        # verified, before any check runs. Print the target header first (unless redacted),
+        # then open the progress bar so the header always precedes progress output.
+        nonlocal run_progress_callback
+        if not redacted:
+            _print_run_target(target)
+        run_progress_callback = progress_scope.enter_context(
+            _run_progress(check_count, redacted=redacted)
+        )
+
+    def forward_progress(completed: int, total: int, check_name: str) -> None:
+        if run_progress_callback is not None:
+            run_progress_callback(completed, total, check_name)
+
+    def report_artifact_failure(exc: Exception) -> None:
+        # Shared reporting for the two artifact-write failure paths. A render failure is
+        # reported as a report-render failure, not an artifact-write failure, and the printed
+        # cause is masked when the run is redacted.
+        if telemetry is not None:
+            telemetry.render_ms = sum(render_times) if render_times else None
+            telemetry.mark_artifacts(
+                artifact_started,
+                results=ArtifactOutcome.ERROR,
+                report=ArtifactOutcome.ERROR,
+                exclude_ms=sum(render_times),
+            )
+            telemetry.fail(
+                ProcessOutcome.UNEXPECTED_ERROR,
+                CliFailureStage.REPORT_RENDER if render_failed else CliFailureStage.ARTIFACT_WRITE,
+                SafeErrorCode.REPORT_RENDER_FAILED
+                if render_failed
+                else SafeErrorCode.ARTIFACT_WRITE_FAILED,
+            )
+        if results.run.error is not None:
+            _print_setup_error(display_error(results.run.error))
+        typer.secho(
+            "run.artifact_failed: Could not write run artifacts: "
+            f"{'[REDACTED]' if redacted else exc}",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(
+            "Fix: Check the configured artifacts path and filesystem permissions.",
+            fg=typer.colors.YELLOW,
+            err=True,
         )
 
     try:
@@ -1633,30 +1701,48 @@ def run_command(
             _project_path(root, config.checks),
             requested_suites,
         )
-        profiles = load_profiles(root)
-        _, selected_profile = select_profile(profiles, profile)
-        max_concurrency = concurrency or int(config.concurrency)
-        client = _new_neo4j_client(selected_profile, max_concurrency)
-        target = _probe_and_verify_cli_audit_credential(client)
-        if not redacted:
-            _print_run_target(target)
-        if telemetry is not None:
-            telemetry.mark_setup(setup_started)
-        with _run_progress(
-            _selected_check_count(suite_inputs, tags), redacted=redacted
-        ) as progress_callback:
-            results = Engine(
-                client,
-                baselines=DirectoryBaselineProvider(artifacts / "baselines"),
-                config=EngineConfig(max_concurrency=max_concurrency),
-                progress_callback=progress_callback,
+        check_count = _selected_check_count(suite_inputs, tags)
+
+        with progress_scope:
+            outcome = execute_run(
+                RunRequest(
+                    profile=profile,
+                    suite_ids=requested_suites,
+                    tags=tags,
+                    fail_fast=fail_fast,
+                    concurrency=concurrency,
+                    verify_read_only_credential=True,
+                ),
+                progress_callback=forward_progress,
                 event_sink=telemetry.event_sink if telemetry is not None else None,
-            ).run(
-                suite_inputs,
-                tags=tags,
-                fail_fast=fail_fast,
-                selection_suites=requested_suites or None,
+                render_observer=observe_render if telemetry is not None else None,
+                client_factory=_new_neo4j_client,
+                artifact_writer=export_run_artifacts,
+                target_observer=show_run_target,
             )
+
+        results = outcome.results
+        results_path = outcome.results_path
+        report_path = outcome.report_path
+
+        # Attribute time to the real boundaries the shared service reports, not the whole
+        # command: setup_ms ends once client setup completes, and artifact_write_ms starts
+        # immediately before publication.
+        if telemetry is not None:
+            if outcome.setup_done_perf is not None:
+                telemetry.setup_ms = max(0, round((outcome.setup_done_perf - setup_started) * 1000))
+            elif telemetry.setup_ms is None:
+                telemetry.mark_setup(setup_started)
+        if outcome.artifact_started_perf is not None:
+            artifact_started = outcome.artifact_started_perf
+
+        if outcome.artifact_error is not None:
+            report_artifact_failure(outcome.artifact_error)
+            raise typer.Exit(3)
+
+    except typer.Exit:
+        raise
+
     except GraphCheckError as exc:
         if telemetry is not None:
             if telemetry.setup_ms is None:
@@ -1675,6 +1761,7 @@ def run_command(
             tags=tags,
             fail_fast=fail_fast,
         )
+
     except Exception as exc:
         if telemetry is not None:
             if telemetry.setup_ms is None:
@@ -1710,82 +1797,47 @@ def run_command(
             tags=tags,
             fail_fast=fail_fast,
         )
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception as exc:  # a close failure must not discard a completed run artifact
-                typer.secho(
-                    f"Warning: Neo4j driver cleanup failed: {'[REDACTED]' if redacted else exc}",
-                    fg=typer.colors.YELLOW,
-                    err=True,
-                )
+
+    if results_path is None:
+        assert runs_dir is not None
+
+        artifact_started = time.monotonic()
+        try:
+            results_path, report_path = export_run_artifacts(
+                results,
+                runs_dir,
+                render_observer=observe_render if telemetry is not None else None,
+            )
+        except Exception as artifact_exc:
+            report_artifact_failure(artifact_exc)
+            raise typer.Exit(3) from artifact_exc
 
     if (
         results.run.status.value == "failed"
         and telemetry is not None
         and telemetry.process_outcome is ProcessOutcome.SUCCESS
     ):
-        telemetry.fail(
-            ProcessOutcome.ENGINE_ERROR,
-            CliFailureStage.ENGINE,
-            results.run.error.code if results.run.error is not None else None,
-        )
-
-    artifact_started = time.monotonic()
-    render_times: list[int] = []
-    render_failed = False
-
-    def observe_render(duration_ms: int, succeeded: bool) -> None:
-        nonlocal render_failed
-        render_times.append(duration_ms)
-        render_failed = render_failed or not succeeded
-
-    try:
-        assert runs_dir is not None
-        exported_results = redact_results(results) if redacted else results
-        results_path, report_path = _write_run_artifacts(
-            exported_results,
-            runs_dir,
-            render_observer=observe_render if telemetry is not None else None,
-        )
-    except Exception as exc:
-        if telemetry is not None:
-            telemetry.render_ms = sum(render_times) if render_times else None
-            telemetry.mark_artifacts(
-                artifact_started,
-                results=ArtifactOutcome.ERROR,
-                report=ArtifactOutcome.ERROR,
-                exclude_ms=sum(render_times),
-            )
+        # A failed run.status here comes from the shared service converting a preflight,
+        # configuration, or unexpected-engine error into a result. Classify an engine fault as
+        # ENGINE / ENGINE_ERROR and everything else by its error code, so preflight failures
+        # are not mislabelled as engine errors and engine faults are not mislabelled as user
+        # configuration errors.
+        error_code = results.run.error.code if results.run.error is not None else None
+        if error_code == "engine.unexpected":
             telemetry.fail(
-                ProcessOutcome.UNEXPECTED_ERROR,
-                (
-                    CliFailureStage.REPORT_RENDER
-                    if render_failed
-                    else CliFailureStage.ARTIFACT_WRITE
-                ),
-                (
-                    SafeErrorCode.REPORT_RENDER_FAILED
-                    if render_failed
-                    else SafeErrorCode.ARTIFACT_WRITE_FAILED
-                ),
+                ProcessOutcome.ENGINE_ERROR,
+                CliFailureStage.ENGINE,
+                SafeErrorCode.ENGINE_UNEXPECTED,
             )
-        if results.run.error is not None:
-            _print_setup_error(display_error(results.run.error))
-        typer.secho(
-            "run.artifact_failed: Could not write run artifacts: "
-            f"{'[REDACTED]' if redacted else exc}",
-            fg=typer.colors.RED,
-            bold=True,
-            err=True,
-        )
-        typer.secho(
-            "Fix: Check the configured artifacts path and filesystem permissions.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
-        raise typer.Exit(3) from exc
+        else:
+            telemetry.fail(
+                ProcessOutcome.USER_ERROR,
+                _cli_stage_for_error(error_code)
+                if error_code is not None
+                else CliFailureStage.ENGINE,
+                error_code,
+            )
+
     if telemetry is not None:
         telemetry.render_ms = sum(render_times)
         telemetry.mark_artifacts(
@@ -1795,6 +1847,7 @@ def run_command(
             exclude_ms=sum(render_times),
         )
 
+    exported_results = redact_results(results) if redacted else results
     _print_run_summary(
         exported_results,
         results_path,
@@ -1853,28 +1906,6 @@ def _new_neo4j_client(profile, max_concurrency: int):
         if accepts_setting
         else Neo4jClient(profile)
     )
-
-
-def _probe_and_verify_cli_audit_credential(client: object):
-    verify = getattr(client, "verify_read_only_credential", None)
-    probe = getattr(client, "probe", None)
-    result = probe() if callable(probe) else None
-    if callable(verify):
-        verify()
-    target = result[0] if isinstance(result, tuple) else result
-    if isinstance(result, tuple) and len(result) > 2 and target is not None:
-        counts = result[2]
-        copy = getattr(target, "model_copy", None)
-        if callable(copy):
-            target = copy(
-                update={
-                    "nodes": getattr(counts, "nodes", getattr(target, "nodes", None)),
-                    "relationships": getattr(
-                        counts, "relationships", getattr(target, "relationships", None)
-                    ),
-                }
-            )
-    return target
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
@@ -2028,60 +2059,14 @@ def _write_run_artifacts(
     *,
     render_observer: Callable[[int, bool], None] | None = None,
 ) -> tuple[Path, Path]:
-    from graphcheck.reporting.history import report_name
+    """Delegate to the shared artifact writer.
 
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    resolved_runs = runs_dir.resolve()
-    results.run.id = report_name(results)
-    historical_dir = runs_dir / results.run.id
-    if (
-        historical_dir.name.casefold() == "latest"
-        or historical_dir.resolve().parent != resolved_runs
-    ):
-        raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
+    Kept as a lazy, module-level CLI entry point so the run command and the CLI tests share
+    one implementation with the MCP surface while preserving fast startup.
+    """
+    from graphcheck.application.artifacts import write_run_artifacts
 
-    artifacts = render_run_artifacts(results)
-    _publish_run_directory(artifacts, historical_dir)
-    latest_dir = runs_dir / "latest"
-    _publish_run_directory(artifacts, latest_dir)
-    return latest_dir / "results.json", latest_dir / "report.html"
-
-
-def _publish_run_directory(artifacts: tuple[bytes, bytes, bytes], directory: Path) -> None:
-    """Stage and swap a complete results/report pair without exposing a mixed pair."""
-
-    parent = directory.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex
-    staging = parent / f".{directory.name}.staging-{token}"
-    backup = parent / f".{directory.name}.backup-{token}"
-    staging.mkdir()
-    previous_moved = False
-    try:
-        for name, content in zip(
-            ("results.json", "report.html", "summary.json"), artifacts, strict=True
-        ):
-            (staging / name).write_bytes(content)
-
-        if directory.exists():
-            is_junction = getattr(directory, "is_junction", lambda: False)
-            if not directory.is_dir() or directory.is_symlink() or is_junction():
-                raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
-            directory.replace(backup)
-            previous_moved = True
-        staging.replace(directory)
-    except Exception:
-        if previous_moved and backup.exists():
-            if directory.exists():
-                shutil.rmtree(directory)
-            backup.replace(directory)
-        raise
-    else:
-        if backup.exists():
-            shutil.rmtree(backup)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+    return write_run_artifacts(results, runs_dir, render_observer=render_observer)
 
 
 def _print_setup_error(error: "CheckError") -> None:
