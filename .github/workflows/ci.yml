@@ -37,7 +37,25 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
+  # Repo-wide suite on the locked driver. The `test (3.12)` / `test (3.13)` contexts are
+  # required by the branch ruleset, so this job's name and matrix must stay stable.
   test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev
+      - run: uv run pytest --cov=graphcheck --cov-report=term-missing --cov-fail-under=80
+
+  # Neo4j Python driver compatibility across the supported range, on a separate job name so
+  # it does not collide with the required `test` contexts above.
+  driver-compat:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
