@@ -10,6 +10,8 @@ protocol and triage; recruiting the 5 testers is owner-driven.
 - Docker installed and running (for a local Neo4j instance).
 - Python 3.12 or 3.13 and `uv` available.
 - Nothing pre-configured: no existing `profiles.yml`, no GraphCheck already installed.
+- Pick a unique container name for this session (for example `graphcheck-clean-test-1`,
+  `-2`, ...) so back-to-back sessions never collide on a name still in use from a prior run.
 
 ## The script
 
@@ -26,9 +28,11 @@ start and when they reach a working report.
 
 2. **Start a local Neo4j instance.**
 ```console
-   docker run -d --name graphcheck-clean-test -p 7687:7687 -p 7474:7474 -e NEO4J_AUTH=neo4j/testpassword neo4j:5
+   docker run -d --name <session-container-name> -p 7687:7687 -p 7474:7474 -e NEO4J_AUTH=neo4j/testpassword neo4j:5
 ```
-   Give it a few seconds to finish starting.
+   Wait about 20-30 seconds before the next step. Neo4j is not ready the moment the container
+   starts; running `graphcheck debug` too early produces a `neo4j.unreachable` error that is not
+   a real product issue - don't log it as a friction point unless it still fails after the wait.
 
 3. **Create a project and connect.**
 ```console
@@ -36,15 +40,16 @@ start and when they reach a working report.
    cd graph-health
    graphcheck init
 ```
-   Edit the generated `profiles.yml` so `uri` is `bolt://localhost:7687` and the password matches
-   what was set above.
+   Open the generated `profiles.yml`. Set `uri: bolt://localhost:7687`, and replace the inline
+   `password:` line with the same password used in step 2 (`testpassword`) - this is the fastest
+   path for a local test session; leave `password_env` alone.
 
 4. **Confirm the connection.**
 ```console
    graphcheck debug
 ```
-   This should report Neo4j as reachable. If it doesn't, that's a real friction point - log it,
-   don't fix it for them.
+   This should report Neo4j as reachable. If it doesn't after the wait in step 2, that's a real
+   friction point - log it, don't fix it for them.
 
 5. **Run the example checks.**
 ```console
@@ -52,10 +57,9 @@ start and when they reach a working report.
 ```
 
 6. **Open the report.**
-```console
-   start .graphcheck\runs\latest\report.html
-```
-   (use `open` on macOS or `xdg-open` on Linux)
+   - Windows: `start .graphcheck\runs\latest\report.html`
+   - macOS: `open .graphcheck/runs/latest/report.html`
+   - Linux: `xdg-open .graphcheck/runs/latest/report.html`
 
 ## Part D interview
 
@@ -81,6 +85,14 @@ For each session, record:
 
 File a follow-up ticket for every friction point that isn't already covered by an existing issue.
 Link the ticket back to the specific session in this log.
+
+## After a session
+
+Remove the session's container and project directory so the next session starts genuinely clean:
+```console
+docker rm -f <session-container-name>
+```
+Delete the `graph-health` project directory (or run the next session in a fresh location).
 
 ## Session log
 
