@@ -5,6 +5,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Clean-machine test protocol: step-by-step script, Part D interview questions, and a friction-log template for onboarding external testers.
 - Contributor docs: dev setup, tests/lint, and PR flow sections in CONTRIBUTING.md, plus bug/feature/docs issue templates and three good-first-issue labels.
 - A shared, immutable result-presentation layer now gives the CLI and HTML report the same
   deterministic language for clean, findings, incomplete, empty, all-skipped, and failed runs.
