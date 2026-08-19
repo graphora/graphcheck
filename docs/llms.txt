@@ -17,9 +17,8 @@ GraphCheck never modifies customer graphs.
 
 ## Overview
 
-- [README](../README.md): Project overview, goals, installation, quickstart, and usage.
-- [Local Docker Quickstart](docker-quickstart.md): Start a pinned local Neo4j demo, load the
-  canonical fraud-ring fixture, and run the baseline-free example checks.
+- [README](../README.md): Project overview, goals, installation, and quickstart.
+- [User Guide](user-guide.md): Credentials, check authoring, execution, artifacts, baselines, generated suggestions, safety, telemetry, and configuration.
 
 ---
 
@@ -53,7 +52,8 @@ GraphCheck never modifies customer graphs.
 
 ## CLI
 
-- [CLI Workflow](../README.md#quickstart): `init`, `debug`, `profile`, `generate`, `run`, `baseline set`, `diff`, `report`, and `mcp serve`.
+- [CLI Quickstart](../README.md#quickstart): Installation and the first `init`, `debug`, and `run` workflow.
+- [CLI User Guide](user-guide.md): Detailed project setup, run selection, redaction, profiling, and generated suggestions.
 
 ---
 
