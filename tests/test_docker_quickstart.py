@@ -56,10 +56,6 @@ def test_compose_fetches_and_verifies_the_pinned_canonical_seed():
     assert seed["volumes"] == ["fixture-data:/fixture:ro"]
 
 
-def test_quickstart_does_not_use_a_git_submodule():
-    assert not (ROOT / ".gitmodules").exists()
-
-
 def test_committed_profiles_match_local_quickstart_and_ci():
     profiles = yaml.safe_load((ROOT / "profiles.yml").read_text(encoding="utf-8"))
 
@@ -92,5 +88,12 @@ def test_default_checks_are_baseline_free_and_include_fraud_ring_suite():
     assert (ROOT / "examples" / "checks" / "example.yml").is_file()
 
 
-def test_main_repository_does_not_contain_a_seed_copy():
-    assert list(ROOT.rglob("seed.cypher")) == []
+def test_only_canonical_fixture_submodule_contains_seed_source():
+    assert list(ROOT.rglob("seed.cypher")) == [
+        ROOT
+        / "vendor"
+        / "graphcheck-fraud-ring-fixture"
+        / "fixtures"
+        / "fraud-ring"
+        / "seed.cypher"
+    ]
