@@ -47,6 +47,8 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -64,6 +66,8 @@ jobs:
         driver-line: ["min", "latest-6"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install uv and select the matrix Python
         uses: astral-sh/setup-uv@v5
         with:
