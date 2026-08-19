@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
+  GitHub Release, guarding that the release tag matches the built version and smoke-testing a
+  clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
+  and a single-source version read from installed distribution metadata. See `docs/releasing.md`.
 - A release-oriented top-level README with a versioned project header, embedded CLI demo,
   concise problem statement, quickstart, check-suite example, explicit non-goals, and a preserved
   full user guide for detailed operational workflows.
