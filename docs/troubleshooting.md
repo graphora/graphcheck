@@ -31,13 +31,15 @@ These come from the connector and mostly map onto everyday setup mistakes.
 ## Read-only enforcement
 
 GraphCheck refuses to run anything Neo4j classifies as write-capable, and on Enterprise it also
-checks the configured user's actual privileges before any checks run.
+checks the configured user's actual role before any checks run. The required setup is Neo4j's
+built-in `reader` role (plus the default `PUBLIC` role) and nothing else - not a custom role
+with `ACCESS`/`MATCH` grants.
 
 | Code | What happened | Fix |
 | --- | --- | --- |
 | `neo4j.write_rejected` | A query was classified as write-capable and was blocked | Replace it with read-only Cypher, and use a credential without write privileges |
-| `neo4j.credential_not_read_only` | The Enterprise credential has privileges outside GraphCheck's read-only model | Create a dedicated user with only `ACCESS` and `MATCH` (or `READ`/`TRAVERSE`) on the target database |
-| `neo4j.credential_read_only_unverified` | Neo4j didn't return the user's privileges for inspection | Use Enterprise with a native user that can inspect its own privileges, restricted to `ACCESS` and `MATCH` |
+| `neo4j.credential_not_read_only` | The configured user has roles other than exactly `reader` plus `PUBLIC` | Grant the built-in `reader` role to the configured user, revoke every other role except `reader` and `PUBLIC`, then run `graphcheck debug` again |
+| `neo4j.credential_read_only_unverified` | Neo4j didn't return the user's roles for inspection | Use Neo4j Enterprise with a user assigned only the built-in `reader` role (plus `PUBLIC`), then run `graphcheck debug` again |
 | `neo4j.read_guard_unavailable` | The driver/server didn't return what GraphCheck needs to classify a query as read-only | Use the supported Neo4j driver version and a dedicated read-only credential |
 
 ## Running checks
