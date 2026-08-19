@@ -5,6 +5,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- In-repo reference docs: CI setup, check reference (all core/PII checks with fraud-ring fixture examples), install/quickstart pointer, and a troubleshooting FAQ covering profile/connection/read-only errors.
 - PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
   GitHub Release, guarding that the release tag matches the built version and smoke-testing a
   clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
