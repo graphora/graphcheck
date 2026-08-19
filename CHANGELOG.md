@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
+  GitHub Release, guarding that the release tag matches the built version and smoke-testing a
+  clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
+  and a single-source version read from installed distribution metadata. See `docs/releasing.md`.
 - An in-repo agent guide covering the three-tool MCP surface, validated `results.json`
   consumption (verdicts, evidence, and the `0/1/2/3` exit-code contract), programmatic SPEC-02
   check authoring, and the human-approval gate for inert generated checks.

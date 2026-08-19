@@ -1,0 +1,73 @@
+name: Release
+
+# Publishing is driven by a GitHub Release, so it is always a deliberate, human action.
+# The release tag (for example v0.1.0) is the source of truth for the version and is checked
+# against the version built from pyproject.toml before anything is uploaded.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify distributions
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify the release tag matches the built version
+        run: |
+          expected="${RELEASE_TAG#v}"
+          wheel="$(ls dist/graphcheck-*-py3-none-any.whl)"
+          built="$(basename "$wheel" | sed -E 's/^graphcheck-(.+)-py3-none-any\.whl$/\1/')"
+          echo "release tag '$RELEASE_TAG' -> expected version '$expected'; built wheel version '$built'"
+          if [ "$expected" != "$built" ]; then
+            echo "::error::Release tag does not match the built version ($expected != $built). Bump version in pyproject.toml or fix the release tag."
+            exit 1
+          fi
+
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
+      - name: Smoke-test the built wheel on a clean environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install --quiet "$(ls dist/graphcheck-*-py3-none-any.whl)"
+          installed="$("$RUNNER_TEMP/smoke/bin/graphcheck" --version)"
+          echo "installed wheel reports: $installed"
+          test "$installed" = "graphcheck ${RELEASE_TAG#v}"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # The protected `pypi` environment gates the upload and is what the PyPI Trusted Publisher
+    # is bound to. `id-token: write` mints the short-lived OIDC token, so no API token is stored.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/graphcheck/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI via Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

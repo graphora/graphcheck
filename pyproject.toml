@@ -9,6 +9,29 @@ description = "Semantic observability for property graphs — pytest for knowled
 requires-python = ">=3.12"
 license = "Apache-2.0"
 readme = "README.md"
+authors = [{ name = "Graphora" }]
+keywords = [
+    "neo4j",
+    "knowledge-graph",
+    "graph-database",
+    "cypher",
+    "data-quality",
+    "testing",
+    "observability",
+    "graphrag",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "instructor[anthropic,google-genai]==1.15.4",
     "neo4j>=5.20,<7",
@@ -23,6 +46,12 @@ dependencies = [
 
 [project.scripts]
 graphcheck = "graphcheck.bootstrap:cli"
+
+[project.urls]
+Homepage = "https://github.com/graphora/graphcheck"
+Repository = "https://github.com/graphora/graphcheck"
+Issues = "https://github.com/graphora/graphcheck/issues"
+Changelog = "https://github.com/graphora/graphcheck/blob/development/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
