@@ -130,7 +130,7 @@ The report shows:
   exact stored counts and never use clean language,
 - a `Troubleshoot.` action for failed runs that opens an offline `Troubleshooting Steps` dialog with
   the full stored problem and remediation steps; the overview does not duplicate that diagnostic,
-- a concise header for `neo4j.credential_not_read_only` while its full privilege detail remains in
+- a concise header for `neo4j.credential_not_read_only` while its full role detail remains in
   the troubleshooting dialog,
 - target database, version, edition, node count, and relationship count when available,
 - a compact label and relationship-type summary sourced directly from `run.target`, with the exact
@@ -221,9 +221,9 @@ line separates the table from the artifact path. Passing checks are not repeated
 progress display. The final exit-code line uses green for 0, red for 1 and 3, and yellow for 2.
 Borderless table header rules use a continuous `─` line, and interactive progress uses a green `━`
 completed segment followed by a grey `─` remaining segment rather than ASCII equals and dashes.
-When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
-check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
-passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
+Every run includes a borderless `Score breakdown by check suite:` table. The table shows suite
+score, evaluated/selected coverage, and passed, failed, warning, errored, and skipped outcome
+columns fixed to their header widths for compact terminals. Scores use green for 100, yellow for 50–99,
 and red for 0–49. Check coverage is green when evaluated equals selected and yellow otherwise;
 outcome colors apply only to non-zero values while headers remain white. Target metadata appears
 before interactive progress. Suite names are italicized, and incomplete coverage names every suite
@@ -404,7 +404,7 @@ The tests assert:
 - evidence IDs are visible,
 - failed-run errors are visible,
 - failed runs remain failed in the header and history, expose troubleshooting in a dialog without
-  a duplicate overview callout, and abbreviate verbose credential privilege details only in the
+  a duplicate overview callout, and abbreviate verbose credential role details only in the
   header,
 - `report --open` selects the newest HTML report,
 - `report --open <id>` selects a historical report and a bare ID is rejected,

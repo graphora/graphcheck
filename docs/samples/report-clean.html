@@ -1,779 +1,12 @@
-from __future__ import annotations
-
-import html
-import json
-from collections.abc import Collection
-from pathlib import Path
-from typing import Any
-
-from graphcheck.contracts.results import CheckResult, RedactionPolicy, Results, RunStatus, Verdict
-from graphcheck.reporting.history import display_run_status
-from graphcheck.reporting.presentation import ResultPresentation, present_check, present_results
-from graphcheck.reporting.writer import json_compatible, load_results
-
-_VERDICT_ORDER = {
-    Verdict.FAIL: 0,
-    Verdict.WARN: 1,
-    Verdict.ERRORED: 2,
-    Verdict.SKIPPED: 3,
-    Verdict.PASS: 4,
-}
-_SEVERITY_ORDER = {"error": 0, "warn": 1}
-
-
-def render_html_report(
-    results: Results | dict[str, Any] | str | Path,
-    *,
-    verdicts: Collection[Verdict] | None = None,
-) -> str:
-    model = load_results(results)
-    return render_validated_html_report(model, verdicts=verdicts)
-
-
-def render_validated_html_report(
-    model: Results,
-    *,
-    verdicts: Collection[Verdict] | None = None,
-    explorer_token: str | None = None,
-) -> str:
-    """Render a Results model already validated at an artifact boundary."""
-
-    fragments = render_validated_html_report_fragments(model, verdicts=verdicts)
-    return "\n".join(
-        [
-            "<!doctype html>",
-            '<html lang="en">',
-            "<head>",
-            '<meta charset="utf-8">',
-            '<meta name="viewport" content="width=device-width, initial-scale=1">',
-            (
-                '<meta name="graphcheck-redaction" '
-                f'content="{_escape(model.run.redaction.policy.value)}">'
-            ),
-            (
-                f'<meta name="graphcheck-explorer-token" content="{_escape(explorer_token)}">'
-                if explorer_token is not None
-                else ""
-            ),
-            f"<title>GraphCheck Dashboard - {_escape(model.run.id)}</title>",
-            "<style>",
-            _CSS,
-            "</style>",
-            "</head>",
-            "<body>",
-            _header(fragments["run_title"]),
-            '<main class="dashboard-body">',
-            '<div class="dashboard-grid">',
-            _report_explorer(model),
-            fragments["overview"],
-            fragments["checks_next_steps"],
-            "</div>",
-            "</main>",
-            "<script>",
-            _JS,
-            "</script>",
-            "</body>",
-            "</html>",
-            "",
-        ]
-    )
-
-
-def render_validated_html_report_fragments(
-    model: Results,
-    *,
-    verdicts: Collection[Verdict] | None = None,
-) -> dict[str, str]:
-    """Render the report-specific roots used by full and soft navigation."""
-
-    if model.run.redaction.policy is RedactionPolicy.MASK or model.run.redaction.applied:
-        from graphcheck.reporting.redaction import verify_redacted_results
-
-        verify_redacted_results(model)
-
-    checks = sorted(
-        (check for check in model.checks if verdicts is None or check.verdict in verdicts),
-        key=lambda check: (
-            _VERDICT_ORDER[check.verdict],
-            _SEVERITY_ORDER[check.severity.value],
-            check.suite_id,
-            check.id,
-        ),
-    )
-    return {
-        "run_title": _run_title(model),
-        "overview": _status_overview(model, checks, filtered=verdicts is not None),
-        "checks_next_steps": _checks_next_steps(checks, redacted=model.run.redaction.applied),
-    }
-
-
-def write_html_report(
-    results: Results | dict[str, Any] | str | Path,
-    path: Path,
-    *,
-    verdicts: Collection[Verdict] | None = None,
-) -> Path:
-    path.write_text(render_html_report(results, verdicts=verdicts), encoding="utf-8")
-    return path
-
-
-def _report_explorer(results: Results) -> str:
-    return (
-        '<aside id="report-explorer" class="card panel-section report-explorer" '
-        f'data-current-report="{_escape(results.run.id)}" aria-label="Report explorer">'
-        '  <div class="explorer-header">'
-        "    <h2>Report History</h2>"
-        '    <input type="search" id="report-search-input" placeholder="🔍 Search reports..." '
-        'aria-label="Search reports">'
-        '    <div class="explorer-selection-actions">'
-        '      <button id="clear-report-selection-btn" class="btn-secondary" '
-        'type="button" disabled>Clear Selection</button>'
-        '      <button id="delete-reports-btn" class="btn-danger" '
-        'type="button" disabled>Delete</button>'
-        "    </div>"
-        "  </div>"
-        '  <div class="scrollable-content explorer-scroll">'
-        '    <details id="latest-report-group" class="report-group" open>'
-        '      <summary class="report-group-heading">'
-        '        <h3 id="latest-reports-heading">Latest report</h3>'
-        "      </summary>"
-        '      <div id="latest-report-list" class="report-list">'
-        '        <p class="explorer-loading text-muted">Loading report history…</p>'
-        "      </div>"
-        "    </details>"
-        '    <details id="last-five-report-group" class="report-group" open>'
-        '      <summary class="report-group-heading">'
-        '        <h3 id="last-five-reports-heading">Last 5 reports</h3>'
-        "      </summary>"
-        '      <div id="last-five-report-list" class="report-list">'
-        '        <p class="explorer-loading text-muted">Loading…</p>'
-        "      </div>"
-        "    </details>"
-        '    <details id="older-report-group" class="report-group">'
-        '      <summary class="report-group-heading">'
-        '        <h3 id="older-reports-heading">Older</h3>'
-        "      </summary>"
-        '      <div id="older-report-list" class="report-list">'
-        '        <p class="explorer-loading text-muted">Loading…</p>'
-        "      </div>"
-        "    </details>"
-        "  </div>"
-        '  <div class="panel-footer explorer-footer">'
-        '    <div id="report-explorer-status" class="explorer-status" aria-live="polite"></div>'
-        '    <div class="explorer-comparison-actions">'
-        '      <button id="compare-reports-btn" class="btn-secondary" '
-        'type="button" disabled>Compare Selected</button>'
-        '      <button id="compare-most-recent-btn" class="btn-primary" '
-        'type="button" disabled>Compare Most Recent</button>'
-        "    </div>"
-        "  </div>"
-        "</aside>"
-        '<dialog id="report-comparison-dialog" class="comparison-dialog">'
-        '  <div class="comparison-dialog-header">'
-        "    <h2>Report Comparison</h2>"
-        '    <button id="close-comparison-btn" class="dialog-close" type="button" aria-label="Close Comparison">×</button>'
-        "  </div>"
-        '  <pre id="report-comparison-content" tabindex="0"></pre>'
-        "</dialog>"
-        '<dialog id="report-missing-dialog" class="comparison-dialog report-missing-dialog">'
-        '  <div class="comparison-dialog-header">'
-        '    <div class="report-missing-title">'
-        "      <h2>Report Not Found</h2>"
-        '      <p id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span> could not be found or opened.</p>'
-        "    </div>"
-        '    <button id="close-report-missing-btn" class="dialog-close" type="button" '
-        'aria-label="Close Report Missing">×</button>'
-        "  </div>"
-        '  <div class="report-missing-content">'
-        "    <p><strong>Next step:</strong> Select another report from history or regenerate the missing report.</p>"
-        "  </div>"
-        "</dialog>"
-        '<dialog id="delete-confirmation-dialog" class="confirmation-dialog">'
-        "  <h2>Are you sure?</h2>"
-        '  <p id="delete-confirmation-message"></p>'
-        '  <div class="confirmation-actions">'
-        '    <button id="cancel-delete-btn" class="btn-secondary" type="button">Cancel</button>'
-        '    <button id="confirm-delete-btn" class="btn-danger" type="button">Delete</button>'
-        "  </div>"
-        "</dialog>"
-    )
-
-
-def _run_title(results: Results) -> str:
-    version_info = (
-        f"[v{_escape(results.run.graphcheck_version)} / Pack v{_escape(results.run.pack_version)}]"
-    )
-    presentation = present_results(results)
-    total_issues = presentation.findings + presentation.execution_errors
-    redaction_pill = (
-        '    <span class="status-pill status-pill-redacted">DETAILS REDACTED</span>'
-        if results.run.redaction.applied
-        else ""
-    )
-
-    action = ""
-    troubleshooting = ""
-    status = display_run_status(results)
-    if results.run.error is not None:
-        kind, label, heading = (
-            ("error", "FAILED", "Run Failed.")
-            if status is RunStatus.FAILED
-            else ("partial", "PARTIAL", "Partial Run.")
-        )
-        message = (
-            f"{_result_html(presentation)} "
-            f"{_escape(_run_error_summary(results.run.error.code, results.run.error.message))}"
-        )
-        action = (
-            '<button id="troubleshoot-btn" class="header-status-action" type="button" '
-            'aria-haspopup="dialog" aria-controls="troubleshooting-dialog">Troubleshoot.</button>'
-        )
-        troubleshooting = _troubleshooting_dialog(results)
-    elif status is RunStatus.PARTIAL:
-        kind, label, heading, message = (
-            "partial",
-            "PARTIAL",
-            "Partial Run.",
-            _result_html(presentation),
-        )
-        action = (
-            '<button id="run-summary-toggle" class="header-status-action" type="button" '
-            'data-action="coverage" aria-controls="not-evaluated">Review coverage.</button>'
-        )
-    else:
-        kind = "warning" if total_issues > 0 else "complete"
-        label, heading = "COMPLETE", "Run Complete."
-        message = _result_html(presentation)
-        if total_issues > 0:
-            action = (
-                '<button id="run-summary-toggle" class="header-status-action" type="button" '
-                'data-action="issues" aria-expanded="false" '
-                'aria-controls="checks-next-steps-panel">See issues.</button>'
-            )
-
-    return (
-        '<div id="report-run-title" class="brand-container">'
-        f'  <span class="eyebrow">GraphCheck Dashboard {version_info}</span>'
-        '  <div class="header-status">'
-        f'    <span class="status-pill status-pill-{kind}">{label}</span>'
-        f"{redaction_pill}"
-        f'    <h1><strong>{heading}</strong> <span class="header-status-message">'
-        f"{message}</span>{action}</h1>"
-        "  </div>"
-        f"  {troubleshooting}"
-        "</div>"
-    )
-
-
-def _run_error_summary(code: str, message: str) -> str:
-    if code == "neo4j.credential_not_read_only":
-        return "The configured Neo4j credential does not use only the built-in READER role."
-    return message
-
-
-def _result_html(presentation: ResultPresentation) -> str:
-    rendered = _escape(presentation.primary_sentence)
-    if not presentation.coverage_incomplete:
-        return rendered
-    if not presentation.skipped_suites:
-        return f"{rendered} Coverage is incomplete."
-    suites = ", ".join(f"<em>{_escape(suite)}</em>" for suite in presentation.skipped_suites)
-    return f"{rendered} Coverage is incomplete due to skipped check(s) from {suites}."
-
-
-def _troubleshooting_dialog(results: Results) -> str:
-    error = results.run.error
-    if error is None:
-        return ""
-    if error.code == "neo4j.credential_not_read_only":
-        steps = (
-            "Grant Neo4j's built-in reader role to the configured user.",
-            "Revoke every other assigned role except PUBLIC.",
-            "Update user and password/password_env in profiles.yml if you select another account.",
-            "Run graphcheck debug, then graphcheck run.",
-        )
-    else:
-        steps = (error.fix,)
-    items = "".join(f"<li>{_escape(step)}</li>" for step in steps)
-    return (
-        '<dialog id="troubleshooting-dialog" class="comparison-dialog troubleshooting-dialog">'
-        '  <div class="comparison-dialog-header">'
-        "    <h2>Troubleshooting Steps</h2>"
-        '    <button id="close-troubleshooting-btn" class="dialog-close" type="button" '
-        'aria-label="Close Troubleshooting Steps">×</button>'
-        "  </div>"
-        '  <div class="troubleshooting-content">'
-        "    <h3>Problem</h3>"
-        f"    <p>{_escape(error.message)}</p>"
-        "    <h3>Steps</h3>"
-        f"    <ol>{items}</ol>"
-        "  </div>"
-        "</dialog>"
-    )
-
-
-def _header(run_title: str) -> str:
-    return (
-        '<header class="navbar">'
-        f"{run_title}"
-        '  <div class="navbar-actions">'
-        '    <span id="report-navigation-status" class="report-navigation-status" '
-        'role="status" aria-live="polite"></span>'
-        '    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme" '
-        'title="Toggle Theme">🌙</button>'
-        "  </div>"
-        "</header>"
-    )
-
-
-def _status_overview(
-    results: Results,
-    checks: Collection[CheckResult],
-    *,
-    filtered: bool,
-) -> str:
-    target_html = "" if results.run.redaction.applied else _target_overview(results)
-
-    # Group checks by suite
-    checks_by_suite: dict[str, list[CheckResult]] = {}
-    for check in checks:
-        checks_by_suite.setdefault(check.suite_id, []).append(check)
-
-    suite_blocks = []
-    for suite in results.suites:
-        suite_checks = checks_by_suite.get(suite.id, [])
-        totals = suite.totals
-
-        total_checks = totals.passed + totals.fail + totals.warn + totals.errored + totals.skipped
-        run_checks = total_checks - totals.skipped
-
-        # Right side status badges
-        right_badges = []
-        if totals.fail > 0:
-            right_badges.append(f'<span class="badge badge-fail">{totals.fail} FAILED</span>')
-        if totals.errored > 0:
-            right_badges.append(
-                f'<span class="badge badge-errored">{totals.errored} ERRORED</span>'
-            )
-        if totals.warn > 0:
-            warning_label = "WARNING" if totals.warn == 1 else "WARNINGS"
-            right_badges.append(
-                f'<span class="badge badge-warn">{totals.warn} {warning_label}</span>'
-            )
-        if totals.skipped > 0:
-            right_badges.append(
-                f'<span class="badge badge-skipped">{totals.skipped} SKIPPED</span>'
-            )
-
-        if not right_badges and totals.passed == 0:
-            right_badges.append('<span class="badge badge-skipped">NO CHECKS</span>')
-
-        right_badges.append(_score_badge(suite.score))
-        right_badges_html = f'<div class="suite-badges-row">{"".join(right_badges)}</div>'
-
-        suite_stats_html = (
-            f'<span class="suite-check-stats">{run_checks}/{total_checks} checks run</span>'
-        )
-
-        box_htmls = []
-        for check in suite_checks:
-            v_class = check.verdict.value.lower()
-            tooltip_text = f"{_escape(check.name)} — {_escape(check.verdict.value)}"
-            box_htmls.append(
-                f'<div class="status-box status-box-{v_class}" '
-                f'data-tooltip="{tooltip_text}" '
-                f'data-suite-id="{_escape(check.suite_id)}" '
-                f'data-check-id="{_escape(check.id)}" role="button" tabindex="0"></div>'
-            )
-
-        bars_content = (
-            "".join(box_htmls)
-            if box_htmls
-            else (
-                '<span class="text-muted">No matching issues</span>'
-                if filtered
-                else '<span class="text-muted">No checks selected</span>'
-            )
-        )
-
-        suite_blocks.append(
-            '<div class="suite-status-card">'
-            '  <div class="suite-status-header">'
-            '    <div class="suite-title-group">'
-            f'      <span class="suite-title"><em><code>{_escape(suite.id)}</code></em></span>'
-            f"      {suite_stats_html}"
-            "    </div>"
-            f"    {right_badges_html}"
-            "  </div>"
-            f'  <div class="status-bar-wrapper">{bars_content}</div>'
-            "</div>"
-        )
-
-    suite_body = (
-        "".join(suite_blocks)
-        if suite_blocks
-        else '<p class="empty-panel-message text-muted">No suites found.</p>'
-    )
-
-    return (
-        '<section id="report-overview" class="card panel-section">'
-        '  <div class="summary-top-bar">'
-        '    <div class="summary-meta-col">'
-        "      <h2>Graph Health Overview</h2>"
-        f"      {target_html}"
-        "    </div>"
-        "  </div>"
-        '  <div class="scrollable-content">'
-        f"    {_run_diagnostics(results)}"
-        f'    <div class="suite-status-list">{suite_body}</div>'
-        f"    {_not_evaluated(results)}"
-        "  </div>"
-        '  <div class="panel-footer">'
-        '    <button id="explore-checks-btn" class="btn-primary" type="button" '
-        'aria-controls="checks-next-steps-panel" aria-expanded="false">Explore checks &rarr;</button>'
-        "  </div>"
-        "</section>"
-    )
-
-
-def _target_overview(results: Results) -> str:
-    target = results.run.target
-    if target is None:
-        return '<p class="target-unavailable text-muted">Target unavailable</p>'
-    inventory = _target_inventory(target.labels, target.relationship_types)
-    capabilities = "".join(
-        _capability_pill(label, available)
-        for label, available in (
-            ("APOC", target.capabilities.apoc),
-            ("Count Store", target.capabilities.count_store),
-        )
-    )
-    return (
-        '<dl class="target-summary">'
-        f"<div><dt>Target Graph</dt><dd><strong>{_escape(target.database)}</strong></dd></div>"
-        f"<div><dt>Database</dt><dd>Neo4j {_escape(target.server_version)} "
-        f"{_escape(target.edition)}</dd></div>"
-        f"<div><dt>Size</dt><dd>{_target_size(target.nodes, target.relationships)}</dd></div>"
-        f"<div><dt>Schema Inventory</dt><dd>{inventory}</dd></div>"
-        f'<div><dt>Capabilities</dt><dd class="capability-list">{capabilities}</dd></div>'
-        "</dl>"
-    )
-
-
-def _run_diagnostics(results: Results) -> str:
-    messages: list[tuple[str, str]] = []
-    if results.run.partial_reason is not None:
-        messages.append(("Partial reason", results.run.partial_reason))
-    if not any(check.measured is not None for check in results.checks) and (
-        results.run.error is not None or any(check.error is not None for check in results.checks)
-    ):
-        messages.append(
-            (
-                "Nothing to evaluate",
-                "No selected check produced a measured result. Adjust the selection or resolve "
-                "the reported errors or skip reasons, then rerun.",
-            )
-        )
-    elif (
-        results.run.target is not None
-        and results.run.target.nodes == 0
-        and results.run.target.relationships == 0
-    ):
-        messages.append(
-            (
-                "Empty graph",
-                "Checks were evaluated against zero nodes and relationships; load data if this "
-                "was unexpected.",
-            )
-        )
-    return "".join(
-        '<div class="callout callout-diagnostic">'
-        f"<strong>{_escape(title)}</strong><p>{_escape(message)}</p></div>"
-        for title, message in messages
-    )
-
-
-def _target_size(nodes: int | None, relationships: int | None) -> str:
-    if nodes is None and relationships is None:
-        return "Counts unavailable"
-    node_text = "Nodes unavailable" if nodes is None else f"{nodes:,} nodes"
-    relationship_text = (
-        "Relationships unavailable" if relationships is None else f"{relationships:,} relationships"
-    )
-    return f"{node_text} · {relationship_text}"
-
-
-def _target_inventory(labels: list[str] | None, relationship_types: list[str] | None) -> str:
-    if labels is None or relationship_types is None:
-        return "Inventory not recorded"
-    label_names = ", ".join(_escape(label) for label in labels) or "None"
-    relationship_names = ", ".join(_escape(rel_type) for rel_type in relationship_types) or "None"
-    return (
-        '<details class="target-inventory-details">'
-        f"<summary>{len(labels)} labels · {len(relationship_types)} relationship types</summary>"
-        f"<div><strong>Labels:</strong> {label_names}</div>"
-        f"<div><strong>Relationship types:</strong> {relationship_names}</div>"
-        "</details>"
-    )
-
-
-def _capability_pill(label: str, available: bool) -> str:
-    state = "Available" if available else "Unavailable"
-    kind = "available" if available else "unavailable"
-    return (
-        f'<span class="capability-pill capability-{kind}" tabindex="0" '
-        f'aria-label="{_escape(label)}: {state}">{_escape(label)}'
-        f'<span class="capability-tooltip" role="tooltip">{state}</span></span>'
-    )
-
-
-def _not_evaluated(results: Results) -> str:
-    selected = results.totals.checks
-    skipped = results.totals.skipped
-    summary_class = "not-evaluated-summary"
-    skipped_checks = sorted(
-        (check for check in results.checks if check.verdict is Verdict.SKIPPED),
-        key=lambda check: (check.suite_id, check.id),
-    )
-    if results.run.status is RunStatus.FAILED:
-        summary = "The run failed before checks could be evaluated."
-    elif selected == 0:
-        summary = "No checks were selected for this run."
-    elif skipped == 0:
-        noun = "check" if selected == 1 else "checks"
-        summary = f"None. All {selected} selected {noun} were evaluated."
-        summary_class += " not-evaluated-complete"
-    elif skipped == selected:
-        summary = "No checks were evaluated."
-    else:
-        summary = f"{skipped} of {selected} selected checks were not evaluated."
-
-    note = (
-        f'<p class="coverage-note"><strong>Coverage note:</strong> '
-        f"{_escape(results.run.partial_reason)}</p>"
-        if results.run.partial_reason is not None
-        else ""
-    )
-    rows = [_not_evaluated_row(check) for check in skipped_checks]
-    visible = "".join(rows[:5])
-    remainder = (
-        '<details class="not-evaluated-more"><summary>'
-        f"Show {len(rows) - 5} more not evaluated checks</summary>"
-        f'<div class="not-evaluated-list">{"".join(rows[5:])}</div></details>'
-        if len(rows) > 5
-        else ""
-    )
-    skipped_list = f'<div class="not-evaluated-list">{visible}</div>{remainder}' if rows else ""
-    suites = ", ".join(_escape(value) for value in results.run.selection.suites)
-    tags = ", ".join(_escape(value) for value in results.run.selection.tags)
-    selection = (
-        '<p class="selection-boundary"><strong>Suites:</strong> '
-        f'{suites or "all configured suites"} <span aria-hidden="true">|</span> '
-        f"<strong>Tags:</strong> {tags or 'no tag filter'}</p>"
-    )
-    return (
-        '<section id="not-evaluated" class="not-evaluated" tabindex="-1">'
-        "<h2>Not Evaluated</h2>"
-        f'<p class="{summary_class}">{summary}</p>{note}{skipped_list}'
-        '<p class="scope-statement">This report covers checks selected for this run. '
-        "GraphCheck did not evaluate graph behavior outside those configured checks.</p>"
-        f"{selection}</section>"
-    )
-
-
-def _not_evaluated_row(check: CheckResult) -> str:
-    return (
-        '<button class="not-evaluated-row" type="button" '
-        f'data-suite-id="{_escape(check.suite_id)}" data-check-id="{_escape(check.id)}">'
-        f"{_escape(check.name)}</button>"
-    )
-
-
-def _checks_next_steps(checks: list[CheckResult], *, redacted: bool) -> str:
-    items = "".join(_check(check, redacted=redacted) for check in checks)
-    toggle_details = (
-        ""
-        if redacted
-        else '      <button id="toggle-details-btn" class="btn-secondary" type="button">Toggle Details</button>'
-    )
-    return (
-        '<section id="checks-next-steps-panel" class="card panel-section hidden-panel">'
-        '  <div class="checks-next-steps-header report-tabs" role="tablist" '
-        'aria-label="Checks Explorer and Next Steps">'
-        '    <button id="checks-tab" class="report-tab active" type="button" role="tab" '
-        'aria-selected="true" aria-controls="checks-tab-panel" tabindex="0" data-tab="checks">Checks Explorer</button>'
-        '    <button id="next-steps-tab" class="report-tab" type="button" role="tab" '
-        'aria-selected="false" aria-controls="next-steps-tab-panel" tabindex="-1" data-tab="next-steps">Next Steps</button>'
-        "  </div>"
-        '  <div id="checks-tab-panel" class="report-tab-panel" role="tabpanel" '
-        'aria-labelledby="checks-tab" data-tab-panel="checks">'
-        '    <div class="checks-controls">'
-        '      <input type="search" id="search-input" placeholder="🔍 Search checks..." aria-label="Search checks">'
-        '      <div class="filter-group" aria-label="Filter checks by verdict">'
-        '        <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">All</button>'
-        '        <button class="filter-btn" type="button" data-filter="issues" aria-pressed="false">Issues</button>'
-        '        <button class="filter-btn" type="button" data-filter="fail" aria-pressed="false">Fail</button>'
-        '        <button class="filter-btn" type="button" data-filter="warn" aria-pressed="false">Warn</button>'
-        '        <button class="filter-btn" type="button" data-filter="errored" aria-pressed="false">Errored</button>'
-        '        <button class="filter-btn" type="button" data-filter="pass" aria-pressed="false">Pass</button>'
-        '        <button class="filter-btn" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>'
-        "      </div>"
-        f"{toggle_details}"
-        "    </div>"
-        f'    <div id="checks-container" class="scrollable-content">{items}'
-        '      <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>'
-        "    </div>"
-        "  </div>"
-        '  <div id="next-steps-tab-panel" class="report-tab-panel next-steps-content scrollable-content" '
-        'role="tabpanel" aria-labelledby="next-steps-tab" data-tab-panel="next-steps" hidden>'
-        '    <article class="next-step"><h3>Add competency checks</h3>'
-        "<p>Add competency checks for the core business questions your graph must answer.</p></article>"
-        '    <article class="next-step"><h3>Track drift over time</h3>'
-        "<p>Set a baseline and rerun GraphCheck to track structural drift.</p></article>"
-        '    <p class="next-steps-boundary">These are general practices, not recommendations derived from this run.</p>'
-        "  </div>"
-        "</section>"
-    )
-
-
-def _check(check: CheckResult, *, redacted: bool) -> str:
-    presentation = present_check(check)
-    verdict_str = presentation.verdict
-    classes = f"check-card check-{verdict_str}"
-    suite_id_esc = _escape(check.suite_id)
-    check_id_esc = _escape(check.id)
-    key_esc = f"{suite_id_esc}::{check_id_esc}"
-    name = _escape(check.name)
-    pattern = _escape(check.pattern.value)
-    name_html = (
-        '<div class="check-name-group">'
-        f"<h3>{name}</h3>"
-        f'<span class="check-pattern">Pattern: <code>{pattern}</code></span>'
-        "</div>"
-        if redacted
-        else f"<h3>{name}</h3>"
-    )
-    identity_html = (
-        f'<code class="check-id">{key_esc}</code>'
-        if redacted
-        else f'<em><code class="check-id">{key_esc}</code></em>'
-    )
-    details = [
-        f'<p class="meta-sub">Pattern: <code>{pattern}</code></p>',
-        f"<p><strong>Expected:</strong> <code>{_escape(_json(check.expected))}</code></p>",
-    ]
-    reason_html = ""
-    if presentation.skip_reason is not None:
-        reason = presentation.skip_reason
-        reason_html = (
-            '<div class="callout callout-skipped skip-reason">'
-            f"<strong>Reason</strong><p>{_escape(reason.explanation)}</p>"
-            "</div>"
-        )
-    evaluation_html = (
-        '<p class="evaluation-state evaluation-state-errored">Errored</p>'
-        if check.verdict is Verdict.ERRORED
-        else (
-            '<p class="evaluation-state evaluation-state-not-evaluated">Not evaluated</p>'
-            if not presentation.evaluated
-            else ""
-        )
-    )
-    if check.measured is not None:
-        details.append(
-            f"<p><strong>Measured:</strong> <code>{_escape(_json(check.measured))}</code></p>"
-        )
-    if check.estimate is not False:
-        details.append(
-            f"<p><strong>Estimate:</strong> <code>{_escape(_json(check.estimate.model_dump()))}</code></p>"
-        )
-    if check.error is not None:
-        details.append(
-            '<div class="callout callout-error">'
-            f"<strong>{_escape(check.error.code)}</strong>"
-            f"<p>{_escape(check.error.message)}</p>"
-            f"<p>💡 Fix: {_escape(check.error.fix)}</p>"
-            "</div>"
-        )
-    if check.compiled_query is not None:
-        details.append(
-            f'<h4>Compiled Cypher</h4><pre class="code-block"><code>{_escape(check.compiled_query)}</code></pre>'
-        )
-    if check.evidence is not None:
-        details.append(_evidence(check))
-    details_html = (
-        ""
-        if redacted
-        else (
-            f'<details {_details_open(check)} class="check-details">'
-            "<summary>View details</summary>"
-            f'<div class="details-content">{"".join(details)}</div>'
-            "</details>"
-        )
-    )
-
-    return (
-        f'<article class="{classes}" tabindex="-1" data-verdict="{verdict_str}" data-check-key="{key_esc}" '
-        f'data-suite-id="{suite_id_esc}" data-check-id="{check_id_esc}">'
-        '<div class="check-title-row">'
-        f"{name_html}"
-        f"{identity_html}"
-        "</div>"
-        f"{evaluation_html}"
-        f"{reason_html}"
-        f"{details_html}"
-        "</article>"
-    )
-
-
-def _evidence(check: CheckResult) -> str:
-    assert check.evidence is not None
-    rows = []
-    for element in check.evidence.elements:
-        if element.kind == "rel":
-            descriptor = element.type
-        elif element.kind == "node":
-            descriptor = ", ".join(element.labels or [])
-        else:
-            descriptor = "aggregate measurement scope"
-        rows.append(
-            "<tr>"
-            f'<td><span class="kind-tag">{_escape(element.kind)}</span></td>'
-            f"<td><code>{_escape(element.id)}</code></td>"
-            f"<td>{_escape(descriptor or '')}</td>"
-            "</tr>"
-        )
-    return (
-        "<h4>Evidence</h4>"
-        f'<p class="text-muted">{_escape(check.evidence.message)} '
-        f"({check.evidence.total_count} total, cap {check.evidence.cap})</p>"
-        '<table class="styled-table compact"><thead><tr><th>Kind</th><th>ID</th><th>Labels / Type / Scope</th></tr></thead>'
-        f"<tbody>{''.join(rows)}</tbody></table>"
-    )
-
-
-def _details_open(check: CheckResult) -> str:
-    return ""
-
-
-def _score_badge(score: int | None) -> str:
-    value, color = (
-        ("N/A", "na")
-        if score is None
-        else (str(score), "good" if score == 100 else "warn" if score >= 50 else "bad")
-    )
-    return f'<span class="badge badge-score badge-score-{color}">SCORE: {value}</span>'
-
-
-def _json(value: object) -> str:
-    return json.dumps(json_compatible(value), sort_keys=True)
-
-
-def _escape(value: object) -> str:
-    return html.escape(str(value), quote=True)
-
-
-_CSS = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="graphcheck-redaction" content="none">
+
+<title>GraphCheck Dashboard - canonical-clean</title>
+<style>
 :root {
   color-scheme: light;
   --bg-main: #f8fafc;
@@ -1445,10 +678,64 @@ p.text-muted { margin-top: 0; }
   .panel-section { max-height: 500px; }
   #checks-next-steps-panel { height: 500px; }
 }
-""".strip()
+</style>
+</head>
+<body>
+<header class="navbar"><div id="report-run-title" class="brand-container">  <span class="eyebrow">GraphCheck Dashboard [v0.1.0 / Pack v0.1.0]</span>  <div class="header-status">    <span class="status-pill status-pill-complete">COMPLETE</span>    <h1><strong>Run Complete.</strong> <span class="header-status-message">No failures. All 2 selected checks passed.</span></h1>  </div>  </div>  <div class="navbar-actions">    <span id="report-navigation-status" class="report-navigation-status" role="status" aria-live="polite"></span>    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme" title="Toggle Theme">🌙</button>  </div></header>
+<main class="dashboard-body">
+<div class="dashboard-grid">
+<aside id="report-explorer" class="card panel-section report-explorer" data-current-report="canonical-clean" aria-label="Report explorer">  <div class="explorer-header">    <h2>Report History</h2>    <input type="search" id="report-search-input" placeholder="🔍 Search reports..." aria-label="Search reports">    <div class="explorer-selection-actions">      <button id="clear-report-selection-btn" class="btn-secondary" type="button" disabled>Clear Selection</button>      <button id="delete-reports-btn" class="btn-danger" type="button" disabled>Delete</button>    </div>  </div>  <div class="scrollable-content explorer-scroll">    <details id="latest-report-group" class="report-group" open>      <summary class="report-group-heading">        <h3 id="latest-reports-heading">Latest report</h3>      </summary>      <div id="latest-report-list" class="report-list">        <p class="explorer-loading text-muted">Loading report history…</p>      </div>    </details>    <details id="last-five-report-group" class="report-group" open>      <summary class="report-group-heading">        <h3 id="last-five-reports-heading">Last 5 reports</h3>      </summary>      <div id="last-five-report-list" class="report-list">        <p class="explorer-loading text-muted">Loading…</p>      </div>    </details>    <details id="older-report-group" class="report-group">      <summary class="report-group-heading">        <h3 id="older-reports-heading">Older</h3>      </summary>      <div id="older-report-list" class="report-list">        <p class="explorer-loading text-muted">Loading…</p>      </div>    </details>  </div>  <div class="panel-footer explorer-footer">    <div id="report-explorer-status" class="explorer-status" aria-live="polite"></div>    <div class="explorer-comparison-actions">      <button id="compare-reports-btn" class="btn-secondary" type="button" disabled>Compare Selected</button>      <button id="compare-most-recent-btn" class="btn-primary" type="button" disabled>Compare Most Recent</button>    </div>  </div></aside><dialog id="report-comparison-dialog" class="comparison-dialog">  <div class="comparison-dialog-header">    <h2>Report Comparison</h2>    <button id="close-comparison-btn" class="dialog-close" type="button" aria-label="Close Comparison">×</button>  </div>  <pre id="report-comparison-content" tabindex="0"></pre></dialog><dialog id="report-missing-dialog" class="comparison-dialog report-missing-dialog">  <div class="comparison-dialog-header">    <div class="report-missing-title">      <h2>Report Not Found</h2>      <p id="report-missing-diagnostic"><span class="report-missing-name">Selected report</span> could not be found or opened.</p>    </div>    <button id="close-report-missing-btn" class="dialog-close" type="button" aria-label="Close Report Missing">×</button>  </div>  <div class="report-missing-content">    <p><strong>Next step:</strong> Select another report from history or regenerate the missing report.</p>  </div></dialog><dialog id="delete-confirmation-dialog" class="confirmation-dialog">  <h2>Are you sure?</h2>  <p id="delete-confirmation-message"></p>  <div class="confirmation-actions">    <button id="cancel-delete-btn" class="btn-secondary" type="button">Cancel</button>    <button id="confirm-delete-btn" class="btn-danger" type="button">Delete</button>  </div></dialog>
+<section id="report-overview" class="card panel-section">  <div class="summary-top-bar">    <div class="summary-meta-col">      <h2>Graph Health Overview</h2>      <dl class="target-summary"><div><dt>Target Graph</dt><dd><strong>neo4j</strong></dd></div><div><dt>Database</dt><dd>Neo4j 5.26.28 community</dd></div><div><dt>Size</dt><dd>5,005 nodes · 5,870 relationships</dd></div><div><dt>Schema Inventory</dt><dd><details class="target-inventory-details"><summary>3 labels · 4 relationship types</summary><div><strong>Labels:</strong> Account, Customer, Transaction</div><div><strong>Relationship types:</strong> CONTROLS, OWNS, RECEIVED_BY, SENT</div></details></dd></div><div><dt>Capabilities</dt><dd class="capability-list"><span class="capability-pill capability-unavailable" tabindex="0" aria-label="APOC: Unavailable">APOC<span class="capability-tooltip" role="tooltip">Unavailable</span></span><span class="capability-pill capability-available" tabindex="0" aria-label="Count Store: Available">Count Store<span class="capability-tooltip" role="tooltip">Available</span></span></dd></div></dl>    </div>  </div>  <div class="scrollable-content">        <div class="suite-status-list"><div class="suite-status-card">  <div class="suite-status-header">    <div class="suite-title-group">      <span class="suite-title"><em><code>fraud-ring-conformance</code></em></span>      <span class="suite-check-stats">2/2 checks run</span>    </div>    <div class="suite-badges-row"><span class="badge badge-score badge-score-good">SCORE: 100</span></div>  </div>  <div class="status-bar-wrapper"><div class="status-box status-box-pass" data-tooltip="Account nodes are connected — pass" data-suite-id="fraud-ring-conformance" data-check-id="account-no-orphans" role="button" tabindex="0"></div><div class="status-box status-box-pass" data-tooltip="Account has exactly 1 OWNS relationship(s) to Customer — pass" data-suite-id="fraud-ring-conformance" data-check-id="account-owner-cardinality" role="button" tabindex="0"></div></div></div></div>    <section id="not-evaluated" class="not-evaluated" tabindex="-1"><h2>Not Evaluated</h2><p class="not-evaluated-summary not-evaluated-complete">None. All 2 selected checks were evaluated.</p><p class="scope-statement">This report covers checks selected for this run. GraphCheck did not evaluate graph behavior outside those configured checks.</p><p class="selection-boundary"><strong>Suites:</strong> fraud-ring-conformance <span aria-hidden="true">|</span> <strong>Tags:</strong> no tag filter</p></section>  </div>  <div class="panel-footer">    <button id="explore-checks-btn" class="btn-primary" type="button" aria-controls="checks-next-steps-panel" aria-expanded="false">Explore checks &rarr;</button>  </div></section>
+<section id="checks-next-steps-panel" class="card panel-section hidden-panel">  <div class="checks-next-steps-header report-tabs" role="tablist" aria-label="Checks Explorer and Next Steps">    <button id="checks-tab" class="report-tab active" type="button" role="tab" aria-selected="true" aria-controls="checks-tab-panel" tabindex="0" data-tab="checks">Checks Explorer</button>    <button id="next-steps-tab" class="report-tab" type="button" role="tab" aria-selected="false" aria-controls="next-steps-tab-panel" tabindex="-1" data-tab="next-steps">Next Steps</button>  </div>  <div id="checks-tab-panel" class="report-tab-panel" role="tabpanel" aria-labelledby="checks-tab" data-tab-panel="checks">    <div class="checks-controls">      <input type="search" id="search-input" placeholder="🔍 Search checks..." aria-label="Search checks">      <div class="filter-group" aria-label="Filter checks by verdict">        <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">All</button>        <button class="filter-btn" type="button" data-filter="issues" aria-pressed="false">Issues</button>        <button class="filter-btn" type="button" data-filter="fail" aria-pressed="false">Fail</button>        <button class="filter-btn" type="button" data-filter="warn" aria-pressed="false">Warn</button>        <button class="filter-btn" type="button" data-filter="errored" aria-pressed="false">Errored</button>        <button class="filter-btn" type="button" data-filter="pass" aria-pressed="false">Pass</button>        <button class="filter-btn" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>      </div>      <button id="toggle-details-btn" class="btn-secondary" type="button">Toggle Details</button>    </div>    <div id="checks-container" class="scrollable-content"><article class="check-card check-pass" tabindex="-1" data-verdict="pass" data-check-key="fraud-ring-conformance::account-no-orphans" data-suite-id="fraud-ring-conformance" data-check-id="account-no-orphans"><div class="check-title-row"><h3>Account nodes are connected</h3><em><code class="check-id">fraud-ring-conformance::account-no-orphans</code></em></div><details  class="check-details"><summary>View details</summary><div class="details-content"><p class="meta-sub">Pattern: <code>conformance</code></p><p><strong>Expected:</strong> <code>{&quot;orphans&quot;: 0}</code></p><p><strong>Measured:</strong> <code>{&quot;population&quot;: 2500, &quot;violation_count&quot;: 0, &quot;violations&quot;: 0}</code></p><h4>Compiled Cypher</h4><pre class="code-block"><code>CALL {
+  CALL db.labels() YIELD label
+  RETURN collect(label) AS _gc_labels
+}
+CALL {
+  CALL db.relationshipTypes() YIELD relationshipType
+  RETURN collect(relationshipType) AS _gc_rel_types
+}
 
+        CALL {
+          MATCH (n:`Account`)
+          OPTIONAL MATCH (n)-[r]-(other)
+          WITH n, count(r) AS degree
+          RETURN count(n) AS population,
+                 sum(CASE WHEN degree = 0 THEN 1 ELSE 0 END) AS violation_count
+        }
+        RETURN
+all(name IN $required_labels WHERE name IN _gc_labels)
+  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,
+[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,
+[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]
+  AS missing_relationship_types
+,
+               population, violation_count, [] AS evidence</code></pre></div></details></article><article class="check-card check-pass" tabindex="-1" data-verdict="pass" data-check-key="fraud-ring-conformance::account-owner-cardinality" data-suite-id="fraud-ring-conformance" data-check-id="account-owner-cardinality"><div class="check-title-row"><h3>Account has exactly 1 OWNS relationship(s) to Customer</h3><em><code class="check-id">fraud-ring-conformance::account-owner-cardinality</code></em></div><details  class="check-details"><summary>View details</summary><div class="details-content"><p class="meta-sub">Pattern: <code>conformance</code></p><p><strong>Expected:</strong> <code>{&quot;exactly&quot;: 1}</code></p><p><strong>Measured:</strong> <code>{&quot;population&quot;: 2500, &quot;violation_count&quot;: 0, &quot;violations&quot;: 0}</code></p><h4>Compiled Cypher</h4><pre class="code-block"><code>CALL {
+  CALL db.labels() YIELD label
+  RETURN collect(label) AS _gc_labels
+}
+CALL {
+  CALL db.relationshipTypes() YIELD relationshipType
+  RETURN collect(relationshipType) AS _gc_rel_types
+}
 
-_JS = """
+        CALL {
+          MATCH (n:`Account`)
+          OPTIONAL MATCH (n)&lt;-[r:`OWNS`]-(other:`Customer`)
+          WITH n, count(r) AS degree
+          RETURN count(n) AS population,
+                 sum(CASE WHEN degree &lt;&gt; $exactly THEN 1 ELSE 0 END) AS violation_count
+        }
+        RETURN
+all(name IN $required_labels WHERE name IN _gc_labels)
+  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,
+[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,
+[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]
+  AS missing_relationship_types
+,
+               population, violation_count, [] AS evidence</code></pre></div></details></article>      <p id="checks-empty-message" class="empty-panel-message text-muted" hidden></p>    </div>  </div>  <div id="next-steps-tab-panel" class="report-tab-panel next-steps-content scrollable-content" role="tabpanel" aria-labelledby="next-steps-tab" data-tab-panel="next-steps" hidden>    <article class="next-step"><h3>Add competency checks</h3><p>Add competency checks for the core business questions your graph must answer.</p></article>    <article class="next-step"><h3>Track drift over time</h3><p>Set a baseline and rerun GraphCheck to track structural drift.</p></article>    <p class="next-steps-boundary">These are general practices, not recommendations derived from this run.</p>  </div></section>
+</div>
+</main>
+<script>
 let activeVerdictFilter = 'all';
 let globalTooltip = null;
 let reportHistory = [];
@@ -1738,11 +1025,11 @@ async function reportExplorerRequest(path, options = {}) {
 }
 
 function renderComparisonMessage(content, message) {
-  const lines = String(message).split('\\n');
+  const lines = String(message).split('\n');
   content.replaceChildren();
   lines.forEach((line, index) => {
     const status = line.match(/^Status: (complete|partial|failed) -> (complete|partial|failed)$/);
-    const delta = line.match(/^(  .+: .* )(\\([+-]\\d+\\))$/);
+    const delta = line.match(/^(  .+: .* )(\([+-]\d+\))$/);
     if (status) {
       content.append('Status: ');
       [status[1], status[2]].forEach((value, statusIndex) => {
@@ -1761,7 +1048,7 @@ function renderComparisonMessage(content, message) {
     } else {
       content.append(line);
     }
-    if (index < lines.length - 1) content.append('\\n');
+    if (index < lines.length - 1) content.append('\n');
   });
 }
 
@@ -2236,4 +1523,6 @@ function initInteractions() {
 }
 
 document.addEventListener('DOMContentLoaded', initInteractions);
-""".strip()
+</script>
+</body>
+</html>

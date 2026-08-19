@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 
 from graphcheck import cli as cli_module
 from graphcheck.cli import (
-    _check_summary,
     _execution_error_table,
     _exit_code_color,
     _load_suite_inputs,
@@ -336,7 +335,7 @@ def test_execute_run_classifies_unexpected_engine_fault_as_engine_unexpected(tmp
     assert len(writes) == 1
 
 
-def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypatch):
+def test_execute_run_surfaces_reader_role_rejection(tmp_path, monkeypatch):
     from graphcheck.application.run import RunRequest, execute_run
 
     _project(tmp_path, _SMOKE_SUITE)
@@ -346,8 +345,8 @@ def test_execute_run_surfaces_read_only_credential_rejection(tmp_path, monkeypat
         def verify_read_only_credential(self):
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The configured Neo4j credential is not read-only.",
-                "Use a dedicated read-only credential, then run the suite again.",
+                "The configured Neo4j credential does not use only READER.",
+                "Grant the built-in reader role, then run the suite again.",
             )
 
     client = RejectingClient([QueryResult([{"value": 1}], ("value",), ())])
@@ -541,7 +540,11 @@ competency:
     assert target in result.stdout
     assert result.stdout.index(target) < result.stdout.index("GraphCheck run ")
     assert f"{target}\nGraphCheck run " in result.stdout
-    assert "Checks: 1 | passed 1" in result.stdout
+    assert "Score breakdown by check suite:" in result.stdout
+    assert "concurrency" in result.stdout
+    assert "100/100" in result.stdout
+    assert "1/1" in result.stdout
+    assert "Checks: 1" not in result.stdout
     assert "Exit code: 0" in result.stdout
     assert result.stdout.endswith("\n\n")
     assert "Results and Report saved to:" in result.stdout
@@ -820,7 +823,7 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
     ).print(table)
     rendered = output.getvalue()
 
-    assert {column.width for column in table.columns[3:]} == {8}
+    assert [column.width for column in table.columns[3:]] == [6, 6, 8, 7, 7]
     assert _suite_score_style(None) == "white"
     assert _suite_score_style(100) == "green"
     assert _suite_score_style(99) == "yellow"
@@ -838,20 +841,11 @@ def test_multi_suite_score_table_applies_semantic_colors_only_to_non_zero_values
     assert "\x1b[32m           2/2\x1b[0m" in rendered
     assert "\x1b[32m           3/3\x1b[0m" in rendered
     assert "\x1b[33m           0/1\x1b[0m" in rendered
-    assert "\x1b[32m       2\x1b[0m" in rendered
-    assert "\x1b[31m       1\x1b[0m" in rendered
-    assert "\x1b[33m       1\x1b[0m" in rendered
+    assert re.search(r"\x1b\[32m +2\x1b\[0m", rendered)
+    assert re.search(r"\x1b\[31m +1\x1b\[0m", rendered)
+    assert re.search(r"\x1b\[33m +1\x1b\[0m", rendered)
     assert re.search(r"\x1b\[90m +1\x1b\[0m", rendered)
     assert all(f"\x1b[{code}m-\x1b[0m" not in rendered for code in (31, 32, 33, 35, 90))
-
-    single_suite = _check_summary(results.totals)
-    assert "passed \x1b[32m2\x1b[0m" in single_suite
-    assert "failed 0 | warnings 0 | errored 0 | skipped 0" in single_suite
-    assert all(
-        f"\x1b[{code}m{label}" not in single_suite
-        for code in (31, 32, 33, 35, 90)
-        for label in ("passed", "failed", "warnings", "errored", "skipped")
-    )
 
     partial = present_results(load_results(FIXTURES / "results.partial.json"))
     output = StringIO()
@@ -911,7 +905,10 @@ competency:
 
     assert result.exit_code == 0
     assert "Received notification from DBMS server" not in caplog.text
-    assert "Checks: 1 | passed 1" in result.stdout
+    assert "Score breakdown by check suite:" in result.stdout
+    assert "quiet" in result.stdout
+    assert "100/100" in result.stdout
+    assert "1/1" in result.stdout
 
 
 def test_run_shows_interactive_progress_for_each_selected_check(tmp_path, monkeypatch):
@@ -1194,7 +1191,7 @@ competency:
     assert result.exit_code == 1
     assert ": partial" in result.stdout
     assert "Result: 1 execution error. Coverage is incomplete." in result.stdout
-    assert "errored 1" in result.stdout
+    assert re.search(r"errored\s+0/100\s+1/1\s+-\s+-\s+-\s+1\s+-", result.stdout)
     assert (
         "The following check(s) have execution errors. Suggested fixes are provided:"
         in result.stdout
@@ -1280,7 +1277,7 @@ competency:
     assert client.closed is True
 
 
-def test_run_rejects_write_capable_credential_and_reports_visible_fix(tmp_path, monkeypatch):
+def test_run_rejects_credential_without_reader_role_and_reports_visible_fix(tmp_path, monkeypatch):
     _project(
         tmp_path,
         {
@@ -1295,15 +1292,15 @@ competency:
         },
     )
 
-    class WriteCapableClient(FakeClient):
+    class WrongRoleClient(FakeClient):
         def verify_read_only_credential(self):
             raise GraphCheckError(
                 "neo4j.credential_not_read_only",
-                "The credential has WRITE.",
-                "Use a dedicated read-only user.",
+                "The credential has role EDITOR instead of READER.",
+                "Grant the built-in reader role.",
             )
 
-    client = WriteCapableClient()
+    client = WrongRoleClient()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
 
@@ -1315,7 +1312,7 @@ competency:
         encoding="utf-8"
     )
     assert "Troubleshooting Steps" in report
-    assert "The credential has WRITE." in report
+    assert "The credential has role EDITOR instead of READER." in report
     assert "Action required" not in report
     assert client.read_calls == []
 
