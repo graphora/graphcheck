@@ -26,10 +26,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture
+def neo4j_performance_profile(neo4j_profile):
+    try:
+        _seed_indexed_fixture(neo4j_profile)
+        yield neo4j_profile
+    finally:
+        _clean_indexed_fixture(neo4j_profile)
+
+
 def test_representative_native_token_plans_are_extractable(
-    neo4j_profile, neo4j_test_target, tmp_path
+    neo4j_performance_profile, neo4j_test_target, tmp_path
 ):
-    _seed_indexed_fixture(neo4j_profile)
+    neo4j_profile = neo4j_performance_profile
     suite = load_suite(
         yaml.safe_dump(
             {
@@ -179,13 +188,24 @@ def _seed_indexed_fixture(profile):
             "CREATE RANGE INDEX customer_id_performance IF NOT EXISTS FOR (n:Customer) ON (n.id)"
         ).consume()
         session.run(
-            "UNWIND range(1, 1000) AS index CREATE (:Customer {id: 'customer-' + toString(index)})"
+            "UNWIND range(1, 1000) AS index CREATE (:Customer {"
+            "id: 'customer-' + toString(index), _graphcheck_performance_fixture: true})"
         ).consume()
         session.run(
             "MATCH (customer:Customer {id: 'customer-1'}) "
-            "CREATE (customer)-[:PURCHASED]->(:Order {id: 'order-1'})"
+            "CREATE (customer)-[:PURCHASED]->(:Order {"
+            "id: 'order-1', _graphcheck_performance_fixture: true})"
         ).consume()
         session.run("CALL db.awaitIndexes(60)").consume()
+
+
+def _clean_indexed_fixture(profile):
+    with (
+        GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver,
+        driver.session(database=profile.database) as session,
+    ):
+        session.run("DROP INDEX customer_id_performance IF EXISTS").consume()
+        session.run("MATCH (n {_graphcheck_performance_fixture: true}) DETACH DELETE n").consume()
 
 
 def _assert_builtin_plan(check_id, query, operators, server, cypher):

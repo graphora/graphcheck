@@ -740,7 +740,7 @@ def test_missing_drift_baseline_is_errored_before_query_execution():
     assert client.read_calls == []
 
 
-def test_partial_drift_baseline_marks_run_partial_while_check_can_pass():
+def test_present_measurement_from_partial_drift_baseline_can_complete():
     client = RichClient(
         [
             RichResult(
@@ -774,9 +774,9 @@ def test_partial_drift_baseline_marks_run_partial_while_check_can_pass():
 
     results = _engine(client, baselines=baselines).run_yaml(DRIFT_SUITE, target=TARGET)
 
-    assert results.run.status is RunStatus.PARTIAL
-    assert "used partial baseline" in results.run.partial_reason
-    assert results.run.exit_code == 2
+    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.partial_reason is None
+    assert results.run.exit_code == 0
     assert results.checks[0].verdict is Verdict.PASS
     assert results.checks[0].measured["baseline"] == 100.0
     assert results.checks[0].measured["current"] == 100.0

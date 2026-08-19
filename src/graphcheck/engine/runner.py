@@ -724,11 +724,6 @@ class Engine:
                     check.spec.target,
                 )
                 timings.baseline_resolution_ms = self._timing_finish(stage_started)
-                if baseline.partial:
-                    partial_reason = (
-                        f"check {suite_id}/{check.id} used partial baseline {check.spec.baseline!r}"
-                    )
-                    self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
             self._telemetry_stage = EngineStage.QUERY
             consumption = (
                 CompetencyConsumption(compiled, self.config.result_row_limit)

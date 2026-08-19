@@ -6,6 +6,28 @@ on:
     branches: [development, main]
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch every branch
+        run: git fetch --prune --no-tags origin "+refs/heads/*:refs/remotes/origin/*"
+      - name: Install checksum-verified gitleaks
+        env:
+          GITLEAKS_VERSION: 8.29.1
+          GITLEAKS_SHA256: e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924
+        run: >-
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"; curl --fail --silent --show-error --location
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          --output "$archive"; echo "$GITLEAKS_SHA256  $archive" | sha256sum --check -;
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks; echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan complete Git history
+        run: gitleaks git --redact --log-opts="--all" .
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -78,7 +100,125 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --group dev
-      - run: uv run pytest tests/integration -v
+      - run: >
+          uv run pytest
+          tests/integration/test_integration_neo4j_adapter.py
+          tests/integration/test_integration_engine.py
+          tests/integration/test_mcp_neo4j_workflow.py
+          tests/integration/test_performance_plans.py
+          -v
+
+  first-run-linux-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: ubuntu:24.04
+    services:
+      neo4j:
+        image: neo4j:5.26.28
+        env:
+          NEO4J_AUTH: neo4j/graphora
+          NEO4J_server_memory_heap_initial__size: 128m
+          NEO4J_server_memory_heap_max__size: 256m
+          NEO4J_server_memory_pagecache_size: 128m
+    env:
+      GRAPHCHECK_TELEMETRY: "0"
+    steps:
+      - name: Prepare clean Linux container
+        run: apt-get update && apt-get install --yes --no-install-recommends ca-certificates curl git socat
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install the built wheel in an isolated environment
+        run: uv build && uv venv /tmp/graphcheck-first-run-venv && uv pip install --python /tmp/graphcheck-first-run-venv/bin/python dist/*.whl
+      - name: Run and time init -> profile -> run
+        env:
+          GRAPHCHECK_BIN: /tmp/graphcheck-first-run-venv/bin/graphcheck
+          GRAPHCHECK_PYTHON: /tmp/graphcheck-first-run-venv/bin/python
+          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/linux-container
+        run: socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 & bash .github/scripts/first-run.sh
+      - name: Retain first-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-linux-container
+          path: .first-run-artifacts/linux-container/
+          if-no-files-found: warn
+
+  first-run-macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GRAPHCHECK_TELEMETRY: "0"
+      NEO4J_VERSION: 5.26.28
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install the built wheel in an isolated environment
+        run: uv build && uv venv "$RUNNER_TEMP/graphcheck-first-run-venv" && uv pip install --python "$RUNNER_TEMP/graphcheck-first-run-venv/bin/python" dist/*.whl
+      - name: Start a pinned native Neo4j
+        run: |
+          curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${NEO4J_VERSION}-unix.tar.gz" --output "$RUNNER_TEMP/neo4j.tar.gz"
+          tar -xzf "$RUNNER_TEMP/neo4j.tar.gz" -C "$RUNNER_TEMP"
+          neo4j_home="$RUNNER_TEMP/neo4j-community-${NEO4J_VERSION}"
+          printf '\nserver.memory.heap.initial_size=128m\nserver.memory.heap.max_size=256m\nserver.memory.pagecache.size=128m\n' >> "$neo4j_home/conf/neo4j.conf"
+          "$neo4j_home/bin/neo4j-admin" dbms set-initial-password graphora
+          "$neo4j_home/bin/neo4j" start
+          echo "NEO4J_HOME=$neo4j_home" >> "$GITHUB_ENV"
+      - name: Run and time init -> profile -> run
+        env:
+          GRAPHCHECK_BIN: ${{ runner.temp }}/graphcheck-first-run-venv/bin/graphcheck
+          GRAPHCHECK_PYTHON: ${{ runner.temp }}/graphcheck-first-run-venv/bin/python
+          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/macos
+        run: bash .github/scripts/first-run.sh
+      - name: Retain first-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-macos
+          path: .first-run-artifacts/macos/
+          if-no-files-found: warn
+      - name: Stop Neo4j
+        if: always() && env.NEO4J_HOME != ''
+        run: "$NEO4J_HOME/bin/neo4j stop"
+
+  first-run-wsl:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install a clean Ubuntu WSL environment
+        uses: Vampire/setup-wsl@v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: ca-certificates curl openjdk-17-jre-headless python3 python3-pip python3-venv
+          wsl-shell-user: runner
+      - name: Install GraphCheck and run the timed first-run flow inside WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          export GRAPHCHECK_TELEMETRY=0
+          neo4j_version=5.26.28
+          python3 -m venv /tmp/graphcheck-first-run-venv
+          /tmp/graphcheck-first-run-venv/bin/pip install .
+          curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${neo4j_version}-unix.tar.gz" --output /tmp/neo4j.tar.gz
+          tar -xzf /tmp/neo4j.tar.gz -C /tmp
+          neo4j_home="/tmp/neo4j-community-${neo4j_version}"
+          printf '\nserver.memory.heap.initial_size=128m\nserver.memory.heap.max_size=256m\nserver.memory.pagecache.size=128m\n' >> "$neo4j_home/conf/neo4j.conf"
+          "$neo4j_home/bin/neo4j-admin" dbms set-initial-password graphora
+          "$neo4j_home/bin/neo4j" start
+          trap '"$neo4j_home/bin/neo4j" stop' EXIT
+          sed -i 's/\r$//' .github/scripts/first-run.sh
+          GRAPHCHECK_BIN=/tmp/graphcheck-first-run-venv/bin/graphcheck GRAPHCHECK_PYTHON=/tmp/graphcheck-first-run-venv/bin/python FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl" bash .github/scripts/first-run.sh
+      - name: Retain first-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-wsl
+          path: .first-run-artifacts/wsl/
+          if-no-files-found: warn
 
   performance-gates:
     runs-on: windows-latest
