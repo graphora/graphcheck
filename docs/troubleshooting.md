@@ -24,7 +24,7 @@ These come from the connector and mostly map onto everyday setup mistakes.
 | `neo4j.auth_failed` | Neo4j rejected the configured credentials | Update `user` and `password`/`password_env` in `profiles.yml`, then run `graphcheck debug` again |
 | `neo4j.tls_mismatch` | The endpoint's TLS mode or certificate doesn't match the configured URI scheme | Use `bolt://` for direct non-TLS, `neo4j+s://` for CA-signed TLS, or `neo4j+ssc://` for a trusted self-signed endpoint |
 | `neo4j.database_not_found` | The configured database doesn't exist or isn't online | Set `database` in `profiles.yml` to an existing online database (often `neo4j`), or create/start it |
-| `neo4j.permission_denied` | Neo4j denied a read or probe query for the configured user | Grant the user `ACCESS` plus `MATCH` (or `READ`/`TRAVERSE`) on the configured database |
+| `neo4j.permission_denied` | Neo4j denied a read or probe query for the configured user | Verify the configured `database` in `profiles.yml` is correct, and that the user has the built-in `reader` role (plus `PUBLIC`) on it - see Read-only enforcement below |
 | `neo4j.unsupported_version` | The Neo4j Server version is outside GraphCheck's supported lines | Upgrade to Neo4j Server 5.26 LTS or a documented calendar-version target |
 | `neo4j.query_failed` | A probe or setup query failed for a reason not covered above | Run `graphcheck debug --json` and check the message for the specific query that failed |
 
