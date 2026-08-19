@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "graphcheck"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Semantic observability for property graphs — pytest for knowledge graphs."
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -63,6 +63,9 @@ dev = [
     "pre-commit>=3.7",
     "testcontainers[neo4j]>=4.8",
 ]
+
+[tool.hatch.version]
+path = "src/graphcheck/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/graphcheck"]
