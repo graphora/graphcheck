@@ -73,12 +73,13 @@ def isolated_telemetry_config(tmp_path: Path, monkeypatch) -> Path:
     return config
 
 
-@pytest.fixture(scope="module", params=_selected_neo4j_targets(), ids=lambda target: target.name)
+# Container startup dominates these tests; mutating tests must clean their data before teardown.
+@pytest.fixture(scope="session", params=_selected_neo4j_targets(), ids=lambda target: target.name)
 def neo4j_test_target(request):
     return request.param
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def neo4j_profile(neo4j_test_target):
     from testcontainers.neo4j import Neo4jContainer
 
@@ -95,7 +96,7 @@ def neo4j_profile(neo4j_test_target):
         )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def neo4j_apoc_profile(neo4j_test_target):
     from testcontainers.neo4j import Neo4jContainer
 
@@ -114,7 +115,7 @@ def neo4j_apoc_profile(neo4j_test_target):
         )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def neo4j_enterprise_profiles(neo4j_test_target):
     """Enterprise users covering reader, restricted, custom, and HOME-scoped access."""
     from neo4j import GraphDatabase
@@ -190,6 +191,6 @@ def neo4j_enterprise_profiles(neo4j_test_target):
         yield profiles
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def neo4j_restricted_profile(neo4j_enterprise_profiles):
     return neo4j_enterprise_profiles["graphcheck_restricted"]

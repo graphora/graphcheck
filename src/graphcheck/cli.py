@@ -2091,20 +2091,6 @@ def _exit_code_color(exit_code: int) -> str:
     }.get(exit_code, typer.colors.WHITE)
 
 
-def _check_summary(totals) -> str:
-    values = (
-        ("passed", totals.passed, typer.colors.GREEN),
-        ("failed", totals.fail, typer.colors.RED),
-        ("warnings", totals.warn, typer.colors.YELLOW),
-        ("errored", totals.errored, typer.colors.MAGENTA),
-        ("skipped", totals.skipped, typer.colors.BRIGHT_BLACK),
-    )
-    return "".join(
-        f" | {label} {typer.style(str(value), fg=color) if value else value}"
-        for label, value, color in values
-    )
-
-
 def _print_run_target(target) -> None:
     if target is None:
         return
@@ -2151,7 +2137,7 @@ def _suite_score_table(results: "Results"):
     table.add_column("Score", justify="right", no_wrap=True)
     table.add_column("Check Coverage", justify="right", no_wrap=True)
     for heading in ("Passed", "Failed", "Warnings", "Errored", "Skipped"):
-        table.add_column(heading, justify="right", width=8, no_wrap=True)
+        table.add_column(heading, justify="right", width=len(heading), no_wrap=True)
     if not results.suites:
         table.add_row(*(Text("n/a", style="bright_black") for _ in range(8)))
         return table
@@ -2313,18 +2299,13 @@ def _print_run_summary(
 
     totals = results.totals
     presentation = present_results(results)
-    score = "n/a" if results.score is None else str(results.score.value)
     status = display_run_status(results).value
     run_label = "GraphCheck redacted run" if results.run.redaction.applied else "GraphCheck run"
     typer.echo(
         f"{run_label} {display_run_id or results.run.id}: "
         f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
     )
-    if len(results.suites) > 1 or results.run.status.value == "failed":
-        _print_suite_score_table(results)
-    else:
-        typer.echo(f"Checks: {totals.checks}{_check_summary(totals)}")
-        typer.echo(f"Score: {score}")
+    _print_suite_score_table(results)
     typer.echo()
     if results.run.partial_reason is not None:
         typer.echo(f"Partial: {results.run.partial_reason}")
