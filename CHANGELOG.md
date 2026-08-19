@@ -250,6 +250,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- The release README and full user guide now require Enterprise credentials to have exactly
+  Neo4j's built-in `reader` role plus automatic `PUBLIC`, replacing obsolete custom-role setup
+  instructions that the current credential gate rejects.
 - Failed artifacts now remain failed in report headers and history for every run-level error code,
   rather than only for unreachable-Neo4j failures.
 - Clean-result presentation no longer overstates all-skipped, empty-selection, partial, or errored

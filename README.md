@@ -53,9 +53,10 @@ checks/example.yml      Example check suite
 ```
 
 Edit `profiles.yml` with the URI, database, and credential for your Neo4j instance. Enterprise and
-Developer deployments should use a dedicated server-enforced read-only user; Community deployments
-cannot enforce read-only roles, so GraphCheck instead rejects every customer-authored query unless
-Neo4j plans it as read-only.
+Developer deployments must use a user assigned only Neo4j's built-in `reader` role plus the
+automatic `PUBLIC` role; GraphCheck rejects missing, additional, or custom roles. Community
+deployments cannot enforce read-only roles, so GraphCheck instead rejects every customer-authored
+query unless Neo4j plans it as read-only.
 
 Verify the connection, replace the generated suite with the baseline-free example below, and run it:
 
