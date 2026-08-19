@@ -221,9 +221,9 @@ line separates the table from the artifact path. Passing checks are not repeated
 progress display. The final exit-code line uses green for 0, red for 1 and 3, and yellow for 2.
 Borderless table header rules use a continuous `─` line, and interactive progress uses a green `━`
 completed segment followed by a grey `─` remaining segment rather than ASCII equals and dashes.
-When multiple suites are selected, it follows that sentence with a borderless `Score breakdown by
-check suite:` table. The table shows suite score, evaluated/selected coverage, and fixed-width
-passed, failed, warning, errored, and skipped columns. Scores use green for 100, yellow for 50–99,
+Every run includes a borderless `Score breakdown by check suite:` table. The table shows suite
+score, evaluated/selected coverage, and passed, failed, warning, errored, and skipped outcome
+columns fixed to their header widths for compact terminals. Scores use green for 100, yellow for 50–99,
 and red for 0–49. Check coverage is green when evaluated equals selected and yellow otherwise;
 outcome colors apply only to non-zero values while headers remain white. Target metadata appears
 before interactive progress. Suite names are italicized, and incomplete coverage names every suite

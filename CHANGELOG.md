@@ -17,8 +17,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Offline reports now include a compact target summary with graph size, schema inventory, and
   capability availability; a permanent `Not Evaluated` coverage section; and an accessible,
   tabbed `Checks Explorer` / `Next Steps` panel with fixed non-personalized guidance.
-- Multi-suite CLI runs now include a borderless score and coverage table, while runs with skipped
-  checks include a concise table naming each unevaluated check and its persisted reason.
+- CLI runs now include a borderless per-suite score and coverage table, including single-suite
+  runs, while runs with skipped checks include a concise table naming each unevaluated check and
+  its persisted reason.
+- Drift checks can complete using a present, valid measurement from an otherwise partial baseline;
+  missing measurements from partial baselines remain explicit partial-run errors.
 - A clean all-pass results fixture and CR1–5 implementation roadmap document the new outcome,
   coverage, target, ledger, navigation, and generic-guidance acceptance contracts.
 - Verified mask-redacted exports through `graphcheck run --redact` (alias `--redacted`) and
@@ -119,6 +122,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - CI lanes for the minimum and latest supported Python-driver lines, Neo4j 5.26/Cypher 5 and
   2026.06/Cypher 5/25 integration targets, performance gates, and an isolated installed-wheel
   smoke test that verifies CLI startup and packaged check resources.
+- Clean-environment first-run CI lanes for an Ubuntu container, native macOS, and Ubuntu under
+  Windows WSL. Each lane installs GraphCheck in isolation, runs the real `init` → `profile` →
+  `run` flow against pinned Neo4j 5.26.28, asserts a complete exit-0 result and required
+  artifacts in under ten minutes, and retains the command logs, report, result, and timing evidence.
 - Added GraphCheck observability support.
 - Added `graphcheck monitor` CLI command.
 - Added Prometheus metrics exporter.
@@ -137,6 +144,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Neo4j integration containers are reused for each CI session and the database-backed integration
+  files run as one focused group, with explicit fixture cleanup preventing shared graph state from
+  leaking between tests.
 - Bumped the independently versioned `results.json` contract to schema 1.2. New non-failed runs
   persist sorted, unique label and relationship-type inventories collected by the existing target
   probe; schema 1.0 and 1.1 artifacts retain explicit in-memory `not recorded` compatibility.

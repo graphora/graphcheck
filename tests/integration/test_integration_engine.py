@@ -21,6 +21,43 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture
+def pii_graph(neo4j_profile):
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri,
+            auth=(neo4j_profile.user, neo4j_profile.password),
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        session.run(
+            "CREATE (:GraphCheckPiiFixture {email: $email, notes: $card, tags: $tags})",
+            email="person@example.com",
+            card="4111 1111 1111 1111",
+            tags=["customer", "priority"],
+        ).consume()
+        try:
+            yield
+        finally:
+            session.run("MATCH (n:GraphCheckPiiFixture) DETACH DELETE n").consume()
+
+
+@pytest.fixture
+def unfamiliar_graph(neo4j_profile):
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri,
+            auth=(neo4j_profile.user, neo4j_profile.password),
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        session.run("CREATE (:ExistingLabel)").consume()
+        try:
+            yield
+        finally:
+            session.run("MATCH (n:ExistingLabel) DETACH DELETE n").consume()
+
+
 def test_engine_executes_parameterized_and_temporal_competency_queries(neo4j_profile):
     client = Neo4jClient(neo4j_profile)
     try:
@@ -120,17 +157,7 @@ drift:
     assert results.checks[0].error.code == "engine.schema_reference_missing"
 
 
-def test_populated_graph_with_unfamiliar_schema_is_errored(neo4j_profile):
-    driver = GraphDatabase.driver(
-        neo4j_profile.uri,
-        auth=(neo4j_profile.user, neo4j_profile.password),
-    )
-    try:
-        with driver.session(database=neo4j_profile.database) as session:
-            session.run("CREATE (:ExistingLabel)").consume()
-    finally:
-        driver.close()
-
+def test_populated_graph_with_unfamiliar_schema_is_errored(neo4j_profile, unfamiliar_graph):
     client = Neo4jClient(neo4j_profile)
     try:
         results = Engine(client).run_yaml(
@@ -175,22 +202,7 @@ competency:
     assert count == 0
 
 
-def test_pii_pack_executes_name_and_value_checks_with_real_cypher(neo4j_profile):
-    driver = GraphDatabase.driver(
-        neo4j_profile.uri,
-        auth=(neo4j_profile.user, neo4j_profile.password),
-    )
-    try:
-        with driver.session(database=neo4j_profile.database) as session:
-            session.run(
-                "CREATE (:GraphCheckPiiFixture {email: $email, notes: $card, tags: $tags})",
-                email="person@example.com",
-                card="4111 1111 1111 1111",
-                tags=["customer", "priority"],
-            ).consume()
-    finally:
-        driver.close()
-
+def test_pii_pack_executes_name_and_value_checks_with_real_cypher(neo4j_profile, pii_graph):
     client = Neo4jClient(neo4j_profile)
     try:
         loaded = load_suite(
