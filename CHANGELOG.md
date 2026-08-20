@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-20
+
 ### Changed
 
 - The base installation no longer pulls the LLM provider SDKs or MCP server stack. Install
@@ -13,8 +15,16 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Restored the optional generation and MCP stacks to the development dependency group so a
   locked development install can run the complete test suite without changing the lean base
   package published to PyPI.
+- Standardized the product description to "Semantic observability for property graphs." across
+  the CLI help and packaging metadata.
 - Pinned canonical HTML sample reports to LF line endings so their byte-level checks pass
   consistently on Windows and Unix checkouts.
+
+### Fixed
+
+- `graphcheck init` no longer scaffolds a drift check that errors on the first run. A fresh
+  project's default checks are baseline-free, so the first `graphcheck run` returns a clean,
+  understandable result instead of a missing-baseline execution error.
 
 ## [0.1.0] - 2026-08-20
 
@@ -24,7 +34,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
   GitHub Release, guarding that the release tag matches the built version and smoke-testing a
   clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
-  and a single-source version read from installed distribution metadata. See `docs/releasing.md`.
+  and a single-source version literal in `src/graphcheck/__init__.py`, read at build time by hatch. See `docs/releasing.md`.
 - A release-oriented top-level README with a versioned project header, embedded CLI demo,
   concise problem statement, quickstart, check-suite example, explicit non-goals, and a preserved
   full user guide for detailed operational workflows.
