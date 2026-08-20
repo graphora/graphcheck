@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "graphcheck"
 dynamic = ["version"]
-description = "Semantic observability for property graphs — pytest for knowledge graphs."
+description = "Semantic observability for property graphs."
 requires-python = ">=3.12"
 license = "Apache-2.0"
 readme = "README.md"

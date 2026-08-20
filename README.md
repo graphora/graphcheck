@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f)](LICENSE)
 
-**Semantic observability for Neo4j property graphs.**
+**Semantic observability for property graphs.**
 
 </div>
 
@@ -27,21 +27,27 @@ YAML and produces deterministic, evidence-backed JSON and offline HTML reports f
 For complete setup, credential, authoring, redaction, baseline, and configuration instructions, see
 the **[full user guide](docs/user-guide.md)**.
 
-GraphCheck requires Python 3.12 or 3.13, a supported Neo4j server, and
-[`uv`](https://docs.astral.sh/uv/). See the [compatibility matrix](docs/compatibility.md) for the tested
-Neo4j and Cypher versions.
+GraphCheck requires Python 3.12 or 3.13 and a supported Neo4j server. See the
+[compatibility matrix](docs/compatibility.md) for the tested Neo4j and Cypher versions.
 
-Install the CLI from source and scaffold a project:
+Install the published CLI and scaffold a project:
 
 ```console
-git clone https://github.com/graphora/graphcheck.git
-cd graphcheck
-uv tool install .
+pip install graphcheck
 
 mkdir graph-health
 cd graph-health
 graphcheck init
 ```
+
+Install either optional add-on separately if you need its commands:
+
+```console
+pip install "graphcheck[generate]"
+pip install "graphcheck[mcp]"
+```
+
+The `generate` add-on enables AI-assisted check authoring, while `mcp` enables the MCP server.
 
 `graphcheck init` creates the following local project:
 
