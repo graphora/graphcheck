@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- The base installation no longer pulls the LLM provider SDKs or MCP server stack. Install
+  `graphcheck[generate]` for check authoring or `graphcheck[mcp]` for `graphcheck mcp serve`;
+  commands now print the matching install command when an extra is absent, while JSON Schema
+  remains an explicit runtime dependency for the documented schema validators.
+
+## [0.1.0] - 2026-08-20
+
 ### Added
 - Clean-machine test protocol: step-by-step script, Part D interview questions, and a friction-log template for onboarding external testers.
 - In-repo reference docs: CI setup, check reference (all core/PII checks with fraud-ring fixture examples), install/quickstart pointer, and a troubleshooting FAQ covering profile/connection/read-only errors.

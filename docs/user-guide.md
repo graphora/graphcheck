@@ -306,6 +306,12 @@ rules.
 
 ## Generate check suggestions
 
+Install the optional authoring dependencies before using `graphcheck generate`:
+
+```console
+pip install "graphcheck[generate]"
+```
+
 `graphcheck generate` turns the latest baseline profile and optional, explicitly named domain
 documents into non-deterministic check suggestions. The command discloses the destination and exact
 data categories before calling the configured provider. It never sends graph records, property

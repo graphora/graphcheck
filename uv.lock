@@ -674,8 +674,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "filelock" },
-    { name = "instructor", extra = ["anthropic", "google-genai"] },
-    { name = "mcp" },
+    { name = "jsonschema" },
     { name = "neo4j" },
     { name = "prometheus-client" },
     { name = "pydantic" },
@@ -684,10 +683,17 @@ dependencies = [
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+generate = [
+    { name = "instructor", extra = ["anthropic", "google-genai"] },
+]
+mcp = [
+    { name = "mcp" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
-    { name = "jsonschema" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -698,8 +704,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "filelock", specifier = ">=3.12" },
-    { name = "instructor", extras = ["anthropic", "google-genai"], specifier = "==1.15.4" },
-    { name = "mcp", specifier = ">=2.0.0,<3" },
+    { name = "instructor", extras = ["anthropic", "google-genai"], marker = "extra == 'generate'", specifier = "==1.15.4" },
+    { name = "jsonschema", specifier = ">=4" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0.0,<3" },
     { name = "neo4j", specifier = ">=5.20,<7" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "pydantic", specifier = ">=2.6" },
@@ -707,11 +714,11 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "typer", specifier = ">=0.12" },
 ]
+provides-extras = ["generate", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6" },
-    { name = "jsonschema", specifier = ">=4" },
     { name = "pre-commit", specifier = ">=3.7" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },

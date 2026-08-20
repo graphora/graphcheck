@@ -18,6 +18,7 @@ _COMMAND_MODULES = {
     "graphcheck.engine",
     "graphcheck.generation.client",
     "graphcheck.generation.service",
+    "graphcheck.mcp.server",
     "graphcheck.neo4j_adapter",
     "graphcheck.observability.runner",
     "graphcheck.observability.server",
@@ -25,6 +26,8 @@ _COMMAND_MODULES = {
     "graphcheck.project",
     "graphcheck.reporting",
 }
+_OPTIONAL_STACK_MODULES = {"anthropic", "google.genai", "instructor", "mcp", "openai"}
+_COMMAND_MODULES |= _OPTIONAL_STACK_MODULES
 _TELEMETRY_MODEL_MODULES = {
     "graphcheck.telemetry.collector",
     "graphcheck.telemetry.events",
@@ -32,12 +35,16 @@ _TELEMETRY_MODEL_MODULES = {
     "graphcheck.telemetry.posthog",
     "graphcheck.telemetry.runtime",
 }
-_VERSION_FORBIDDEN_MODULES = _TELEMETRY_MODEL_MODULES | {
-    "graphcheck.cli",
-    "neo4j",
-    "pydantic",
-    "typer",
-}
+_VERSION_FORBIDDEN_MODULES = (
+    _TELEMETRY_MODEL_MODULES
+    | {
+        "graphcheck.cli",
+        "neo4j",
+        "pydantic",
+        "typer",
+    }
+    | _OPTIONAL_STACK_MODULES
+)
 
 
 @pytest.mark.parametrize("arguments", [["--help"], ["--version"]])
@@ -149,7 +156,11 @@ def _run_bootstrap(
         environment["GRAPHCHECK_TELEMETRY"] = telemetry
     environment["GRAPHCHECK_TELEMETRY_CONFIG"] = str(config or source / "missing-consent.json")
     environment.pop("DO_NOT_TRACK", None)
-    modules = _VERSION_FORBIDDEN_MODULES if arguments == ["--version"] else _TELEMETRY_MODEL_MODULES
+    modules = (
+        _VERSION_FORBIDDEN_MODULES
+        if arguments == ["--version"]
+        else _TELEMETRY_MODEL_MODULES | _OPTIONAL_STACK_MODULES
+    )
     delivery_patch = (
         "import graphcheck.telemetry.release as release;release.POSTHOG_PROJECT_API_KEY=None;"
         if patch_delivery
