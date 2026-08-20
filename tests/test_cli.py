@@ -99,7 +99,14 @@ def test_init_writes_project_files(tmp_path, monkeypatch):
     assert (tmp_path / "profiles.yml").exists()
     assert (tmp_path / "checks" / "example.yml").exists()
     assert (tmp_path / ".graphcheck").is_dir()
+    assert "Wrote checks/example.yml with 2 sample checks" in result.stdout
     assert "Next: edit checks/example.yml" in result.stdout
+
+    example = (tmp_path / "checks" / "example.yml").read_text(encoding="utf-8")
+    assert "\ndrift:" not in example
+    assert "Create one with `graphcheck profile`" in example
+    assert "# drift:" in example
+    assert "#   - id: customer-count-stable" in example
 
 
 def test_init_reports_connection_error_details(tmp_path, monkeypatch):
