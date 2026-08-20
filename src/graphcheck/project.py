@@ -104,12 +104,15 @@ competency:
     query: "MATCH (c:Customer) RETURN count(c) AS count"
     expect: { rows: { min: 1 }, columns: [count] }
 
-drift:
-  - id: customer-count-stable
-    metric: node_count
-    target: { label: Customer }
-    tolerance: { max_drop_pct: 10 }
-    severity: warn
+# Drift checks require a baseline. Create one with `graphcheck profile`,
+# then uncomment the drift check below.
+#
+# drift:
+#   - id: customer-count-stable
+#     metric: node_count
+#     target: { label: Customer }
+#     tolerance: { max_drop_pct: 10 }
+#     severity: warn
 """,
         encoding="utf-8",
     )
