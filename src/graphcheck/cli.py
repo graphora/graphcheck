@@ -384,7 +384,7 @@ def init() -> None:
     typer.secho(f"Wrote {PROJECT_FILE}", fg=typer.colors.GREEN)
     typer.secho("Wrote profiles.yml", fg=typer.colors.GREEN)
     typer.secho("Profile setup help is included in profiles.yml", fg=typer.colors.CYAN)
-    typer.secho("Wrote checks/example.yml with 3 sample checks", fg=typer.colors.GREEN)
+    typer.secho("Wrote checks/example.yml with 2 sample checks", fg=typer.colors.GREEN)
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)
