@@ -83,6 +83,11 @@ def test_init_writes_project_files(tmp_path, monkeypatch):
     assert (tmp_path / ".graphcheck").is_dir()
     assert "Next: edit checks/example.yml" in result.stdout
 
+    example = (tmp_path / "checks" / "example.yml").read_text(encoding="utf-8")
+    assert "\ndrift:" not in example
+    assert "# drift:" in example
+    assert "#   - id: customer-count-stable" in example
+
 
 def test_init_reports_connection_error_details(tmp_path, monkeypatch):
     from graphcheck.errors import GraphCheckError
