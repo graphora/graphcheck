@@ -10,6 +10,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
   `graphcheck[generate]` for check authoring or `graphcheck[mcp]` for `graphcheck mcp serve`;
   commands now print the matching install command when an extra is absent, while JSON Schema
   remains an explicit runtime dependency for the documented schema validators.
+- Restored the optional generation and MCP stacks to the development dependency group so a
+  locked development install can run the complete test suite without changing the lean base
+  package published to PyPI.
+- Pinned canonical HTML sample reports to LF line endings so their byte-level checks pass
+  consistently on Windows and Unix checkouts.
 
 ## [0.1.0] - 2026-08-20
 
