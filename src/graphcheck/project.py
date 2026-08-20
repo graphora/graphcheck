@@ -104,7 +104,7 @@ competency:
     query: "MATCH (c:Customer) RETURN count(c) AS count"
     expect: { rows: { min: 1 }, columns: [count] }
 
-# Drift checks require a baseline. Create one with `graphcheck baseline ...`,
+# Drift checks require a baseline. Create one with `graphcheck profile`,
 # then uncomment the drift check below.
 #
 # drift:
