@@ -1,0 +1,191 @@
+{
+  "checks": [
+    {
+      "compiled_query": "MATCH (c:Customer {id:$customer_id})-[:CONTROLS*1..4]->(a:Account) RETURN a.id AS account_id",
+      "duration_ms": 142,
+      "error": null,
+      "estimate": false,
+      "evidence": {
+        "cap": 50,
+        "elements": [
+          {
+            "id": "4:abc:12",
+            "kind": "node",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          }
+        ],
+        "message": "5000 rows exceeds max 200",
+        "total_count": 5000,
+        "truncated": true
+      },
+      "expected": {
+        "rows": {
+          "max": 200,
+          "min": 1
+        },
+        "unique": true
+      },
+      "id": "cq-001",
+      "measured": {
+        "rows": 5000
+      },
+      "name": "Which accounts does a customer control",
+      "params": {
+        "customer_id": "CUST-1042"
+      },
+      "pattern": "competency-shape",
+      "provenance": "KYC requirement \u00a74.2",
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:12Z",
+      "suite_id": "customer-360",
+      "verdict": "fail"
+    },
+    {
+      "compiled_query": "MATCH (c:Customer) RETURN count(c) AS total, count(c.tax_id) AS present",
+      "duration_ms": 61,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "threshold": 1.0
+      },
+      "id": "cust-tax-id-present",
+      "measured": {
+        "coverage": 1.0
+      },
+      "name": "Customer.tax_id is present",
+      "params": {},
+      "pattern": "conformance",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:13Z",
+      "suite_id": "customer-360",
+      "verdict": "pass"
+    },
+    {
+      "compiled_query": "MATCH (a:Account) WHERE NOT (a)<-[:CONTROLS]-(:Customer) RETURN a.id",
+      "duration_ms": 55,
+      "error": null,
+      "estimate": false,
+      "evidence": {
+        "cap": 50,
+        "elements": [
+          {
+            "id": "4:abc:88",
+            "kind": "node",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:abc:91",
+            "kind": "node",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          }
+        ],
+        "message": "2 Account nodes have no controlling Customer",
+        "total_count": 2,
+        "truncated": false
+      },
+      "expected": {
+        "orphans": 0
+      },
+      "id": "account-no-orphans",
+      "measured": {
+        "orphans": 2
+      },
+      "name": "Accounts are connected to a Customer",
+      "params": {},
+      "pattern": "conformance",
+      "provenance": null,
+      "severity": "warn",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:14Z",
+      "suite_id": "customer-360",
+      "verdict": "warn"
+    }
+  ],
+  "run": {
+    "error": null,
+    "exit_code": 1,
+    "finished_at": "2026-07-06T09:02:41Z",
+    "graphcheck_version": "0.1.0",
+    "id": "run_01HXATZ",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "customer-360"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-07-06T09:00:00Z",
+    "status": "complete",
+    "target": {
+      "capabilities": {
+        "apoc": true,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:abc123",
+      "labels": [
+        "Account",
+        "Customer"
+      ],
+      "nodes": 1250,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS"
+      ],
+      "relationships": 3480,
+      "server_version": "5.18.0"
+    }
+  },
+  "schema_version": "1.2",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 43,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "customer-360",
+      "score": 43,
+      "source_sha": "a1b2c3",
+      "totals": {
+        "checks": 3,
+        "errored": 0,
+        "fail": 1,
+        "pass": 1,
+        "skipped": 0,
+        "warn": 1
+      }
+    }
+  ],
+  "totals": {
+    "checks": 3,
+    "errored": 0,
+    "fail": 1,
+    "pass": 1,
+    "skipped": 0,
+    "warn": 1
+  }
+}

@@ -1,0 +1,3 @@
+[submodule "vendor/graphcheck-fraud-ring-fixture"]
+	path = vendor/graphcheck-fraud-ring-fixture
+	url = https://github.com/graphora/graphcheck-fraud-ring-fixture.git

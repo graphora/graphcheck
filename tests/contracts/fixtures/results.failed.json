@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.2",
+  "run": {
+    "id": "run_01HXATZ",
+    "started_at": "2026-07-06T09:00:00Z",
+    "finished_at": "2026-07-06T09:02:41Z",
+    "graphcheck_version": "0.1.0",
+    "pack_version": "0.1.0",
+    "status": "failed",
+    "partial_reason": null,
+    "exit_code": 3,
+    "selection": {
+      "suites": [],
+      "tags": [],
+      "fail_fast": false
+    },
+    "redaction": {
+      "policy": "none",
+      "applied": false
+    },
+    "target": null,
+    "error": {
+      "code": "connection.auth",
+      "message": "Neo4j rejected the credentials for bolt://localhost:7687",
+      "fix": "Check the password in profiles.yml, or run `graphcheck debug` to diagnose."
+    }
+  },
+  "score": null,
+  "totals": {
+    "checks": 0,
+    "pass": 0,
+    "fail": 0,
+    "warn": 0,
+    "errored": 0,
+    "skipped": 0
+  },
+  "suites": [],
+  "checks": []
+}

@@ -1,0 +1,191 @@
+{
+  "schema_version": "1.2",
+  "run": {
+    "id": "run_01HXATZ",
+    "started_at": "2026-07-06T09:00:00Z",
+    "finished_at": "2026-07-06T09:02:41Z",
+    "graphcheck_version": "0.1.0",
+    "pack_version": "0.1.0",
+    "status": "complete",
+    "partial_reason": null,
+    "exit_code": 1,
+    "selection": {
+      "suites": [
+        "customer-360"
+      ],
+      "tags": [],
+      "fail_fast": false
+    },
+    "redaction": {
+      "policy": "none",
+      "applied": false
+    },
+    "target": {
+      "database": "neo4j",
+      "server_version": "5.18.0",
+      "edition": "community",
+      "fingerprint": "sha256:abc123",
+      "capabilities": {
+        "apoc": true,
+        "count_store": true
+      },
+      "nodes": 1250,
+      "relationships": 3480,
+      "labels": [
+        "Account",
+        "Customer"
+      ],
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS"
+      ]
+    },
+    "error": null
+  },
+  "score": {
+    "value": 43,
+    "method": "weighted-by-severity",
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "totals": {
+    "checks": 3,
+    "pass": 1,
+    "fail": 1,
+    "warn": 1,
+    "errored": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "id": "customer-360",
+      "source_sha": "a1b2c3",
+      "score": 43,
+      "totals": {
+        "checks": 3,
+        "pass": 1,
+        "fail": 1,
+        "warn": 1,
+        "errored": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": "cq-001",
+      "suite_id": "customer-360",
+      "pattern": "competency-shape",
+      "name": "Which accounts does a customer control",
+      "provenance": "KYC requirement §4.2",
+      "severity": "error",
+      "verdict": "fail",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:12Z",
+      "duration_ms": 142,
+      "compiled_query": "MATCH (c:Customer {id:$customer_id})-[:CONTROLS*1..4]->(a:Account) RETURN a.id AS account_id",
+      "params": {
+        "customer_id": "CUST-1042"
+      },
+      "measured": {
+        "rows": 5000
+      },
+      "expected": {
+        "rows": {
+          "min": 1,
+          "max": 200
+        },
+        "unique": true
+      },
+      "estimate": false,
+      "evidence": {
+        "message": "5000 rows exceeds max 200",
+        "elements": [
+          {
+            "kind": "node",
+            "id": "4:abc:12",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          }
+        ],
+        "truncated": true,
+        "cap": 50,
+        "total_count": 5000
+      },
+      "error": null
+    },
+    {
+      "id": "cust-tax-id-present",
+      "suite_id": "customer-360",
+      "pattern": "conformance",
+      "name": "Customer.tax_id is present",
+      "provenance": null,
+      "severity": "error",
+      "verdict": "pass",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:13Z",
+      "duration_ms": 61,
+      "compiled_query": "MATCH (c:Customer) RETURN count(c) AS total, count(c.tax_id) AS present",
+      "params": {},
+      "measured": {
+        "coverage": 1.0
+      },
+      "expected": {
+        "threshold": 1.0
+      },
+      "estimate": false,
+      "evidence": null,
+      "error": null
+    },
+    {
+      "id": "account-no-orphans",
+      "suite_id": "customer-360",
+      "pattern": "conformance",
+      "name": "Accounts are connected to a Customer",
+      "provenance": null,
+      "severity": "warn",
+      "verdict": "warn",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:01:14Z",
+      "duration_ms": 55,
+      "compiled_query": "MATCH (a:Account) WHERE NOT (a)<-[:CONTROLS]-(:Customer) RETURN a.id",
+      "params": {},
+      "measured": {
+        "orphans": 2
+      },
+      "expected": {
+        "orphans": 0
+      },
+      "estimate": false,
+      "evidence": {
+        "message": "2 Account nodes have no controlling Customer",
+        "elements": [
+          {
+            "kind": "node",
+            "id": "4:abc:88",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          },
+          {
+            "kind": "node",
+            "id": "4:abc:91",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          }
+        ],
+        "truncated": false,
+        "cap": 50,
+        "total_count": 2
+      },
+      "error": null
+    }
+  ]
+}

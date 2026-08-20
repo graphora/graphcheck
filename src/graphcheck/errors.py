@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from graphcheck.contracts.results import CheckError
+
+
+class GraphCheckError(Exception):
+    def __init__(self, code: str, message: str, fix: str) -> None:
+        super().__init__(message)
+        self.error = CheckError(code=code, message=message, fix=fix)
+
+
+class GraphCheckTimeoutError(GraphCheckError):
+    """An expected timeout whose public result code remains contract-compatible."""
+
+
+def profile_missing() -> GraphCheckError:
+    return GraphCheckError(
+        "profile.missing",
+        "profiles.yml was not found in the GraphCheck project root.",
+        "Run `graphcheck init`, or create profiles.yml next to graphcheck.yml.",
+    )
+
+
+def profile_invalid(message: str) -> GraphCheckError:
+    return GraphCheckError(
+        "profile.invalid",
+        message,
+        "Fix profiles.yml, then run `graphcheck debug` again.",
+    )
+
+
+def profile_not_found(name: str) -> GraphCheckError:
+    return GraphCheckError(
+        "profile.not_found",
+        f"Profile {name!r} was not found in profiles.yml.",
+        "Use `graphcheck debug --profile <name>`, or update the `default` profile.",
+    )
+
+
+def profile_password_missing(profile: str, env_var: str | None = None) -> GraphCheckError:
+    if env_var is None:
+        message = f"Profile {profile!r} has no resolved password."
+        fix = (
+            "Add `password: <value>` to the profile, or add `password_env: NEO4J_PASSWORD` "
+            "and set that environment variable, then run `graphcheck debug` again."
+        )
+    else:
+        message = (
+            f"Profile {profile!r} references ${env_var}, but that environment variable is not set."
+        )
+        fix = (
+            f"Set {env_var} in this shell, or add `password: <value>` to the profile as a "
+            "fallback, then run `graphcheck debug` again."
+        )
+    return GraphCheckError(
+        "profile.password_missing",
+        message,
+        fix,
+    )
+
+
+def profile_uri_invalid(uri: str) -> GraphCheckError:
+    scheme = uri.partition(":")[0] or "missing"
+    return GraphCheckError(
+        "profile.uri_invalid",
+        f"The selected profile uses unsupported or incomplete Neo4j URI scheme {scheme!r}.",
+        "Set `uri` to a complete Bolt URI using `bolt://` for a direct local connection or "
+        "`neo4j+s://` for a CA-signed TLS/routing endpoint, then run `graphcheck debug` again.",
+    )

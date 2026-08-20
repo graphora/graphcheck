@@ -1,0 +1,19 @@
+suite: fraud-ring-conformance
+
+defaults:
+  severity: error
+
+conformance:
+  - id: account-no-orphans
+    check: no_orphans
+    with:
+      label: Account
+
+  - id: account-owner-cardinality
+    check: cardinality
+    with:
+      from_label: Account
+      rel_type: OWNS
+      to_label: Customer
+      direction: in
+      exactly: 1
