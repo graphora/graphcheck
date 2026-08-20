@@ -3,7 +3,7 @@
 This guide preserves the detailed operational documentation for GraphCheck. For the project
 overview and shortest path to a first run, start with the [README](../README.md).
 
-GraphCheck is semantic observability for Neo4j property graphs: define what should be true in YAML,
+GraphCheck is semantic observability for property graphs: define what should be true in YAML,
 run the checks against a live database, and get a scored report with evidence pointing back to the
 affected graph elements.
 
@@ -42,7 +42,7 @@ locations, but never include matched property values or claim complete PII disco
 - Neo4j Python driver 5.20 through 6.x
 - Neo4j Server 5.26 LTS or a tested calendar-version release
 - Cypher 5, or Cypher 25 on the tested calendar-version server
-- [`uv`](https://docs.astral.sh/uv/) for the repository workflow shown below
+- [`uv`](https://docs.astral.sh/uv/) only when using the development workflow shown below
 
 Neo4j Server 4.4 is legacy and unsupported. The exact tested combinations and the temporary
 Cypher 5 sampling path are documented in the [compatibility matrix](compatibility.md).
@@ -51,20 +51,42 @@ APOC is probed and reported by `graphcheck init` and `graphcheck debug`. A missi
 capability blocks only checks that declare it; those checks are recorded as unsupported instead of
 silently passing.
 
-## Install from source
+## Install
 
-Clone the repository and install the CLI as a uv tool:
+Install the core GraphCheck CLI from PyPI:
+
+```console
+pip install graphcheck
+graphcheck --version
+```
+
+The core install provides project initialization, connection diagnostics, profiling, deterministic
+check execution, and report generation. AI-assisted authoring and the MCP server are separate
+optional add-ons; neither is required for the core CLI, and installing one does not install the
+other.
+
+Install the `generate` add-on to use `graphcheck generate` and its supported model providers:
+
+```console
+pip install "graphcheck[generate]"
+```
+
+Install the `mcp` add-on to expose GraphCheck through `graphcheck mcp serve`:
+
+```console
+pip install "graphcheck[mcp]"
+```
+
+See [Generate check suggestions](#generate-check-suggestions) for the authoring workflow and the
+[agent guide](agents.md) for the MCP tools and agent workflow.
+
+### Development install
+
+Clone the repository and create its locked development environment:
 
 ```console
 git clone https://github.com/graphora/graphcheck.git
 cd graphcheck
-uv tool install .
-graphcheck --version
-```
-
-For development, create the locked environment instead:
-
-```console
 uv sync --group dev
 uv run graphcheck --version
 ```
@@ -306,7 +328,7 @@ rules.
 
 ## Generate check suggestions
 
-Install the optional authoring dependencies before using `graphcheck generate`:
+This feature requires the separately installed `generate` add-on:
 
 ```console
 pip install "graphcheck[generate]"
