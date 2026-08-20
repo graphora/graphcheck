@@ -7,6 +7,12 @@ machine-readable result, and proposes new checks for human approval. The normati
 
 ## Agent and MCP surface
 
+Install the optional MCP dependencies before starting the server:
+
+```console
+pip install "graphcheck[mcp]"
+```
+
 Start the stdio MCP server from a GraphCheck project or one of its child directories:
 
 ```console

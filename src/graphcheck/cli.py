@@ -53,6 +53,20 @@ def _call(module: str, name: str, *args, **kwargs):
     return getattr(import_module(module), name)(*args, **kwargs)
 
 
+def _optional_attribute(module: str, name: str, *, dependency: str, command: str, extra: str):
+    try:
+        return getattr(import_module(module), name)
+    except ModuleNotFoundError as exc:
+        if exc.name != dependency:
+            raise
+        typer.echo(
+            f"`{command}` requires optional dependencies. Install them with "
+            f'`pip install "graphcheck[{extra}]"`.',
+            err=True,
+        )
+        raise typer.Exit(2) from None
+
+
 # Stable injection points for tests and integrations; each forwards lazily by default.
 def find_project_root(*args, **kwargs):
     return _call("graphcheck.project", "find_project_root", *args, **kwargs)
@@ -762,7 +776,14 @@ def generate(
 ) -> None:
     """Generate non-deterministic, inert check suggestions for human review."""
     from graphcheck.errors import GraphCheckError
-    from graphcheck.generation.service import GenerationStage
+
+    GenerationStage = _optional_attribute(
+        "graphcheck.generation.service",
+        "GenerationStage",
+        dependency="instructor",
+        command="graphcheck generate",
+        extra="generate",
+    )
 
     telemetry = _command_telemetry()
     current_stage = CliFailureStage.PROJECT_DISCOVERY
@@ -1563,7 +1584,13 @@ def _open_html_report(path: Path) -> None:
 @mcp_app.command("serve")
 def mcp_serve() -> None:
     """Start the GraphCheck MCP server."""
-    _call("graphcheck.mcp.server", "run")
+    _optional_attribute(
+        "graphcheck.mcp.server",
+        "run",
+        dependency="mcp",
+        command="graphcheck mcp serve",
+        extra="mcp",
+    )()
 
 
 @app.command("run")

@@ -70,6 +70,24 @@ def test_help_runs():
     assert result.stdout.strip()
 
 
+def test_mcp_serve_without_extra_prints_install_command(monkeypatch):
+    real_import = __import__("importlib").import_module
+    monkeypatch.setattr(
+        "graphcheck.cli.import_module",
+        lambda name: (
+            (_ for _ in ()).throw(ModuleNotFoundError(name="mcp"))
+            if name == "graphcheck.mcp.server"
+            else real_import(name)
+        ),
+    )
+
+    result = runner.invoke(app, ["mcp", "serve"])
+
+    assert result.exit_code == 2
+    assert "graphcheck mcp serve" in result.output
+    assert 'pip install "graphcheck[mcp]"' in result.output
+
+
 def test_init_writes_project_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.init_trace", lambda profile_name, profile: _trace())

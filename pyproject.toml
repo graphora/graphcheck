@@ -33,16 +33,19 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
-    "instructor[anthropic,google-genai]==1.15.4",
     "neo4j>=5.20,<7",
     "prometheus-client>=0.20",
     "rich>=13",
     "typer>=0.12",
     "pydantic>=2.6",
     "pyyaml>=6.0",
-    "mcp>=2.0.0,<3",
     "filelock>=3.12",
+    "jsonschema>=4",
 ]
+
+[project.optional-dependencies]
+generate = ["instructor[anthropic,google-genai]==1.15.4"]
+mcp = ["mcp>=2.0.0,<3"]
 
 [project.scripts]
 graphcheck = "graphcheck.bootstrap:cli"
@@ -55,7 +58,8 @@ Changelog = "https://github.com/graphora/graphcheck/blob/development/CHANGELOG.m
 
 [dependency-groups]
 dev = [
-    "jsonschema>=4",
+    "instructor[anthropic,google-genai]==1.15.4",
+    "mcp>=2.0.0,<3",
     "pytest>=8",
     "pytest-cov>=5",
     "hypothesis>=6",
@@ -73,6 +77,7 @@ packages = ["src/graphcheck"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

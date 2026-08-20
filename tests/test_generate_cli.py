@@ -31,6 +31,24 @@ class FakeClient:
         )
 
 
+def test_generate_without_extra_prints_install_command(monkeypatch) -> None:
+    real_import = __import__("importlib").import_module
+    monkeypatch.setattr(
+        "graphcheck.cli.import_module",
+        lambda name: (
+            (_ for _ in ()).throw(ModuleNotFoundError(name="instructor"))
+            if name == "graphcheck.generation.service"
+            else real_import(name)
+        ),
+    )
+
+    result = runner.invoke(app, ["generate"])
+
+    assert result.exit_code == 2
+    assert "graphcheck generate" in result.output
+    assert 'pip install "graphcheck[generate]"' in result.output
+
+
 def setup_project(tmp_path: Path, monkeypatch) -> None:
     write_default_project(tmp_path)
     config = yaml.safe_load((tmp_path / "graphcheck.yml").read_text(encoding="utf-8"))
