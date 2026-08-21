@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Added Python 3.14 to the CI test matrix and package classifiers.
+
 ## [0.2.0] - 2026-08-20
 
 ### Changed
