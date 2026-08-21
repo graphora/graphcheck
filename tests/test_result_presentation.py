@@ -27,9 +27,9 @@ def _empty_selection():
 
 def _pass_with_generated_skip():
     raw = json.loads((FIXTURES / "results.clean.json").read_text(encoding="utf-8"))
-    generated = json.loads(
-        (FIXTURES / "results.generated-only.json").read_text(encoding="utf-8")
-    )["checks"][0]
+    generated = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))[
+        "checks"
+    ][0]
     generated["suite_id"] = raw["suites"][0]["id"]
     raw["checks"].append(generated)
     raw["totals"].update(checks=3, skipped=1)
