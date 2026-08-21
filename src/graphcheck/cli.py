@@ -2331,8 +2331,7 @@ def _print_run_summary(
     run_label = "GraphCheck redacted run" if results.run.redaction.applied else "GraphCheck run"
     typer.echo(f"{run_label} {display_run_id or results.run.id}")
     typer.echo(
-        f"Run status: "
-        f"{typer.style(run_status, fg=_run_status_color(run_status), bold=True)}"
+        f"Run status: {typer.style(run_status, fg=_run_status_color(run_status), bold=True)}"
     )
     typer.echo(
         f"Coverage status: "

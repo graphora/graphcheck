@@ -74,9 +74,9 @@ def _write_run(
 
 def _pass_with_generated_skip():
     raw = json.loads((FIXTURES / "results.clean.json").read_text(encoding="utf-8"))
-    generated = json.loads(
-        (FIXTURES / "results.generated-only.json").read_text(encoding="utf-8")
-    )["checks"][0]
+    generated = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))[
+        "checks"
+    ][0]
     generated["suite_id"] = raw["suites"][0]["id"]
     raw["checks"].append(generated)
     raw["totals"].update(checks=3, skipped=1)
@@ -444,9 +444,7 @@ def test_report_summary_maps_errored_checks_to_partial():
         ("failed", "failed", "failed"),
     ],
 )
-def test_report_summary_names_run_and_coverage_statuses(
-    fixture, run_status, coverage_status
-):
+def test_report_summary_names_run_and_coverage_statuses(fixture, run_status, coverage_status):
     results = load_results(FIXTURES / f"results.{fixture}.json")
 
     summary = json.loads(report_summary_json(results))
