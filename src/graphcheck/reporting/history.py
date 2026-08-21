@@ -10,6 +10,7 @@ from pathlib import Path
 
 from graphcheck.contracts.results import (
     CheckResult,
+    CoverageStatus,
     Results,
     RunStatus,
     Severity,
@@ -29,7 +30,7 @@ class ReportHistoryError(ValueError):
 class ReportSummary:
     id: str
     finished_at: str
-    status: RunStatus
+    coverage_status: CoverageStatus
     suite_scores: tuple[tuple[str, int | None], ...]
 
 
@@ -114,12 +115,12 @@ def format_report_history(records: list[ReportRun]) -> str:
         (
             record.id,
             record.summary.finished_at,
-            record.summary.status.value,
+            record.summary.coverage_status.value,
             _summary_suite_scores(record.summary),
         )
         for record in records
     ]
-    headers = ("REPORT NAME", "FINISHED AT", "STATUS", "SUITE SCORES")
+    headers = ("REPORT NAME", "FINISHED AT", "COVERAGE STATUS", "SUITE SCORES")
     widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
     lines = [
         _format_row(headers, widths),
@@ -139,14 +140,16 @@ def report_name(results: Results) -> str:
     return f"{target}_{timestamp}"
 
 
-def display_run_status(results: Results) -> RunStatus:
-    """Map machine run outcomes to user-facing statuses."""
-    if results.run.status is RunStatus.FAILED:
-        return RunStatus.FAILED
+def calculate_coverage_status(results: Results) -> CoverageStatus:
+    """Derive report coverage without changing the engine's execution status."""
+    if results.run.run_status is RunStatus.FAILED:
+        return CoverageStatus.FAILED
     return (
-        RunStatus.PARTIAL
-        if results.run.status is not RunStatus.COMPLETE or results.totals.errored > 0
-        else RunStatus.COMPLETE
+        CoverageStatus.PARTIAL
+        if results.run.run_status is not RunStatus.COMPLETE
+        or results.totals.errored > 0
+        or results.totals.skipped > 0
+        else CoverageStatus.COMPLETE
     )
 
 
@@ -185,8 +188,8 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
 
     lines = [
         f"Comparing {first.id} -> {second.id}",
-        f"Status: {display_run_status(first.results).value} -> "
-        f"{display_run_status(second.results).value}",
+        f"Coverage status: {calculate_coverage_status(first.results).value} -> "
+        f"{calculate_coverage_status(second.results).value}",
         "Suite scores:",
         *_suite_score_changes(first.results, second.results),
         "",
@@ -396,7 +399,7 @@ def report_summary(results: Results) -> ReportSummary:
     return ReportSummary(
         id=results.run.id,
         finished_at=results.run.finished_at,
-        status=display_run_status(results),
+        coverage_status=calculate_coverage_status(results),
         suite_scores=tuple(
             (suite.id, suite.score) for suite in sorted(results.suites, key=lambda suite: suite.id)
         ),
@@ -408,10 +411,10 @@ def report_summary_json(results: Results) -> str:
     return (
         json.dumps(
             {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "id": summary.id,
                 "finished_at": summary.finished_at,
-                "status": summary.status.value,
+                "coverage_status": summary.coverage_status.value,
                 "suite_scores": [
                     {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
                 ],
@@ -424,7 +427,7 @@ def report_summary_json(results: Results) -> str:
 
 
 def _parse_summary(payload: object) -> ReportSummary:
-    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {"1.0", "2.0"}:
         raise ValueError("invalid report summary schema")
     run_id = payload["id"]
     finished_at = payload["finished_at"]
@@ -442,10 +445,11 @@ def _parse_summary(payload: object) -> ReportSummary:
         if score is not None and (isinstance(score, bool) or not isinstance(score, int)):
             raise ValueError("invalid report summary score")
         scores.append((item["id"], score))
+    status_key = "status" if payload["schema_version"] == "1.0" else "coverage_status"
     return ReportSummary(
         id=run_id,
         finished_at=finished_at,
-        status=RunStatus(payload["status"]),
+        coverage_status=CoverageStatus(payload[status_key]),
         suite_scores=tuple(sorted(scores)),
     )
 

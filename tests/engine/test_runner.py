@@ -241,13 +241,13 @@ def test_full_run_emits_frozen_results_shape_and_reproducibility_metadata():
     payload = results.model_dump(mode="json", by_alias=True, exclude_none=False)
 
     assert set(payload) == {"schema_version", "run", "score", "totals", "suites", "checks"}
-    assert results.schema_version == "1.2"
+    assert results.schema_version == "2.0"
     assert results.run.id == "run-123"
     assert results.run.started_at == "2026-07-13T10:00:00Z"
     assert results.run.finished_at == "2026-07-13T10:00:02Z"
     assert results.run.graphcheck_version == __version__
     assert results.run.pack_version == PACK_VERSION
-    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.run_status is RunStatus.COMPLETE
     assert results.run.target is not None
     assert results.run.target.model_dump(exclude={"nodes", "relationships"}) == TARGET.model_dump(
         exclude={"nodes", "relationships"}
@@ -291,7 +291,7 @@ def test_supplied_target_without_inventory_fails_before_checks():
         PASSING_SUITE, target=target
     )
 
-    assert results.run.status is RunStatus.FAILED
+    assert results.run.run_status is RunStatus.FAILED
     assert results.run.error is not None
     assert results.run.error.code == "engine.target_inventory_missing"
 
@@ -430,7 +430,7 @@ competency:
 
     assert [check.verdict for check in results.checks] == [Verdict.FAIL, Verdict.SKIPPED]
     assert results.checks[1].skip_reason is SkipReason.NOT_RUN
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "fail-fast stopped the run after fail-fast/first" in results.run.partial_reason
     assert results.run.selection.fail_fast is True
     assert results.run.exit_code == 1
@@ -468,7 +468,7 @@ def test_probe_that_returns_after_deadline_fails_the_run_before_checks():
 
     results = engine.run_yaml(PASSING_SUITE)
 
-    assert results.run.status is RunStatus.FAILED
+    assert results.run.run_status is RunStatus.FAILED
     assert results.run.error.code == "engine.timeout"
     assert results.checks == []
 
@@ -493,7 +493,7 @@ def test_unloadable_suite_does_not_discard_other_suite_results():
         target=TARGET,
     )
 
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "checks/broken.yml could not be loaded" in results.run.partial_reason
     assert results.run.selection.suites == ["competencies"]
     assert [suite.id for suite in results.suites] == ["competencies"]
@@ -505,7 +505,7 @@ def test_generated_check_is_validated_then_skipped_without_connector_read():
 
     results = _engine(client).run_yaml(GENERATED_SUITE, target=TARGET)
 
-    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.run_status is RunStatus.COMPLETE
     assert results.run.exit_code == 2
     assert results.score is None
     assert len(results.checks) == 1
@@ -526,7 +526,7 @@ def test_unobservable_dangling_check_is_explicit_unsupported_partial_skip():
     check = results.checks[0]
     assert check.verdict is Verdict.SKIPPED
     assert check.skip_reason is SkipReason.UNSUPPORTED
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "requires missing capability: store_consistency" in results.run.partial_reason
     assert client.read_calls == []
 
@@ -543,7 +543,7 @@ def test_one_query_error_is_isolated_and_later_check_still_passes():
     assert results.checks[0].evidence is None
     assert results.checks[1].measured["rows"] == 1
     assert len(client.read_calls) == 2
-    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.run_status is RunStatus.COMPLETE
     assert results.totals.errored == 1
 
 
@@ -646,7 +646,7 @@ def test_in_flight_budget_timeout_is_partial_exit_two_and_stops_later_work():
 
     results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
 
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert results.run.partial_reason and "budget was exhausted" in results.run.partial_reason
     assert "fail-fast stopped" not in results.run.partial_reason
     assert results.run.exit_code == 2
@@ -670,7 +670,7 @@ def test_server_query_timeout_before_deadline_remains_a_hard_fail_fast_error():
 
     results = engine.run_yaml(TWO_COMPETENCIES, target=TARGET, fail_fast=True)
 
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert results.run.partial_reason == "fail-fast stopped the run after competencies/first"
     assert results.run.exit_code == 1
     assert results.checks[0].verdict is Verdict.ERRORED
@@ -722,7 +722,7 @@ def test_last_check_finishing_after_deadline_marks_the_run_partial():
     results = engine.run_yaml(ONE_COMPETENCY, target=TARGET)
 
     assert results.checks[0].verdict is Verdict.PASS
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "budget was exhausted" in results.run.partial_reason
 
 
@@ -774,7 +774,7 @@ def test_present_measurement_from_partial_drift_baseline_can_complete():
 
     results = _engine(client, baselines=baselines).run_yaml(DRIFT_SUITE, target=TARGET)
 
-    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.run_status is RunStatus.COMPLETE
     assert results.run.partial_reason is None
     assert results.run.exit_code == 0
     assert results.checks[0].verdict is Verdict.PASS
@@ -916,7 +916,7 @@ drift:
 
     assert results.checks[0].verdict is Verdict.ERRORED
     assert results.checks[0].error.code == "engine.baseline_partial_missing"
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "partial baseline" in results.run.partial_reason
     assert client.read_calls == []
 
@@ -938,7 +938,7 @@ def test_target_probe_failure_returns_failed_run_without_check_results(failure, 
 
     results = _engine(ProbeFailureClient()).run_yaml(PASSING_SUITE)
 
-    assert results.run.status is RunStatus.FAILED
+    assert results.run.run_status is RunStatus.FAILED
     assert results.run.exit_code == 3
     assert results.run.target is None
     assert results.run.error.code == expected_code
@@ -980,7 +980,7 @@ def test_duplicate_suite_ids_fail_before_target_or_check_execution():
 
     results = _engine(client).run([first, second], target=TARGET)
 
-    assert results.run.status is RunStatus.FAILED
+    assert results.run.run_status is RunStatus.FAILED
     assert results.run.error.code == "engine.duplicate_suite"
     assert results.checks == []
     assert client.probe_calls == 0

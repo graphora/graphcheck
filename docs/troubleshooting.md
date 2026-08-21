@@ -63,8 +63,8 @@ or run, or sampling, are the only user-facing levers today.
   connection and capability probes GraphCheck uses internally, and validates your check suites,
   without executing any checks.
 - Errors show up in different places depending on what failed. A run that couldn't start at all
-  (`status: failed`) carries its error in `run.error`. A run that completed or went partial
-  (`status: complete`/`partial`) carries per-check errors in that check's own `checks[].error`
+  (`run_status: failed`) carries its error in `run.error`. A run that completed or went partial
+  (`run_status: complete`/`partial`) carries per-check errors in that check's own `checks[].error`
   instead, and `run.partial_reason` gives the run-level summary of why coverage is incomplete.
 - Every run's `results.json` and offline HTML report expose all of the above.
 - See [CI setup](ci-setup.md) for how these map onto exit codes in a pipeline, and

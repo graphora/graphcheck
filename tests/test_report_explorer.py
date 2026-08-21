@@ -181,6 +181,21 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
     assert private.read_text(encoding="utf-8") == "not a report"
 
 
+def test_report_explorer_payload_marks_generated_only_coverage_partial(tmp_path):
+    runs_dir = tmp_path / "runs"
+    _write_run(
+        runs_dir,
+        "generated-run",
+        "2026-07-01T10:00:00Z",
+        fixture="generated-only",
+    )
+
+    records = explorer_module.discover_report_runs(runs_dir)
+    reports = explorer_module._report_payload(records)
+
+    assert reports[0]["coverage_status"] == "partial"
+
+
 def test_report_explorer_rejects_unauthenticated_and_cross_origin_actions(tmp_path):
     runs_dir = tmp_path / "runs"
     _write_run(runs_dir, "run-one", "2026-07-01T10:00:00Z")

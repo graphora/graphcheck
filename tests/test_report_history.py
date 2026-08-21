@@ -1,12 +1,16 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from graphcheck.cli import app
+from graphcheck.contracts.results import CoverageStatus, RunStatus
 from graphcheck.project import write_default_project
 from graphcheck.reporting import history as history_module
 from graphcheck.reporting.history import (
+    calculate_coverage_status,
     discover_report_runs,
     find_report_run,
     format_report_comparison,
@@ -17,6 +21,31 @@ from graphcheck.reporting.writer import load_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
 runner = CliRunner()
+
+
+@pytest.mark.parametrize(
+    ("case", "run_status", "errored", "skipped", "expected"),
+    [
+        ("pass", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
+        ("fail", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
+        ("warn", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
+        ("errored", RunStatus.COMPLETE, 1, 0, CoverageStatus.PARTIAL),
+        ("pass-generated", RunStatus.COMPLETE, 0, 1, CoverageStatus.PARTIAL),
+        ("all-generated", RunStatus.COMPLETE, 0, 2, CoverageStatus.PARTIAL),
+        ("unsupported", RunStatus.PARTIAL, 0, 1, CoverageStatus.PARTIAL),
+        ("not-run", RunStatus.PARTIAL, 0, 1, CoverageStatus.PARTIAL),
+        ("partial-error-skip", RunStatus.PARTIAL, 1, 1, CoverageStatus.PARTIAL),
+        ("failed", RunStatus.FAILED, 0, 0, CoverageStatus.FAILED),
+        ("zero-selected", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
+    ],
+)
+def test_calculate_coverage_status_contract(case, run_status, errored, skipped, expected):
+    results = SimpleNamespace(
+        run=SimpleNamespace(run_status=run_status),
+        totals=SimpleNamespace(errored=errored, skipped=skipped),
+    )
+
+    assert calculate_coverage_status(results) is expected, case
 
 
 def _write_run(
@@ -41,6 +70,26 @@ def _write_run(
     if report:
         (run_dir / "report.html").write_text(f"report for {run_id}", encoding="utf-8")
     return run_dir
+
+
+def _pass_with_generated_skip():
+    raw = json.loads((FIXTURES / "results.clean.json").read_text(encoding="utf-8"))
+    generated = json.loads(
+        (FIXTURES / "results.generated-only.json").read_text(encoding="utf-8")
+    )["checks"][0]
+    generated["suite_id"] = raw["suites"][0]["id"]
+    raw["checks"].append(generated)
+    raw["totals"].update(checks=3, skipped=1)
+    raw["suites"][0]["totals"].update(checks=3, skipped=1)
+    return load_results(raw)
+
+
+def _zero_selection():
+    raw = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))
+    totals = {"checks": 0, "pass": 0, "fail": 0, "warn": 0, "errored": 0, "skipped": 0}
+    raw.update(score=None, checks=[], totals=totals)
+    raw["suites"][0].update(score=None, totals=totals.copy())
+    return load_results(raw)
 
 
 def _write_multi_suite_run(root: Path, run_id: str, finished_at: str) -> Path:
@@ -315,6 +364,7 @@ def test_report_history_reads_schema_1_0_artifacts(tmp_path, monkeypatch):
     results_path = run_dir / "results.json"
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     payload["schema_version"] = "1.0"
+    payload["run"]["status"] = payload["run"].pop("run_status")
     results_path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = runner.invoke(app, ["report", "--list"])
@@ -380,8 +430,58 @@ def test_report_summary_maps_errored_checks_to_partial():
 
     summary = json.loads(report_summary_json(load_results(raw)))
 
-    assert summary["schema_version"] == "1.0"
-    assert summary["status"] == "partial"
+    assert raw["run"]["run_status"] == "complete"
+    assert summary["schema_version"] == "2.0"
+    assert summary["coverage_status"] == "partial"
+
+
+@pytest.mark.parametrize(
+    ("fixture", "run_status", "coverage_status"),
+    [
+        ("clean", "complete", "complete"),
+        ("generated-only", "complete", "partial"),
+        ("partial", "partial", "partial"),
+        ("failed", "failed", "failed"),
+    ],
+)
+def test_report_summary_names_run_and_coverage_statuses(
+    fixture, run_status, coverage_status
+):
+    results = load_results(FIXTURES / f"results.{fixture}.json")
+
+    summary = json.loads(report_summary_json(results))
+
+    assert results.run.run_status.value == run_status
+    assert summary["schema_version"] == "2.0"
+    assert summary["coverage_status"] == coverage_status
+    assert "status" not in summary
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected"),
+    [
+        (_pass_with_generated_skip, "partial"),
+        (_zero_selection, "complete"),
+    ],
+)
+def test_report_summary_covers_generated_skip_and_empty_selection(factory, expected):
+    summary = json.loads(report_summary_json(factory()))
+
+    assert summary["coverage_status"] == expected
+
+
+def test_report_history_lists_generated_only_run_as_partial(tmp_path):
+    _write_run(
+        tmp_path,
+        "generated-run",
+        "2026-07-01T10:00:00Z",
+        fixture="generated-only",
+    )
+
+    records = discover_report_runs(tmp_path / ".graphcheck" / "runs")
+
+    assert records[0].summary.coverage_status is CoverageStatus.PARTIAL
+    assert "partial" in format_report_history(records)
 
 
 def test_report_summary_keeps_pre_check_failure_failed():
@@ -390,4 +490,18 @@ def test_report_summary_keeps_pre_check_failure_failed():
 
     summary = json.loads(report_summary_json(load_results(raw)))
 
-    assert summary["status"] == "failed"
+    assert summary["coverage_status"] == "failed"
+
+
+def test_historical_summary_schema_1_0_maps_status_to_coverage_status():
+    summary = history_module._parse_summary(
+        {
+            "schema_version": "1.0",
+            "id": "legacy-run",
+            "finished_at": "2026-07-01T10:00:00Z",
+            "status": "partial",
+            "suite_scores": [],
+        }
+    )
+
+    assert summary.coverage_status.value == "partial"

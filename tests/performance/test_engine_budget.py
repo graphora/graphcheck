@@ -194,7 +194,7 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
     assert results.totals.checks == 30
     assert results.totals.errored == 0
     assert results.totals.skipped == 0
-    assert results.run.status is RunStatus.COMPLETE
+    assert results.run.run_status is RunStatus.COMPLETE
     assert results.run.partial_reason is None
     assert all(check.measured is not None for check in results.checks)
     assert all(
