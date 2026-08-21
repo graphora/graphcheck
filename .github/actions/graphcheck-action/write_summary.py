@@ -46,7 +46,7 @@ def main():
 
     lines.append("## GraphCheck results\n")
     lines.append(
-        f"**Run status:** `{run.get('status', 'unknown')}` "
+        f"**Run status:** `{run.get('run_status', 'unknown')}` "
         f"&nbsp;|&nbsp; **Exit code:** `{run.get('exit_code', 'unknown')}` "
         f"&nbsp;|&nbsp; **Score:** {score.get('value', 'n/a')}\n"
     )

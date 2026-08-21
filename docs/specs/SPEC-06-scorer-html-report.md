@@ -34,20 +34,23 @@ The writer accepts:
 - a JSON string,
 - or a `Path` to a `results.json` file.
 
-All inputs are normalized through the SPEC-01 source-of-truth model. Historical
-schema 1.0 and 1.1 artifacts are upgraded in memory to the current 1.2 contract.
+All inputs are normalized through `load_results()`, the SPEC-01 compatibility boundary.
+Historical schema 1.0, 1.1, and 1.2 artifacts are upgraded in memory to the current 2.0 contract.
 For a non-null historical target, the compatibility loader injects `labels:null`
 and `relationship_types:null` to mean that the older schema did not record the
 inventory. This compatibility read does not rewrite the source file. New runs
-always use schema 1.2 and populate both fields with sorted, unique arrays; `[]`
+always use schema 2.0 and populate both fields with sorted, unique arrays; `[]`
 means the probe completed and found no tokens.
 
-Current inputs are validated through:
+Current schema 2.0 inputs may be validated directly through:
 
 ```python
 Results.model_validate(...)
 Results.model_validate_json(...)
 ```
+
+Historical schema 1.0, 1.1, and 1.2 artifacts must use `load_results()` so their
+`run.status` field and version-specific target shape are mapped into the current contract.
 
 ### Validation
 

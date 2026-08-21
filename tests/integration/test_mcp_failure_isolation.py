@@ -183,7 +183,7 @@ def test_killing_an_active_mcp_session_does_not_break_independent_engine_runs(
     )
 
     assert outcome.results.run.error is None
-    assert outcome.results.run.status.value != "failed"
+    assert outcome.results.run.run_status.value != "failed"
     assert outcome.results_path is not None
     assert outcome.results_path.exists()
     assert client.closed is True

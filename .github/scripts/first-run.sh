@@ -39,5 +39,5 @@ done
 test "$baseline_found" -eq 1
 test -f .graphcheck/runs/latest/results.json
 test -f .graphcheck/runs/latest/report.html
-"$GRAPHCHECK_PYTHON" -c "import json, pathlib; p=json.loads(pathlib.Path('.graphcheck/runs/latest/results.json').read_text()); assert p['run']['status']=='complete', p['run']; assert p['run']['exit_code']==0, p['run']; assert 0 <= float('$elapsed') < 600, 'first-run flow took $elapsed seconds'"
+"$GRAPHCHECK_PYTHON" -c "import json, pathlib; p=json.loads(pathlib.Path('.graphcheck/runs/latest/results.json').read_text()); assert p['run']['run_status']=='complete', p['run']; assert p['run']['exit_code']==0, p['run']; assert 0 <= float('$elapsed') < 600, 'first-run flow took $elapsed seconds'"
 printf 'init -> profile -> run completed in %.3f seconds (budget: <600 seconds)\n' "$elapsed" | tee timing.txt

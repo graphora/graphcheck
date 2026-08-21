@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from graphcheck.cli import _print_run_summary
+from graphcheck.contracts.results import CoverageStatus
+from graphcheck.reporting.history import calculate_coverage_status
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.presentation import present_check, present_results
 from graphcheck.reporting.writer import load_results
@@ -20,6 +22,18 @@ def _empty_selection():
     totals = {"checks": 0, "pass": 0, "fail": 0, "warn": 0, "errored": 0, "skipped": 0}
     raw.update(score=None, checks=[], totals=totals)
     raw["suites"][0].update(score=None, totals=totals.copy())
+    return load_results(raw)
+
+
+def _pass_with_generated_skip():
+    raw = json.loads((FIXTURES / "results.clean.json").read_text(encoding="utf-8"))
+    generated = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))[
+        "checks"
+    ][0]
+    generated["suite_id"] = raw["suites"][0]["id"]
+    raw["checks"].append(generated)
+    raw["totals"].update(checks=3, skipped=1)
+    raw["suites"][0]["totals"].update(checks=3, skipped=1)
     return load_results(raw)
 
 
@@ -40,7 +54,8 @@ def _empty_selection():
         ),
         (
             lambda: _fixture("generated-only"),
-            "No checks were evaluated.",
+            "No checks were evaluated. Coverage is incomplete due to skipped check(s) from "
+            "customer-360.",
             "0/1 selected checks evaluated · 1 not evaluated",
             False,
         ),
@@ -146,7 +161,7 @@ def test_check_presentation_owns_skip_reason_language(reason, label, explanation
     raw = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))
     raw["checks"][0]["skip_reason"] = reason
     if reason != "generated":
-        raw["run"].update(status="partial", partial_reason="coverage unavailable")
+        raw["run"].update(run_status="partial", partial_reason="coverage unavailable")
 
     presentation = present_check(load_results(raw).checks[0])
 
@@ -167,7 +182,7 @@ def test_cli_lists_only_skipped_checks_with_stored_reason_codes(capsys):
         check.update(id=f"{reason}-check", skip_reason=reason)
         checks.append(check)
     raw["checks"] = checks
-    raw["run"].update(status="partial", partial_reason="coverage unavailable")
+    raw["run"].update(run_status="partial", partial_reason="coverage unavailable")
     raw["totals"].update(checks=3, skipped=3)
     raw["suites"][0]["totals"].update(checks=3, skipped=3)
 
@@ -185,3 +200,46 @@ def test_cli_lists_only_skipped_checks_with_stored_reason_codes(capsys):
         assert f"{reason}-check" in stdout
         assert f"{reason}:" in normalized
         assert all(word in normalized for word in explanation.split())
+
+
+def test_cli_distinguishes_complete_run_from_partial_coverage(capsys):
+    raw = json.loads((FIXTURES / "results.complete.json").read_text(encoding="utf-8"))
+    raw["checks"][0].update(
+        verdict="errored",
+        measured=None,
+        evidence=None,
+        error={
+            "code": "query.execution",
+            "message": "Query execution failed",
+            "fix": "Check the generated Cypher",
+        },
+    )
+    raw["totals"].update(fail=0, errored=1)
+    raw["suites"][0]["totals"].update(fail=0, errored=1)
+    results = load_results(raw)
+
+    _print_run_summary(results, Path("results.json"), Path("report.html"))
+
+    stdout = capsys.readouterr().out
+    assert results.run.run_status.value == "complete"
+    assert "Run status: complete" in stdout
+    assert "Coverage status: partial" in stdout
+
+
+@pytest.mark.parametrize("factory", [_pass_with_generated_skip, lambda: _fixture("generated-only")])
+def test_generated_skips_use_partial_coverage_in_cli_html_and_presentation(factory, capsys):
+    results = factory()
+    presentation = present_results(results)
+
+    _print_run_summary(results, Path("results.json"), Path("report.html"))
+    stdout = capsys.readouterr().out
+    html = render_html_report(results)
+
+    assert results.run.run_status.value == "complete"
+    assert calculate_coverage_status(results) is CoverageStatus.PARTIAL
+    assert presentation.coverage_incomplete is True
+    assert "Run status: complete" in stdout
+    assert "Coverage status: partial" in stdout
+    assert "Coverage status: complete" not in stdout
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert '<span class="status-pill status-pill-complete">COMPLETE</span>' not in html
