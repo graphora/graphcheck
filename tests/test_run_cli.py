@@ -292,7 +292,7 @@ def test_execute_run_publishes_once_and_preserves_result_on_artifact_failure(tmp
     assert writer_calls == 1
     # The completed engine result is preserved, not replaced by a run.configuration failure.
     assert outcome.results.run.error is None
-    assert outcome.results.run.status.value != "failed"
+    assert outcome.results.run.run_status.value != "failed"
     # The failure surfaces as artifact_error with a real artifact-write timing boundary.
     assert isinstance(outcome.artifact_error, OSError)
     assert outcome.results_path is None
@@ -1260,10 +1260,11 @@ competency:
 
     assert result.exit_code == 3
     payload = _payload(tmp_path)
-    assert payload["run"]["status"] == "failed"
+    assert payload["run"]["run_status"] == "failed"
     assert payload["run"]["error"]["code"] == "neo4j.unreachable"
     assert (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").exists()
-    assert ": failed" in result.stdout
+    assert "Run status: failed" in result.stdout
+    assert "Coverage status: failed" in result.stdout
     assert "Score breakdown by check suite:" in result.stdout
     assert result.stdout.count("n/a") == 8
     assert "Checks: 0" not in result.stdout
@@ -1661,7 +1662,7 @@ competency:
 
     payload = _payload(tmp_path)
     assert result.exit_code == payload["run"]["exit_code"] == 2
-    assert payload["run"]["status"] == "partial"
+    assert payload["run"]["run_status"] == "partial"
     assert payload["checks"][0]["verdict"] == "errored"
     assert payload["checks"][0]["error"]["code"] == "engine.timeout"
     assert "1-second run budget was exhausted" in payload["run"]["partial_reason"]

@@ -22,10 +22,13 @@ def json_compatible(value: object) -> Any:
         value = value.model_dump(by_alias=True, exclude_none=False)
         if historical_schema_version is not None:
             value["schema_version"] = historical_schema_version
-            target = value["run"]["target"]
-            if target is not None:
-                target.pop("labels")
-                target.pop("relationship_types")
+            run = value["run"]
+            run["status"] = run.pop("run_status")
+            if historical_schema_version in {"1.0", "1.1"}:
+                target = run["target"]
+                if target is not None:
+                    target.pop("labels")
+                    target.pop("relationship_types")
     if isinstance(value, Mapping):
         return {str(key): json_compatible(item) for key, item in value.items()}
     if isinstance(value, (set, frozenset)):
@@ -55,15 +58,18 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
     if isinstance(data, Path):
         data = data.read_text(encoding="utf-8")
     payload = json.loads(data) if isinstance(data, str) else data
-    if isinstance(payload, dict) and payload.get("schema_version") in {"1.0", "1.1"}:
+    if isinstance(payload, dict) and payload.get("schema_version") in {"1.0", "1.1", "1.2"}:
         historical_schema_version = str(payload["schema_version"])
         run = payload.get("run")
-        target = run.get("target") if isinstance(run, dict) else None
-        if isinstance(target, dict):
-            target = {**target}
-            target.setdefault("labels", None)
-            target.setdefault("relationship_types", None)
-            run = {**run, "target": target}
+        if isinstance(run, dict):
+            run = {**run, "run_status": run.get("status")}
+            run.pop("status", None)
+            target = run.get("target")
+            if historical_schema_version in {"1.0", "1.1"} and isinstance(target, dict):
+                target = {**target}
+                target.setdefault("labels", None)
+                target.setdefault("relationship_types", None)
+                run["target"] = target
         payload = {**payload, "schema_version": SCHEMA_VERSION, "run": run}
     context = (
         {"historical_schema_version": historical_schema_version}

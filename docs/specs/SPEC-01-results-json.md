@@ -2,10 +2,12 @@
 
 *Frozen per schema revision.* `results.json` is the machine-readable output of a GraphCheck run
 and the contract every other artifact (HTML report, MCP responses, future cloud) renders from. Its
-current `schema_version` is `"1.2"`, versioned independently of `graphcheck_version`.
+current `schema_version` is `"2.0"`, versioned independently of `graphcheck_version`.
 
 Version history:
 
+- **2.0** renames the execution field from `run.status` to `run.run_status`, distinguishing it
+  from the derived `coverage_status` used by report summaries and presentation surfaces.
 - **1.2** adds canonical target `labels` and `relationship_types` inventory.
 - **1.1** added aggregate measurement-scope evidence for drift findings that cannot honestly
   identify removed graph elements.
@@ -13,9 +15,9 @@ Version history:
 
 **Source of truth:** the Pydantic model at `src/graphcheck/contracts/results.py`. `docs/specs/results.schema.json` is generated from it and is **structural only** — the derived invariants below live in the model's validators, so schema-valid ≠ fully-valid; external consumers must not rely on the schema alone.
 
-**Required machine-valid 1.2 examples:**
-`tests/contracts/fixtures/results.{clean,complete,partial,generated-only,failed}.json`, delivered
-with the 1.2 implementation.
+**Required machine-valid 2.0 examples:**
+`tests/contracts/fixtures/results.{clean,complete,partial,generated-only,failed}.json`; these retain
+the target inventory introduced in 1.2 while using the current 2.0 status field.
 
 ## Top-level shape
 
@@ -24,7 +26,7 @@ with the 1.2 implementation.
 ```
 
 - `run` — `id`, `started_at`/`finished_at` (ISO 8601 with an explicit UTC offset, with finish
-  not preceding start), `graphcheck_version`, `pack_version`, `status`, `partial_reason`,
+  not preceding start), `graphcheck_version`, `pack_version`, `run_status`, `partial_reason`,
   `exit_code`, `selection`, `redaction`, `target`, `error`.
 - `score` — `{ value, method: "weighted-by-severity", weights }` or `null`.
 - `totals` — a tally of `checks[]`: `checks`, `pass`, `fail`, `warn`, `errored`, `skipped`.
@@ -77,7 +79,7 @@ including through MCP, preserves null as `not recorded by that schema version`.
 
 ## Shape by run status
 
-`score` is a present-but-nullable key in every status — a number when ≥ 1 check executed, `null` when none did. `run.partial_reason` is non-null **iff** `run.status` is `partial`.
+`score` is a present-but-nullable key in every status — a number when ≥ 1 check executed, `null` when none did. `run.partial_reason` is non-null **iff** `run.run_status` is `partial`.
 
 - **`complete`** — `run.target`, `totals`, `suites`, `checks` present; `run.error` null.
 - **`partial`** — as complete, plus `partial_reason`. `totals` is derived from `checks[]`, so resolved-but-unexecuted checks are emitted as `skipped` (`skip_reason:"not_run"`); coverage lost to unloadable suites is described in `partial_reason`.
@@ -106,9 +108,9 @@ including through MCP, preserves null as `not recorded by that schema version`.
 
    | Order | Condition | Exit |
    | --- | --- | --- |
-   | 1 | `run.status:failed` | **3** |
+   | 1 | `run.run_status:failed` | **3** |
    | 2 | any `verdict:fail`, or (`errored` and `severity:error`) except an `engine.timeout` on a partial run | **1** |
-   | 3 | `run.status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
+   | 3 | `run.run_status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
    | 4 | otherwise (`complete`, ≥ 1 executed, all `pass`/`skipped`) | **0** |
 
 2. **Evidence is mandatory on `fail` and `warn`.** `compiled_query` is present once compiled, `null` if the check errored before compiling; it keeps `$param` placeholders — literal values live only in `params`.
@@ -136,7 +138,12 @@ canonical metric/target scope such as `node_count:label=Customer`; it is not a N
 This is required for aggregate count-drift decreases because deleted elements cannot be selected
 from the current graph. Aggregate pointers must never be substituted for row-level
 node/relationship or property-coverage evidence.
-8. **Coverage-status invariant:** any `skip_reason ∈ {unsupported, not_run}` ⇒ `run.status:partial` (a `partial` run never exits 0). `generated` skips do not force partial.
+8. **Run-status invariant:** any `skip_reason ∈ {unsupported, not_run}` ⇒
+   `run.run_status:partial` (a `partial` run never exits 0). `generated` skips do not force
+   partial. Check-level errors and intentional/generated skips do not change
+   `run.run_status`; reporting derives `coverage_status:partial` when `run_status` is not
+   complete or any selected check is `errored` or `skipped`. A skipped check was not evaluated
+   and therefore cannot count as complete assertion-outcome coverage.
 9. **Target-inventory invariant:** results produced by a new non-failed 1.2 run carry sorted,
    unique, non-null `run.target.labels` and `run.target.relationship_types`. Nullable inventory
    exists only at a compatibility boundary for pre-1.2 input. An empty array is recorded evidence
@@ -148,7 +155,7 @@ The HTML report, CLI artifact readers, report history, MCP tools, and future clo
 the same validated `Results` model. Any MCP tool that returns a run result must:
 
 - expose `labels` and `relationship_types` in its declared output schema;
-- return arrays for new 1.2 runs and preserve null for compatibility-loaded pre-1.2 artifacts;
+- return arrays for new 2.0 runs and preserve null for compatibility-loaded pre-1.2 artifacts;
 - use or derive from the canonical SPEC-01 schema rather than maintain a divergent inventory
   definition; and
 - preserve canonical order without adding target-specific interpretation or recommendations.
@@ -160,7 +167,7 @@ the same validated `Results` model. Any MCP tool that returns a run result must:
   result validator, and report renderer.
 - `docs/specs/results.schema.json` — generated JSON Schema (structural).
 - `tests/contracts/fixtures/results.{clean,complete,partial,generated-only,failed}.json` —
-  machine-valid 1.2 artifacts with non-null target inventory on every non-failed current result.
+  machine-valid 2.0 artifacts with non-null target inventory on every non-failed current result.
 - `tests/contracts/test_results.py` — validates fixtures against the schema, round-trips them, and asserts every invariant directly.
 - MCP output schemas and contract tests — validate new-run arrays and historical null semantics
-  against the same SPEC-01 1.2 shape.
+  against the same SPEC-01 2.0 shape.
