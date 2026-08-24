@@ -1,7 +1,7 @@
 # GraphCheck Action
 
-Run GraphCheck checks against your graph on every pull request, and get
-a pass/fail summary posted straight to the PR's checks tab.
+Run GraphCheck checks against your graph on every pull request, with
+inline error/warning annotations and a pass/fail summary in the checks tab.
 
 This is a thin wrapper around the GraphCheck CLI (graphcheck run) - it
 adds no new checking behaviour of its own.
@@ -21,6 +21,8 @@ tagged.
         user: neo4j
         database: neo4j
         fail-fast: false
+        concurrency: 2
+        upload-artifacts: on-failure
         version: 0.1.0
       env:
         NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
@@ -36,6 +38,8 @@ Not yet extracted to its own repo, so pin to a commit SHA on this one:
         user: neo4j
         database: neo4j
         fail-fast: false
+        concurrency: 2
+        upload-artifacts: on-failure
         version: 0.1.0
       env:
         NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
@@ -52,11 +56,14 @@ Switch to `graphora/graphcheck-action@v1` once this Action is extracted and tagg
 | database | no | neo4j | Neo4j database name |
 | fail-fast | no | false | Stop after the first error-severity failure |
 | suite | no | - | Suite name to run via --suite; skipped if empty |
+| concurrency | no | - | Maximum concurrent checks; empty uses `graphcheck.yml` |
+| upload-artifacts | no | always | `always`, `on-failure`, or `never` |
 | version | no | 0.1.0 | Exact GraphCheck version to install from PyPI |
 
 ## What it does
 
-1. Installs the pinned GraphCheck version from PyPI.
+1. Installs the pinned GraphCheck wheel into an isolated Python 3.12 environment with `uv` and
+   reuses uv's GitHub Actions cache on later runs.
 2. Resolves the artifacts directory from graphcheck.yml (defaults to
    .graphcheck if not configured or the file is absent).
 3. If profiles.yml does not already exist, generates one using the
@@ -69,10 +76,14 @@ Switch to `graphora/graphcheck-action@v1` once this Action is extracted and tagg
 6. Captures the run's exit code. The job's final status matches this
    exit code exactly (0 green; 1/2/3 red) - this is preserved even
    though later steps always run.
-7. Uploads results.json and the HTML report as build artifacts, from
-   the resolved artifacts directory, whenever they were produced. If
-   an early failure produced none, the summary says so explicitly.
-8. Writes a pass/fail/errored/warn breakdown, read directly from
+7. Uploads results.json and the HTML report according to `upload-artifacts`. If an early failure
+   produced none, the summary says so explicitly.
+8. Emits one GitHub workflow annotation for each failed, warned, or errored check. Annotations
+   point to the check's YAML `id:` line when it can be resolved, include stable evidence element
+   identities, and otherwise remain check-level annotations. GitHub Actions accepts at most 10
+   error and 10 warning annotations per step; the Action reports exact dropped counts in its log
+   and Step Summary.
+9. Writes a pass/fail/errored/warn breakdown, read directly from
    results.json (not inferred from the exit code), to the GitHub
    Step Summary, including one evidence line per failing check.
 

@@ -17,6 +17,8 @@ graph, runs your checks, and reports pass/fail/error results directly in the PR'
     user: neo4j
     database: neo4j
     fail-fast: false
+    concurrency: 2
+    upload-artifacts: on-failure
     version: ''        # skip PyPI install; use the source build above
   env:
     NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
@@ -42,6 +44,8 @@ repository:
 | `database` | no | `neo4j` | Neo4j database name |
 | `fail-fast` | no | `false` | Stop after the first error-severity failure |
 | `suite` | no | - | Suite name to run via `--suite`; skipped if empty |
+| `concurrency` | no | - | Maximum concurrent checks; empty uses `graphcheck.yml` |
+| `upload-artifacts` | no | `always` | Upload `always`, `on-failure`, or `never` |
 | `version` | no | `0.1.0` | Exact GraphCheck version to install from PyPI. Empty skips the install and uses whatever GraphCheck is already on PATH |
 
 Leaving `version` empty is the escape hatch for installing GraphCheck from source earlier in the
@@ -66,17 +70,20 @@ an error-severity errored check.
 
 ## What it does
 
-1. Installs the pinned GraphCheck version from PyPI, unless `version` is empty.
+1. Installs the pinned GraphCheck wheel in an isolated Python 3.12 environment with cached `uv`,
+   unless `version` is empty.
 2. Resolves the artifacts directory from `graphcheck.yml` (defaults to `.graphcheck`).
 3. If `profiles.yml` does not already exist, generates one from the `uri`/`user`/`database`
    inputs. Only `password_env: NEO4J_PASSWORD` is written - the real password is never in the
    generated file, and is read from the `NEO4J_PASSWORD` environment variable at runtime.
 4. Runs `graphcheck run` using the given profile.
 5. Removes the generated `profiles.yml`, only if this Action created it.
-6. Uploads `results.json` and the HTML report as build artifacts, whenever they were produced. If
-   an early failure produced none, the summary says so explicitly rather than uploading nothing
-   silently.
-7. Writes a pass/fail/errored/warn breakdown to the GitHub Step Summary.
+6. Uploads `results.json` and the HTML report according to `upload-artifacts`. If an early failure
+   produced none, the summary says so explicitly rather than uploading nothing silently.
+7. Emits GitHub error/warning annotations for failed, warned, and errored checks. The Action points
+   annotations at YAML check lines when available, includes stable graph element identities, and
+   reports any annotations dropped beyond GitHub's per-step cap of 10 errors and 10 warnings.
+8. Writes a pass/fail/errored/warn breakdown to the GitHub Step Summary; annotations are additive.
 
 ## Notes
 

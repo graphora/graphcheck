@@ -24,6 +24,14 @@ inputs:
     description: 'Run only this suite id (optional; runs all suites if not set)'
     required: false
     default: ''
+  concurrency:
+    description: 'Maximum concurrent checks; empty uses graphcheck.yml'
+    required: false
+    default: ''
+  upload-artifacts:
+    description: 'Upload results always, only on failure, or never'
+    required: false
+    default: 'always'
   version:
     description: 'Exact GraphCheck version to install (e.g. 0.1.0)'
     required: false
@@ -32,11 +40,14 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Set up Python
+    - name: Set up cached uv and Python
       if: inputs.version != ''
-      uses: actions/setup-python@v5
+      uses: astral-sh/setup-uv@v5
       with:
         python-version: '3.12'
+        enable-cache: true
+        cache-suffix: graphcheck-action
+        prune-cache: false
 
     - name: Install GraphCheck
       shell: bash
@@ -46,24 +57,21 @@ runs:
         if [ -z "$GC_VERSION" ]; then
           echo "version empty — using pre-installed graphcheck"
         else
-          pip install "graphcheck==$GC_VERSION"
+          venv="$RUNNER_TEMP/graphcheck-action-venv"
+          uv venv "$venv" --python 3.12
+          uv pip install --python "$venv" --only-binary :all: "graphcheck==$GC_VERSION"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tool_bin=$(cygpath -w "$venv/Scripts")
+            tool_python=$(cygpath -u "$venv/Scripts/python.exe")
+            echo "$tool_bin" >> "$GITHUB_PATH"
+            echo "GRAPHCHECK_ACTION_PYTHON=$tool_python" >> "$GITHUB_ENV"
+          else
+            echo "$venv/bin" >> "$GITHUB_PATH"
+            echo "GRAPHCHECK_ACTION_PYTHON=$venv/bin/python" >> "$GITHUB_ENV"
+          fi
         fi
 
-    - name: Resolve artifacts directory
-      shell: bash
-      run: |
-        if [ -f graphcheck.yml ]; then
-          dir=$(python -c "import yaml,sys; d=yaml.safe_load(open('graphcheck.yml')); print(d.get('artifacts','.graphcheck'))" 2>/dev/null || echo ".graphcheck")
-        else
-          dir=".graphcheck"
-        fi
-        if [[ "$dir" == *$'\n'* || "$dir" == *$'\r'* ]]; then
-          echo "::error::artifacts directory value from graphcheck.yml contains a line break; refusing to export it"
-          exit 1
-        fi
-        echo "GRAPHCHECK_ARTIFACTS_DIR=$dir" >> "$GITHUB_ENV"
-
-    - name: Generate profiles.yml
+    - name: Prepare GraphCheck
       id: generate_profile
       shell: bash
       env:
@@ -71,7 +79,9 @@ runs:
         GC_URI: ${{ inputs.uri }}
         GC_USER: ${{ inputs.user }}
         GC_DATABASE: ${{ inputs.database }}
-      run: python "${{ github.action_path }}/generate_profile.py"
+        GC_CONCURRENCY: ${{ inputs.concurrency }}
+        GC_UPLOAD_ARTIFACTS: ${{ inputs.upload-artifacts }}
+      run: '"${GRAPHCHECK_ACTION_PYTHON:-python}" "${{ github.action_path }}/prepare_action.py"'
 
     - name: Run GraphCheck
       shell: bash
@@ -80,11 +90,13 @@ runs:
         GC_PROFILE: ${{ inputs.profile }}
         GC_FAIL_FAST: ${{ inputs.fail-fast }}
         GC_SUITE: ${{ inputs.suite }}
+        GC_CONCURRENCY: ${{ inputs.concurrency }}
       run: |
         set +e
         args=(--profile "$GC_PROFILE")
         [ -n "$GC_SUITE" ] && args+=(--suite "$GC_SUITE")
         [ "$GC_FAIL_FAST" = "true" ] && args+=(--fail-fast)
+        [ -n "$GC_CONCURRENCY" ] && args+=(--concurrency "$GC_CONCURRENCY")
         graphcheck run "${args[@]}"
         code=$?
         echo "exit_code=$code" >> "$GITHUB_OUTPUT"
@@ -103,7 +115,7 @@ runs:
         fi
 
     - name: Upload results
-      if: always()
+      if: always() && inputs.upload-artifacts != 'never' && (inputs.upload-artifacts == 'always' || steps.graphcheck_run.outputs.exit_code != '0')
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
@@ -117,7 +129,7 @@ runs:
       if: always()
       continue-on-error: true
       shell: bash
-      run: python "${{ github.action_path }}/write_summary.py"
+      run: '"${GRAPHCHECK_ACTION_PYTHON:-python}" "${{ github.action_path }}/write_summary.py"'
       env:
         GRAPHCHECK_ARTIFACTS_DIR: ${{ env.GRAPHCHECK_ARTIFACTS_DIR }}
 
