@@ -1,16 +1,15 @@
 # Running GraphCheck in CI
 
-GraphCheck ships as a reusable composite GitHub Action at
-`.github/actions/graphcheck-action`. It installs a pinned GraphCheck version, connects to your
-graph, runs your checks, and reports pass/fail/error results directly in the PR's checks tab.
+GraphCheck is published as the reusable composite Action `graphora/graphcheck-action@v1`. It
+installs a pinned GraphCheck version, connects to your graph, runs your checks, and reports
+pass/fail/error results directly in the PR's checks tab. See the [CI/CD guide](ci-cd.md) for
+complete pull-request, scheduled, staging, and production workflows.
 
 ## Usage
 
 ```yaml
 - uses: actions/checkout@v4
-- name: Install GraphCheck from source
-  run: pip install .
-- uses: ./.github/actions/graphcheck-action
+- uses: graphora/graphcheck-action@v1
   with:
     profile: ci
     uri: bolt://localhost:7687
@@ -19,19 +18,8 @@ graph, runs your checks, and reports pass/fail/error results directly in the PR'
     fail-fast: false
     concurrency: 2
     upload-artifacts: on-failure
-    version: ''        # skip PyPI install; use the source build above
   env:
     NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
-```
-
-Not yet published to PyPI or the GitHub Marketplace. This example installs GraphCheck from source
-in the same job, matching this repo's own `.github/workflows/graphcheck.yml`. Once the release ships
-a published version, `version: 0.1.0` (or the current release) becomes the simpler default and the
-source-install step is no longer required. Pin to a commit SHA when using this Action from another
-repository:
-
-```yaml
-- uses: graphora/graphcheck/.github/actions/graphcheck-action@COMMIT_SHA
 ```
 
 ## Inputs
@@ -88,9 +76,9 @@ an error-severity errored check.
 ## Notes
 
 - This Action requires a graph reachable from the CI runner.
-- The install step runs on a pinned Python 3.12 via `actions/setup-python`, but only when
-  installing from PyPI (`version` is non-empty) - a source install earlier in the job is expected
-  to have already set up the interpreter it needs.
+- The install step runs on a pinned Python 3.12 via `astral-sh/setup-uv`, but only when installing
+  from PyPI (`version` is non-empty). A source install earlier in the job is expected to have
+  already set up the interpreter it needs.
 
 See [`.github/actions/graphcheck-action/README.md`](../.github/actions/graphcheck-action/README.md)
 for the full Action reference.

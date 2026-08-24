@@ -9,6 +9,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - The GitHub Action now emits bounded inline workflow annotations for failed, errored, and
   warning-severity checks, attaches repository source locations when available, and reports any
   annotations dropped at the per-run cap while retaining the existing Step Summary.
+- Added one CI/CD guide with copy-paste workflows for pull-request gating, scheduled audits with
+  alerting, staging merges, and server-enforced read-only production runs.
 
 ### Changed
 

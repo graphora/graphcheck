@@ -83,6 +83,8 @@ Each prepared run writes immutable history plus convenient `latest` copies:
 The HTML report is self-contained and works offline. Exit codes are stable for CI: `0` means all
 executed checks passed, `1` means an error-severity finding or execution error, `2` means a warning or
 incomplete evaluation, and `3` means the run could not be prepared or completed.
+See the **[CI/CD guide](docs/ci-cd.md)** for copy-paste pull-request, scheduled, staging, and
+production workflows using the published GitHub Action.
 
 For development, use the locked environment instead:
 

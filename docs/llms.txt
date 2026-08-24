@@ -11,7 +11,7 @@ GraphCheck executes declarative validation suites and produces:
 
 GraphCheck never modifies customer graphs.
 
-**Version Scope:** This document applies to GraphCheck v0.1.0. 
+**Version Scope:** This document applies to GraphCheck v0.2.0.
 
 ---
 
@@ -19,6 +19,7 @@ GraphCheck never modifies customer graphs.
 
 - [README](../README.md): Project overview, goals, installation, and quickstart.
 - [User Guide](user-guide.md): Credentials, check authoring, execution, artifacts, baselines, generated suggestions, safety, telemetry, and configuration.
+- [CI/CD Guide](ci-cd.md): Copy-paste GitHub Actions workflows for pull requests, scheduled audits, staging, and production.
 
 ---
 
