@@ -118,8 +118,12 @@ jobs:
 
   first-run-linux-container:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     container: ubuntu:24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        trial: [1, 2, 3]
     services:
       neo4j:
         image: neo4j:5.26.28
@@ -137,25 +141,35 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Install the built wheel in an isolated environment
-        run: uv build && uv venv /tmp/graphcheck-first-run-venv && uv pip install --python /tmp/graphcheck-first-run-venv/bin/python dist/*.whl
-      - name: Run and time init -> profile -> run
+      - name: Build the wheel outside the measured install boundary
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/graphcheck-wheel"
+      - name: Measure install -> init -> first valid run
         env:
-          GRAPHCHECK_BIN: /tmp/graphcheck-first-run-venv/bin/graphcheck
-          GRAPHCHECK_PYTHON: /tmp/graphcheck-first-run-venv/bin/python
-          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/linux-container
-        run: socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 & bash .github/scripts/first-run.sh
+          GRAPHCHECK_WHEEL_DIR: ${{ runner.temp }}/graphcheck-wheel
+          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/linux-container/${{ matrix.trial }}
+          FIRST_RUN_PLATFORM: linux-container
+          FIRST_RUN_TRIAL: ${{ matrix.trial }}
+          FIRST_RUN_RUNNER_OS: Linux
+          FIRST_RUN_RUNNER_IMAGE: ubuntu-24.04-container
+        run: |
+          socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 &
+          export GRAPHCHECK_BOOTSTRAP_PYTHON="$(uv python find 3.12)"
+          bash .github/scripts/first-run.sh
       - name: Retain first-run evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: first-run-linux-container
-          path: .first-run-artifacts/linux-container/
+          name: first-run-linux-container-trial-${{ matrix.trial }}
+          path: .first-run-artifacts/linux-container/${{ matrix.trial }}/
           if-no-files-found: warn
 
   first-run-macos:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        trial: [1, 2, 3]
     env:
       GRAPHCHECK_TELEMETRY: "0"
       NEO4J_VERSION: 5.26.28
@@ -164,8 +178,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Install the built wheel in an isolated environment
-        run: uv build && uv venv "$RUNNER_TEMP/graphcheck-first-run-venv" && uv pip install --python "$RUNNER_TEMP/graphcheck-first-run-venv/bin/python" dist/*.whl
+      - name: Build the wheel outside the measured install boundary
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/graphcheck-wheel"
       - name: Start a pinned native Neo4j
         run: |
           curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${NEO4J_VERSION}-unix.tar.gz" --output "$RUNNER_TEMP/neo4j.tar.gz"
@@ -175,18 +189,23 @@ jobs:
           "$neo4j_home/bin/neo4j-admin" dbms set-initial-password graphora
           "$neo4j_home/bin/neo4j" start
           echo "NEO4J_HOME=$neo4j_home" >> "$GITHUB_ENV"
-      - name: Run and time init -> profile -> run
+      - name: Measure install -> init -> first valid run
         env:
-          GRAPHCHECK_BIN: ${{ runner.temp }}/graphcheck-first-run-venv/bin/graphcheck
-          GRAPHCHECK_PYTHON: ${{ runner.temp }}/graphcheck-first-run-venv/bin/python
-          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/macos
-        run: bash .github/scripts/first-run.sh
+          GRAPHCHECK_WHEEL_DIR: ${{ runner.temp }}/graphcheck-wheel
+          FIRST_RUN_DIR: ${{ github.workspace }}/.first-run-artifacts/macos/${{ matrix.trial }}
+          FIRST_RUN_PLATFORM: macos
+          FIRST_RUN_TRIAL: ${{ matrix.trial }}
+          FIRST_RUN_RUNNER_OS: macOS
+          FIRST_RUN_RUNNER_IMAGE: macos-15
+        run: |
+          export GRAPHCHECK_BOOTSTRAP_PYTHON="$(uv python find 3.12)"
+          bash .github/scripts/first-run.sh
       - name: Retain first-run evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: first-run-macos
-          path: .first-run-artifacts/macos/
+          name: first-run-macos-trial-${{ matrix.trial }}
+          path: .first-run-artifacts/macos/${{ matrix.trial }}/
           if-no-files-found: warn
       - name: Stop Neo4j
         if: always() && env.NEO4J_HOME != ''
@@ -194,7 +213,11 @@ jobs:
 
   first-run-wsl:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        trial: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - name: Install a clean Ubuntu WSL environment
@@ -209,8 +232,8 @@ jobs:
           set -euo pipefail
           export GRAPHCHECK_TELEMETRY=0
           neo4j_version=5.26.28
-          python3 -m venv /tmp/graphcheck-first-run-venv
-          /tmp/graphcheck-first-run-venv/bin/pip install .
+          python3 -m venv /tmp/graphcheck-wheel-builder
+          /tmp/graphcheck-wheel-builder/bin/pip wheel --disable-pip-version-check --no-deps --wheel-dir /tmp/graphcheck-wheel .
           curl --fail --silent --show-error --location "https://dist.neo4j.org/neo4j-community-${neo4j_version}-unix.tar.gz" --output /tmp/neo4j.tar.gz
           tar -xzf /tmp/neo4j.tar.gz -C /tmp
           neo4j_home="/tmp/neo4j-community-${neo4j_version}"
@@ -219,13 +242,38 @@ jobs:
           "$neo4j_home/bin/neo4j" start
           trap '"$neo4j_home/bin/neo4j" stop' EXIT
           sed -i 's/\r$//' .github/scripts/first-run.sh
-          GRAPHCHECK_BIN=/tmp/graphcheck-first-run-venv/bin/graphcheck GRAPHCHECK_PYTHON=/tmp/graphcheck-first-run-venv/bin/python FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl" bash .github/scripts/first-run.sh
+          GRAPHCHECK_BOOTSTRAP_PYTHON=python3 GRAPHCHECK_WHEEL_DIR=/tmp/graphcheck-wheel FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl/${{ matrix.trial }}" FIRST_RUN_PLATFORM=wsl FIRST_RUN_TRIAL=${{ matrix.trial }} FIRST_RUN_RUNNER_OS=Windows/WSL FIRST_RUN_RUNNER_IMAGE=windows-2025-ubuntu-24.04 bash .github/scripts/first-run.sh
       - name: Retain first-run evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: first-run-wsl
-          path: .first-run-artifacts/wsl/
+          name: first-run-wsl-trial-${{ matrix.trial }}
+          path: .first-run-artifacts/wsl/${{ matrix.trial }}/
+          if-no-files-found: warn
+
+  first-run-summary:
+    if: always()
+    needs: [first-run-linux-container, first-run-macos, first-run-wsl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download first-run trial evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: first-run-*-trial-*
+          path: .first-run-samples
+      - name: Calculate and enforce platform medians
+        run: python .github/scripts/first_run_evidence.py summarize --input .first-run-samples --output .first-run-summary
+      - name: Add first-run medians to the run summary
+        if: always()
+        run: test ! -f .first-run-summary/first-run-summary.md || cat .first-run-summary/first-run-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain median first-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-summary
+          path: .first-run-summary/
           if-no-files-found: warn
 
   performance-gates:

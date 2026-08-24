@@ -660,7 +660,16 @@ def profile(
                     else SafeErrorCode.UNKNOWN
                 ),
             )
-        raise
+        typer.echo(
+            "profile.internal_error: GraphCheck could not complete the baseline profile.",
+            err=True,
+        )
+        typer.echo(
+            "Fix: Run `graphcheck debug --json`; if the connection succeeds, retry "
+            "`graphcheck profile` and report the diagnostic with the GraphCheck version.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
     if telemetry is not None and not telemetry.profile_result_recorded:
         telemetry.record_profile_result(
@@ -683,7 +692,12 @@ def profile(
                 SafeErrorCode.BASELINE_WRITE_FAILED,
             )
         typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        typer.echo(
+            "Fix: Verify that the configured artifact directory exists and is writable, then "
+            "retry `graphcheck profile`.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
     if telemetry is not None:
         telemetry.baseline_artifact = ArtifactOutcome.WRITTEN
         telemetry.artifact_write_ms = max(
