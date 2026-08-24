@@ -1,0 +1,29 @@
+cases:
+  llm-kg-builder:
+    server: neo4j:5.26.28
+    fixture: llm-kg-builder.cypher
+    suite: llm-kg-builder.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}
+  public-scale:
+    server: neo4j:5.26.28
+    dataset: https://snap.stanford.edu/data/email-EuAll.txt.gz
+    sha256: c256f8be57084fe7b2dbe96f99d4d79e56c19228773526058abc99a6fa86e9d9
+    nodes: 265214
+    relationships: 420045
+    suite: public-scale.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}
+  neo4j-4.4-cluster:
+    server: neo4j:4.4.44-enterprise
+    compose: neo4j-44-cluster.yml
+    suite: empty.yml
+    expected_exit_codes: {debug: 1, profile: 1, run: 3}
+  apoc-less:
+    server: neo4j:5.26.28
+    plugins: []
+    suite: apoc-less.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 1}
+  empty:
+    server: neo4j:5.26.28
+    fixture: null
+    suite: empty.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}

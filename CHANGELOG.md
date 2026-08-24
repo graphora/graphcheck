@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Added a scripted hostile-graph certification set that runs the real `debug`, `profile`, and
+  `run` command boundary against noisy LLM Graph Builder-shaped data, a checksum-pinned Stanford
+  SNAP scale graph, a three-member Neo4j 4.4 cluster, an APOC-less server, and an empty graph.
+
+### Fixed
+
+- `graphcheck profile` now converts unexpected profiling failures into an actionable diagnostic
+  instead of exposing a Python traceback, and baseline-write failures include a concrete fix.
+
 ## [0.2.0] - 2026-08-20
 
 ### Changed
