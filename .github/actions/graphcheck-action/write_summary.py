@@ -175,9 +175,7 @@ def _discover_check_locations(
     try:
         config_path = workspace / "graphcheck.yml"
         config = (
-            yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            if config_path.is_file()
-            else {}
+            yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
         )
         checks_value = config.get("checks", "checks") if isinstance(config, Mapping) else "checks"
         if not isinstance(checks_value, str):
@@ -252,9 +250,7 @@ def _command_property(value: str) -> str:
     return _command_value(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def _summary_lines(
-    data: Mapping[str, object], counts: Mapping[str, Counter[str]]
-) -> list[str]:
+def _summary_lines(data: Mapping[str, object], counts: Mapping[str, Counter[str]]) -> list[str]:
     totals = data.get("totals", {}) if isinstance(data.get("totals"), Mapping) else {}
     suites = data.get("suites", []) if isinstance(data.get("suites"), list) else []
     checks = data.get("checks", []) if isinstance(data.get("checks"), list) else []

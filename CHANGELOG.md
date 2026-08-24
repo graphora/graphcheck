@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- The GitHub Action now emits bounded inline workflow annotations for failed, errored, and
+  warning-severity checks, attaches repository source locations when available, and reports any
+  annotations dropped at the per-run cap while retaining the existing Step Summary.
+
+### Changed
+
+- Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
+  installation, consolidated configuration/profile preparation, and direct helper execution from
+  the Action environment.
+
 ## [0.2.0] - 2026-08-20
 
 ### Changed
