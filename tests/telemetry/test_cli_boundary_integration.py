@@ -659,13 +659,13 @@ def test_unexpected_profile_failure_is_classified_as_profile_collection(
 
     monkeypatch.setattr(cli_module, "build_profile", fail_profile)
     exit_code = _invoke_entrypoint(monkeypatch, "profile")
-    captured = capsys.readouterr()
+    diagnostic = capsys.readouterr().err
 
     assert exit_code == 1
-    assert "profile.internal_error" in captured.err
-    assert "Fix:" in captured.err
-    assert "Traceback" not in captured.err
-    assert "private unexpected profiler failure" not in captured.err
+    assert "profile.internal_error" in diagnostic
+    assert "Fix: Run `graphcheck debug --json`" in diagnostic
+    assert "Traceback" not in diagnostic
+    assert "private unexpected profiler failure" not in diagnostic
     command = _command_event(recording_transport)
     assert command["process_outcome"] == "unexpected_error"
     assert command["failure_stage"] == "profile_collection"

@@ -198,6 +198,19 @@ def test_debug_unexpected_failure_is_structured_without_traceback(tmp_path, monk
     assert "Traceback" not in result.stdout
 
 
+def test_profile_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+    write_default_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: 1 / 0)
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 1
+    assert "profile.internal_error" in result.stderr
+    assert "Fix: Run `graphcheck debug --json`" in result.stderr
+    assert "Traceback" not in result.output
+
+
 def _trace():
     return DebugTrace(
         profile="local",
@@ -457,7 +470,9 @@ def test_profile_handles_graphcheck_error(tmp_path, monkeypatch):
     assert "Traceback" not in result.output
 
 
-def test_profile_unexpected_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+def test_profile_unexpected_collection_failure_is_actionable_without_traceback(
+    tmp_path, monkeypatch
+):
     _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
     monkeypatch.setattr(
         "graphcheck.cli.build_profile",
@@ -476,14 +491,14 @@ def test_profile_baseline_write_failure_is_actionable_without_traceback(tmp_path
     _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
     monkeypatch.setattr(
         "graphcheck.baselines.write_baseline",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read-only directory")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read-only artifacts")),
     )
 
     result = runner.invoke(app, ["profile"])
 
     assert result.exit_code == 1
-    assert "baseline.write_failed" in result.output
-    assert "Fix: Verify that the configured artifact directory" in result.output
+    assert "baseline.write_failed" in result.stderr
+    assert "Fix: Check the configured artifacts path" in result.stderr
     assert "Traceback" not in result.output
 
 

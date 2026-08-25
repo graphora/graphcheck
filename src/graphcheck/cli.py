@@ -661,12 +661,12 @@ def profile(
                 ),
             )
         typer.echo(
-            "profile.internal_error: GraphCheck could not complete the baseline profile.",
+            "profile.internal_error: GraphCheck could not complete the graph profile.",
             err=True,
         )
         typer.echo(
-            "Fix: Run `graphcheck debug --json`; if the connection succeeds, retry "
-            "`graphcheck profile` and report the diagnostic with the GraphCheck version.",
+            "Fix: Run `graphcheck debug --json`; if the connection is healthy, retry "
+            "`graphcheck profile` and report the debug JSON and GraphCheck version.",
             err=True,
         )
         raise typer.Exit(1) from None
@@ -693,8 +693,8 @@ def profile(
             )
         typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
         typer.echo(
-            "Fix: Verify that the configured artifact directory exists and is writable, then "
-            "retry `graphcheck profile`.",
+            "Fix: Check the configured artifacts path and filesystem permissions, then retry "
+            "`graphcheck profile`.",
             err=True,
         )
         raise typer.Exit(1) from None
