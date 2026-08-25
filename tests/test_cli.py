@@ -130,6 +130,21 @@ def test_init_reports_connection_error_details(tmp_path, monkeypatch):
     assert "Fix: Edit profiles.yml" in result.stdout
 
 
+def test_init_unexpected_probe_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.cli.init_trace",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert "init.internal_error" in result.output
+    assert "Fix: Run `graphcheck debug --json`" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_debug_json_reports_profile_error(tmp_path, monkeypatch):
     from graphcheck.errors import GraphCheckError
 
@@ -183,7 +198,7 @@ def test_debug_unexpected_failure_is_structured_without_traceback(tmp_path, monk
     assert "Traceback" not in result.stdout
 
 
-def test_profile_unexpected_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+def test_profile_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
     write_default_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("graphcheck.cli.load_profiles", lambda root: 1 / 0)
@@ -451,6 +466,25 @@ def test_profile_handles_graphcheck_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "neo4j.query_failed" in result.output
     assert "Profiling query failed." in result.output
+    assert "Fix: Retry the profile command." in result.output
+    assert "Traceback" not in result.output
+
+
+def test_profile_unexpected_collection_failure_is_actionable_without_traceback(
+    tmp_path, monkeypatch
+):
+    _configure_profile_command(tmp_path, monkeypatch, _baseline_fixture())
+    monkeypatch.setattr(
+        "graphcheck.cli.build_profile",
+        lambda client, **kwargs: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
+    )
+
+    result = runner.invoke(app, ["profile"])
+
+    assert result.exit_code == 1
+    assert "profile.internal_error" in result.output
+    assert "Fix: Run `graphcheck debug --json`" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_profile_baseline_write_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
