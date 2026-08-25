@@ -34,7 +34,7 @@ complete pull-request, scheduled, staging, and production workflows.
 | `suite` | no | - | Suite name to run via `--suite`; skipped if empty |
 | `concurrency` | no | - | Maximum concurrent checks; empty uses `graphcheck.yml` |
 | `upload-artifacts` | no | `always` | Upload `always`, `on-failure`, or `never` |
-| `version` | no | `0.1.0` | Exact GraphCheck version to install from PyPI. Empty skips the install and uses whatever GraphCheck is already on PATH |
+| `version` | no | `0.2.0` | Exact GraphCheck version to install from PyPI. Empty skips the install and uses whatever GraphCheck is already on PATH |
 
 Leaving `version` empty is the escape hatch for installing GraphCheck from source earlier in the
 job (for example, `pip install .`) and reusing that install for the smoke run, decoupled from the
@@ -66,8 +66,9 @@ an error-severity errored check.
    generated file, and is read from the `NEO4J_PASSWORD` environment variable at runtime.
 4. Runs `graphcheck run` using the given profile.
 5. Removes the generated `profiles.yml`, only if this Action created it.
-6. Uploads `results.json` and the HTML report according to `upload-artifacts`. If an early failure
-   produced none, the summary says so explicitly rather than uploading nothing silently.
+6. Uploads the CLI-produced `results.json`, `summary.json`, and `report.html` according to
+   `upload-artifacts`. If an early failure produced none, the summary says so explicitly rather
+   than uploading nothing silently.
 7. Emits GitHub error/warning annotations for failed, warned, and errored checks. The Action points
    annotations at YAML check lines when available, includes stable graph element identities, and
    reports any annotations dropped beyond GitHub's per-step cap of 10 errors and 10 warnings.
@@ -80,5 +81,5 @@ an error-severity errored check.
   from PyPI (`version` is non-empty). A source install earlier in the job is expected to have
   already set up the interpreter it needs.
 
-See [`.github/actions/graphcheck-action/README.md`](../.github/actions/graphcheck-action/README.md)
-for the full Action reference.
+See the [standalone Action repository](https://github.com/graphora/graphcheck-action) for the full
+Action reference and immutable release tags.

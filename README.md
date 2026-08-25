@@ -75,8 +75,10 @@ Each prepared run writes immutable history plus convenient `latest` copies:
 
 ```text
 .graphcheck/runs/<run-id>/results.json
+.graphcheck/runs/<run-id>/summary.json
 .graphcheck/runs/<run-id>/report.html
 .graphcheck/runs/latest/results.json
+.graphcheck/runs/latest/summary.json
 .graphcheck/runs/latest/report.html
 ```
 

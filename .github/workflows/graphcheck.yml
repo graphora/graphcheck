@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install GraphCheck from source
         run: pip install .
-      - uses: ./.github/actions/graphcheck-action
+      - uses: graphora/graphcheck-action@v1
         with:
           profile: ci
           uri: bolt://localhost:7687

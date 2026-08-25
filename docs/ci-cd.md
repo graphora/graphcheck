@@ -57,13 +57,14 @@ With the default `graphcheck.yml`, every run writes:
 
 ```text
 .graphcheck/runs/latest/results.json
+.graphcheck/runs/latest/summary.json
 .graphcheck/runs/latest/report.html
 ```
 
-`results.json` is the machine-readable result and stores the process code at `.run.exit_code`.
-`report.html` is a self-contained offline report. The Action's `upload-artifacts` input accepts
-`always`, `on-failure`, or `never`; uploaded files appear in the workflow run as the
-`graphcheck-results` artifact.
+`results.json` is the machine-readable result and stores the process code at `.run.exit_code`,
+`summary.json` is the compact run-history record, and `report.html` is a self-contained offline
+report. The Action's `upload-artifacts` input accepts `always`, `on-failure`, or `never`; uploaded
+files appear in the workflow run as the `graphcheck-results` artifact.
 
 GraphCheck's exit-code contract is:
 
@@ -149,9 +150,10 @@ For a strict PR gate, replace the final `case` with
 
 ## 2. Scheduled run with alerting
 
-This workflow runs every night, always uploads `results.json` and `report.html`, opens a GitHub
-issue when GraphCheck returns a nonzero code, and then preserves that code as the job failure. Swap
-the issue step for your Slack, PagerDuty, email, or incident-management Action if needed.
+This workflow runs every night, always uploads `results.json`, `summary.json`, and `report.html`,
+opens a GitHub issue when GraphCheck returns a nonzero code, and then preserves that code as the job
+failure. Swap the issue step for your Slack, PagerDuty, email, or incident-management Action if
+needed.
 
 The `scheduled` profile uses `password_env: NEO4J_PASSWORD`; the workflow supplies it from
 `NEO4J_SCHEDULED_PASSWORD`.
@@ -382,8 +384,8 @@ process requires it.
 ## Reading a completed run
 
 Open the workflow's Step Summary for totals and the PR checks UI for inline annotations. Download
-the `graphcheck-results` artifact for the complete JSON and offline HTML report. Locally, inspect
-the exact outcome with:
+the `graphcheck-results` artifact for the full result, compact summary, and offline HTML report.
+Locally, inspect the exact outcome with:
 
 ```console
 jq '.run.exit_code, .run.status, .totals' .graphcheck/runs/latest/results.json
