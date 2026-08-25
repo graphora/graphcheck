@@ -647,7 +647,7 @@ def profile(
         typer.echo(f"{exc.error.code}: {exc.error.message}", err=True)
         typer.echo(f"Fix: {exc.error.fix}", err=True)
         raise typer.Exit(1) from exc
-    except Exception:
+    except Exception as exc:
         if telemetry is not None and telemetry.process_outcome is ProcessOutcome.SUCCESS:
             if telemetry.setup_ms is None:
                 telemetry.mark_setup(setup_started)
@@ -660,7 +660,16 @@ def profile(
                     else SafeErrorCode.UNKNOWN
                 ),
             )
-        raise
+        typer.echo(
+            "profile.internal_error: GraphCheck could not complete the graph profile.",
+            err=True,
+        )
+        typer.echo(
+            "Fix: Run `graphcheck debug --json`; if the connection is healthy, report the "
+            "debug JSON and GraphCheck version.",
+            err=True,
+        )
+        raise typer.Exit(1) from exc
 
     if telemetry is not None and not telemetry.profile_result_recorded:
         telemetry.record_profile_result(
@@ -683,6 +692,7 @@ def profile(
                 SafeErrorCode.BASELINE_WRITE_FAILED,
             )
         typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
+        typer.echo("Fix: Check the configured artifacts path and filesystem permissions.", err=True)
         raise typer.Exit(1) from exc
     if telemetry is not None:
         telemetry.baseline_artifact = ArtifactOutcome.WRITTEN

@@ -224,6 +224,7 @@ __marimo__/
 profiles.yml
 !/profiles.yml
 .graphcheck/
+.hostile-artifacts/
 .superpowers/
 
 

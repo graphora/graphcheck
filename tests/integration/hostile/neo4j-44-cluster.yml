@@ -1,0 +1,62 @@
+name: graphcheck-hostile-neo4j44
+
+x-neo4j-common: &neo4j-common
+  image: neo4j:4.4.44-enterprise
+  environment: &neo4j-environment
+    NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+    NEO4J_AUTH: neo4j/graphcheck-hostile-44
+    NEO4J_dbms_mode: CORE
+    NEO4J_dbms_default__listen__address: 0.0.0.0
+    NEO4J_causal__clustering_initial__discovery__members: core1:5000,core2:5000,core3:5000
+    NEO4J_causal__clustering_expected__core__cluster__size: "3"
+    NEO4J_causal__clustering_minimum__core__cluster__size__at__formation: "3"
+    NEO4J_dbms_memory_heap_initial__size: 128m
+    NEO4J_dbms_memory_heap_max__size: 256m
+    NEO4J_dbms_memory_pagecache_size: 128m
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        cypher-shell -a bolt://localhost:7687 -u neo4j -p graphcheck-hostile-44
+        "RETURN 1" >/dev/null 2>&1
+    interval: 10s
+    timeout: 10s
+    retries: 30
+    start_period: 30s
+  networks: [hostile-cluster]
+
+services:
+  core1:
+    <<: *neo4j-common
+    hostname: core1
+    environment:
+      <<: *neo4j-environment
+      NEO4J_dbms_connector_bolt_advertised__address: core1:7687
+      NEO4J_causal__clustering_discovery__advertised__address: core1:5000
+      NEO4J_causal__clustering_transaction__advertised__address: core1:6000
+      NEO4J_causal__clustering_raft__advertised__address: core1:7000
+    ports: ["127.0.0.1::7687"]
+  core2:
+    <<: *neo4j-common
+    hostname: core2
+    environment:
+      <<: *neo4j-environment
+      NEO4J_dbms_connector_bolt_advertised__address: core2:7687
+      NEO4J_causal__clustering_discovery__advertised__address: core2:5000
+      NEO4J_causal__clustering_transaction__advertised__address: core2:6000
+      NEO4J_causal__clustering_raft__advertised__address: core2:7000
+    ports: ["127.0.0.1::7687"]
+  core3:
+    <<: *neo4j-common
+    hostname: core3
+    environment:
+      <<: *neo4j-environment
+      NEO4J_dbms_connector_bolt_advertised__address: core3:7687
+      NEO4J_causal__clustering_discovery__advertised__address: core3:5000
+      NEO4J_causal__clustering_transaction__advertised__address: core3:6000
+      NEO4J_causal__clustering_raft__advertised__address: core3:7000
+    ports: ["127.0.0.1::7687"]
+
+networks:
+  hostile-cluster:
+    driver: bridge
