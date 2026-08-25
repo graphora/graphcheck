@@ -131,6 +131,12 @@ def test_project_config_rejects_unknown_keys():
         ProjectConfig(project="x", checks="checks", artifacts=".graphcheck", bogus=True)
 
 
+def test_project_config_defaults_to_two_workers():
+    from graphcheck.project import ProjectConfig
+
+    assert ProjectConfig(project="x", checks="checks", artifacts=".graphcheck").concurrency == 2
+
+
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "2"])
 def test_project_config_rejects_invalid_concurrency(invalid):
     from graphcheck.project import ProjectConfig
@@ -171,7 +177,7 @@ def test_load_project_config_reads_yaml(tmp_path: Path):
     assert config.project == "graphcheck"
     assert config.checks == "checks"
     assert config.artifacts == ".graphcheck"
-    assert config.concurrency == 1
+    assert config.concurrency == 2
 
 
 def test_load_project_config_rejects_invalid_yaml(tmp_path: Path):

@@ -58,6 +58,9 @@ checks/example.yml      Example check suite
 .graphcheck/            Baselines, run history, JSON, and HTML reports
 ```
 
+New projects run up to two checks concurrently by default. Set `concurrency` in `graphcheck.yml`
+or pass `graphcheck run --concurrency N` to choose a different positive worker limit.
+
 Edit `profiles.yml` with the URI, database, and credential for your Neo4j instance. Enterprise and
 Developer deployments must use a user assigned only Neo4j's built-in `reader` role plus the
 automatic `PUBLIC` role; GraphCheck rejects missing, additional, or custom roles. Community

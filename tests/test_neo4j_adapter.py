@@ -51,7 +51,10 @@ def _is_explain(query):
     )
 
 
-def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
+@pytest.mark.parametrize(("settings", "expected_pool_size"), [({}, 2), ({"max_concurrency": 4}, 4)])
+def test_driver_pool_and_timeouts_match_workload_concurrency(
+    monkeypatch, settings, expected_pool_size
+):
     captured = {}
     driver = object()
 
@@ -67,11 +70,11 @@ def test_driver_pool_and_timeouts_match_workload_concurrency(monkeypatch):
             password="secret",
             database="neo4j",
         ),
-        max_concurrency=4,
+        **settings,
     )
 
     assert client._driver is driver
-    assert captured["max_connection_pool_size"] == 4
+    assert captured["max_connection_pool_size"] == expected_pool_size
     assert captured["connection_timeout"] == 10.0
     assert captured["connection_acquisition_timeout"] == 10.0
     assert captured["fetch_size"] == 1000

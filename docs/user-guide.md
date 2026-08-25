@@ -436,13 +436,13 @@ settings:
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
-concurrency: 1
+concurrency: 2
 ```
 
 Relative `checks` and `artifacts` paths are resolved from the project root. Suite discovery is
 recursive and includes `.yml` and `.yaml` files. Every discovered suite is read and validated
 directly on each command before suite-id filtering; GraphCheck does not create a suite-discovery
-cache file. `concurrency` is a positive worker limit; the default is `1`, and
+cache file. `concurrency` is a positive worker limit; the default is `2`, and
 `graphcheck run --concurrency N` overrides the project value.
 
 For agent integration, result consumption, and programmatic check authoring, see the

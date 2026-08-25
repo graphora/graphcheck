@@ -1630,7 +1630,7 @@ def run_command(
         None,
         "--concurrency",
         min=1,
-        help="Maximum concurrent checks; overrides graphcheck.yml.",
+        help="Maximum concurrent checks; overrides the graphcheck.yml default of 2.",
     ),
     redacted: bool = typer.Option(
         False,

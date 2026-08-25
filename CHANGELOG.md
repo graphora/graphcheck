@@ -35,6 +35,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- The default check concurrency is now two workers across project scaffolding, the engine, and the
+  Neo4j connection pool; `graphcheck.yml` and `graphcheck run --concurrency N` still override it.
 - The measured first-run path now installs a built wheel without a package cache and verifies the
   baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
   separate post-timing smoke check.
@@ -183,7 +185,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
   predicates while preserving the existing eager connector API.
 - Positive project and CLI concurrency controls through `graphcheck.yml` and
   `graphcheck run --concurrency`, with deterministic output ordering, deadline-aware scheduling,
-  a conservative default of one worker, and Neo4j pool sizing matched to effective concurrency.
+  an initial conservative default of one worker, and Neo4j pool sizing matched to effective
+  concurrency.
 - A secure local report explorer launched by `graphcheck report --open`, with searchable history,
   in-place report switching, two-run comparisons, multi-select deletion, safe `latest` repair,
   authenticated same-origin APIs, restrictive browser security headers, and idle shutdown.

@@ -1017,6 +1017,10 @@ def test_engine_config_rejects_invalid_max_concurrency(invalid):
         EngineConfig(max_concurrency=invalid)
 
 
+def test_engine_config_defaults_to_two_workers():
+    assert EngineConfig().max_concurrency == 2
+
+
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "100"])
 def test_engine_config_rejects_invalid_result_row_limits(invalid):
     with pytest.raises(ValueError, match="result_row_limit"):
