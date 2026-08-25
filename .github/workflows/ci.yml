@@ -112,9 +112,29 @@ jobs:
           uv run pytest
           tests/integration/test_integration_neo4j_adapter.py
           tests/integration/test_integration_engine.py
+          tests/integration/test_hostile_graphs.py
           tests/integration/test_mcp_neo4j_workflow.py
           tests/integration/test_performance_plans.py
           -v
+
+  hostile-neo4j44:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTEST_ADDOPTS: --junitxml=.hostile-artifacts/neo4j-44.xml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - name: Certify graceful rejection of a Neo4j 4.4 cluster
+        run: uv run python scripts/run_hostile_graphs.py --case neo4j-4.4-cluster
+      - name: Retain hostile-cluster evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostile-neo4j-44
+          path: .hostile-artifacts/
+          if-no-files-found: warn
 
   first-run-linux-container:
     runs-on: ubuntu-latest

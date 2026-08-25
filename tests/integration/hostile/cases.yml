@@ -1,0 +1,42 @@
+cases:
+  llm-kg-builder:
+    pytest_test: test_llm_kg_builder_cli_matrix_handles_noisy_schema
+    lane: fast
+    server: neo4j:5.26.28
+    fixture: llm-kg-builder.cypher
+    suite: llm-kg-builder.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}
+  public-scale:
+    pytest_test: test_public_scale_cli_matrix_is_bounded_and_graceful
+    lane: scale
+    enable_env: GRAPHCHECK_HOSTILE_SCALE
+    server: neo4j:5.26.28
+    dataset: https://snap.stanford.edu/data/email-EuAll.txt.gz
+    sha256: c256f8be57084fe7b2dbe96f99d4d79e56c19228773526058abc99a6fa86e9d9
+    nodes: 265214
+    relationships: 420045
+    suite: public-scale.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}
+  neo4j-4.4-cluster:
+    pytest_test: test_neo4j_44_cluster_cli_matrix_rejects_legacy_server
+    lane: legacy
+    enable_env: GRAPHCHECK_HOSTILE_NEO4J44
+    server: neo4j:4.4.44-enterprise
+    password: graphcheck-hostile-44
+    compose: neo4j-44-cluster.yml
+    suite: empty.yml
+    expected_exit_codes: {debug: 1, profile: 1, run: 3}
+  apoc-less:
+    pytest_test: test_apoc_less_cli_matrix_is_actionable_and_isolated
+    lane: fast
+    server: neo4j:5.26.28
+    plugins: []
+    suite: apoc-less.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 1}
+  empty:
+    pytest_test: test_empty_graph_cli_matrix_is_graceful
+    lane: fast
+    server: neo4j:5.26.28
+    fixture: null
+    suite: empty.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}

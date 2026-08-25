@@ -30,9 +30,11 @@ Cypher 25 lanes. See Neo4j's
 
 ## Neo4j 4.4 policy
 
-Neo4j 4.4 is legacy and unsupported by GraphCheck 0.1. It is absent from CI, and the connector
-returns `neo4j.unsupported_version` during the target probe with a 5.26 LTS upgrade direction.
-GraphCheck evidence identity now uses `elementId()`, avoiding the deprecated numeric `id()` API.
+Neo4j 4.4 is legacy and unsupported by GraphCheck 0.1. A dedicated hostile-graph lane starts a
+three-member 4.4 Enterprise cluster and verifies that `debug`, `profile`, and `run` return
+`neo4j.unsupported_version` with a 5.26 LTS upgrade direction and no traceback. It remains absent
+from the supported compatibility matrix. GraphCheck evidence identity now uses `elementId()`,
+avoiding the deprecated numeric `id()` API.
 
 ## Cypher 25 and sampling
 

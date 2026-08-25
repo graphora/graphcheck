@@ -1,0 +1,6 @@
+suite: hostile-public-scale
+competency:
+  - id: public-graph-counts
+    question: Can GraphCheck count the public graph without materializing it?
+    query: MATCH (n:HostileEmailAddress) RETURN count(n) AS nodes
+    expect: {rows: {exactly: 1}, columns: [nodes], equals: [265214]}
