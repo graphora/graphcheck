@@ -18,6 +18,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
   installation, consolidated configuration/profile preparation, and direct helper execution from
   the Action environment.
 
+### Removed
+
+- Removed the retired in-repository GraphCheck Action copy and its implementation tests; CI now
+  guards the boundary and consumes only the standalone `graphora/graphcheck-action@v1` release.
+
 ## [0.2.0] - 2026-08-20
 
 ### Changed
