@@ -6,16 +6,27 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- First-run CI now records three independent clean-runner install-to-first-valid-result samples on
+  Linux, macOS, and Windows/WSL, uploads structured timing evidence, publishes the per-platform
+  medians in the Actions summary, records both the tested GitHub SHA and pull-request head SHA, and
+  enforces the under-15-minute adoption budget.
+
 - Added a scripted hostile-graph certification set that runs the real `debug`, `profile`, and
   `run` command boundary against noisy LLM Graph Builder-shaped data, a checksum-pinned Stanford
   SNAP scale graph, a three-member Neo4j 4.4 cluster, an APOC-less server, and an empty graph. Its
   manifest drives the runner and integration expectations; the legacy lane uses Docker-assigned
   ports and verifies three unique cluster members, one leader, and two followers before testing.
 
+### Changed
+
+- The measured first-run path now installs a built wheel without a package cache and verifies the
+  baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
+  separate post-timing smoke check.
+
 ### Fixed
 
-- `graphcheck profile` now converts unexpected profiling failures into an actionable diagnostic
-  instead of exposing a Python traceback, and baseline-write failures include a concrete fix.
+- First-run stage failures, unexpected profiling faults, and baseline write errors now return an
+  actionable `Fix:` diagnostic without exposing a Python traceback.
 
 ## [0.2.0] - 2026-08-20
 

@@ -1457,6 +1457,25 @@ def test_run_invalid_suite_is_configuration_failure(tmp_path, monkeypatch):
     assert result.exit_code == 3
     payload = _payload(tmp_path)
     assert payload["run"]["error"]["code"] == "run.suite_invalid"
+    assert "Fix:" in result.output
+    _assert_no_traceback(result)
+
+
+def test_run_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.project.load_project_config",
+        lambda root: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 3
+    payload = _payload(tmp_path)
+    assert payload["run"]["error"]["code"] == "run.configuration"
+    assert "Fix:" in result.output
+    _assert_no_traceback(result)
 
 
 def test_graceful_failure_matrix_missing_apoc_names_fix_and_continues(tmp_path, monkeypatch):
