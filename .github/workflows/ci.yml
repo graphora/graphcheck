@@ -151,6 +151,9 @@ jobs:
           FIRST_RUN_TRIAL: ${{ matrix.trial }}
           FIRST_RUN_RUNNER_OS: Linux
           FIRST_RUN_RUNNER_IMAGE: ubuntu-24.04-container
+          FIRST_RUN_TESTED_GITHUB_SHA: ${{ github.sha }}
+          FIRST_RUN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FIRST_RUN_GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           socat TCP-LISTEN:7687,fork,reuseaddr TCP:neo4j:7687 &
           export GRAPHCHECK_BOOTSTRAP_PYTHON="$(uv python find 3.12)"
@@ -197,6 +200,9 @@ jobs:
           FIRST_RUN_TRIAL: ${{ matrix.trial }}
           FIRST_RUN_RUNNER_OS: macOS
           FIRST_RUN_RUNNER_IMAGE: macos-15
+          FIRST_RUN_TESTED_GITHUB_SHA: ${{ github.sha }}
+          FIRST_RUN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FIRST_RUN_GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           export GRAPHCHECK_BOOTSTRAP_PYTHON="$(uv python find 3.12)"
           bash .github/scripts/first-run.sh
@@ -242,7 +248,17 @@ jobs:
           "$neo4j_home/bin/neo4j" start
           trap '"$neo4j_home/bin/neo4j" stop' EXIT
           sed -i 's/\r$//' .github/scripts/first-run.sh
-          GRAPHCHECK_BOOTSTRAP_PYTHON=python3 GRAPHCHECK_WHEEL_DIR=/tmp/graphcheck-wheel FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl/${{ matrix.trial }}" FIRST_RUN_PLATFORM=wsl FIRST_RUN_TRIAL=${{ matrix.trial }} FIRST_RUN_RUNNER_OS=Windows/WSL FIRST_RUN_RUNNER_IMAGE=windows-2025-ubuntu-24.04 bash .github/scripts/first-run.sh
+          export GRAPHCHECK_BOOTSTRAP_PYTHON=python3
+          export GRAPHCHECK_WHEEL_DIR=/tmp/graphcheck-wheel
+          export FIRST_RUN_DIR="$PWD/.first-run-artifacts/wsl/${{ matrix.trial }}"
+          export FIRST_RUN_PLATFORM=wsl
+          export FIRST_RUN_TRIAL=${{ matrix.trial }}
+          export FIRST_RUN_RUNNER_OS=Windows/WSL
+          export FIRST_RUN_RUNNER_IMAGE=windows-2025-ubuntu-24.04
+          export FIRST_RUN_TESTED_GITHUB_SHA='${{ github.sha }}'
+          export FIRST_RUN_PR_HEAD_SHA='${{ github.event.pull_request.head.sha }}'
+          export FIRST_RUN_GITHUB_EVENT_NAME='${{ github.event_name }}'
+          bash .github/scripts/first-run.sh
       - name: Retain first-run evidence
         if: always()
         uses: actions/upload-artifact@v4

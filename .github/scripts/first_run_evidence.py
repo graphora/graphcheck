@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import statistics
 import sys
 import time
@@ -99,6 +98,10 @@ def record(args: argparse.Namespace) -> int:
         errors.append("budget_seconds must be a positive integer")
     if args.finished_at_ns < args.started_at_ns:
         errors.append("finished_at must not precede started_at")
+    if not args.tested_github_sha:
+        errors.append("tested_github_sha must identify the checkout tested by this trial")
+    if args.github_event_name == "pull_request" and not args.pull_request_head_sha:
+        errors.append("pull_request_head_sha is required for pull_request evidence")
     for name in ("install", "fixture", "init", "run", "total"):
         if getattr(args, f"{name}_ns") < 0:
             errors.append(f"{name} timing must be non-negative")
@@ -117,7 +120,13 @@ def record(args: argparse.Namespace) -> int:
         "schema_version": SCHEMA_VERSION,
         "platform": args.platform,
         "trial": args.trial,
-        "commit_sha": os.environ.get("GITHUB_SHA"),
+        "github_event_name": args.github_event_name,
+        "tested_github_sha": args.tested_github_sha,
+        "pull_request_head_sha": args.pull_request_head_sha or None,
+        "provenance_note": (
+            "tested_github_sha is github.sha: the synthetic merge commit for pull_request events "
+            "and the pushed commit for push events"
+        ),
         "runner_os": args.runner_os,
         "runner_image": args.runner_image,
         "python_version": args.python_version,
@@ -206,15 +215,40 @@ def _load_samples(root: Path) -> tuple[dict[tuple[str, int], dict[str, object]],
 def summarize(args: argparse.Namespace) -> int:
     root, output_dir = Path(args.input), Path(args.output)
     samples, errors = _load_samples(root)
-    commit_shas = sorted(
+    tested_github_shas = sorted(
         {
             value
             for sample in samples.values()
-            if isinstance((value := sample.get("commit_sha")), str) and value
+            if isinstance((value := sample.get("tested_github_sha")), str) and value
         }
     )
-    if len(commit_shas) > 1:
-        errors.append("timing evidence contains more than one commit SHA")
+    pull_request_head_shas = sorted(
+        {
+            value
+            for sample in samples.values()
+            if isinstance((value := sample.get("pull_request_head_sha")), str) and value
+        }
+    )
+    github_event_names = sorted(
+        {
+            value
+            for sample in samples.values()
+            if isinstance((value := sample.get("github_event_name")), str) and value
+        }
+    )
+    for (platform_name, trial), sample in samples.items():
+        if not isinstance(sample.get("tested_github_sha"), str) or not sample["tested_github_sha"]:
+            errors.append(f"{platform_name} trial {trial} is missing tested_github_sha")
+        if sample.get("github_event_name") == "pull_request" and not sample.get(
+            "pull_request_head_sha"
+        ):
+            errors.append(f"{platform_name} trial {trial} is missing pull_request_head_sha")
+    if len(tested_github_shas) != 1:
+        errors.append("timing evidence must contain exactly one tested GitHub SHA")
+    if len(pull_request_head_shas) > 1:
+        errors.append("timing evidence contains more than one pull-request head SHA")
+    if len(github_event_names) != 1:
+        errors.append("timing evidence must contain exactly one GitHub event name")
     platforms: dict[str, dict[str, object]] = {}
     for platform_name in args.platforms:
         observations: list[dict[str, object]] = []
@@ -255,7 +289,11 @@ def summarize(args: argparse.Namespace) -> int:
     summary = {
         "schema_version": SCHEMA_VERSION,
         "metric": "clean-wheel-install-start_to_valid-init-run-result",
-        "commit_sha": commit_shas[0] if len(commit_shas) == 1 else None,
+        "tested_github_sha": tested_github_shas[0] if len(tested_github_shas) == 1 else None,
+        "pull_request_head_sha": (
+            pull_request_head_shas[0] if len(pull_request_head_shas) == 1 else None
+        ),
+        "github_event_name": github_event_names[0] if len(github_event_names) == 1 else None,
         "budget_seconds": args.budget_seconds,
         "trials_per_platform": args.trials,
         "platforms": platforms,
@@ -263,8 +301,10 @@ def summarize(args: argparse.Namespace) -> int:
         "errors": errors,
     }
     lines = ["# GraphCheck first-run evidence", ""]
-    if len(commit_shas) == 1:
-        lines.extend((f"Commit: `{commit_shas[0]}`", ""))
+    if len(tested_github_shas) == 1:
+        lines.extend((f"Tested GitHub SHA: `{tested_github_shas[0]}`", ""))
+    if len(pull_request_head_shas) == 1:
+        lines.extend((f"Pull-request head SHA: `{pull_request_head_shas[0]}`", ""))
     lines.extend(
         (
             "Budget: median install-to-first-valid-result "
@@ -309,6 +349,8 @@ def parser() -> argparse.ArgumentParser:
         "python-version",
         "runner-os",
         "runner-image",
+        "tested-github-sha",
+        "github-event-name",
     ):
         record_parser.add_argument(f"--{name}", required=True)
     for name in (
@@ -323,6 +365,7 @@ def parser() -> argparse.ArgumentParser:
         record_parser.add_argument(f"--{name}", type=int, required=True)
     record_parser.add_argument("--trial", type=int, required=True)
     record_parser.add_argument("--run-exit-code", type=int, required=True)
+    record_parser.add_argument("--pull-request-head-sha", default="")
     record_parser.add_argument("--budget-seconds", type=int, default=900)
     record_parser.set_defaults(handler=record)
     fixture_parser = commands.add_parser("prepare-fixture")

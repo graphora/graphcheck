@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +14,6 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
         encoding="utf-8",
-        env={**os.environ, "GITHUB_SHA": "abc123"},
     )
 
 
@@ -78,6 +76,12 @@ def _record(tmp_path: Path, *, checks: int = 2, skipped: int = 0):
         "Linux",
         "--runner-image",
         "ubuntu-24.04-container",
+        "--tested-github-sha",
+        "merge123",
+        "--pull-request-head-sha",
+        "head123",
+        "--github-event-name",
+        "pull_request",
     )
     return completed, json.loads(output.read_text(encoding="utf-8"))
 
@@ -87,7 +91,9 @@ def test_record_accepts_a_scored_result_with_executed_checks(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert evidence["valid"] is True
-    assert evidence["commit_sha"] == "abc123"
+    assert evidence["tested_github_sha"] == "merge123"
+    assert evidence["pull_request_head_sha"] == "head123"
+    assert "synthetic merge commit" in evidence["provenance_note"]
     assert evidence["executed_checks"] == 2
     assert evidence["score"] == 100
     assert evidence["timings_seconds"]["total"] == 10
@@ -111,6 +117,9 @@ def _sample(path: Path, platform: str, trial: int, seconds: float) -> None:
                 "platform": platform,
                 "trial": trial,
                 "valid": True,
+                "github_event_name": "pull_request",
+                "tested_github_sha": "merge123",
+                "pull_request_head_sha": "head123",
                 "timings_seconds": {"total": seconds},
             }
         ),
@@ -134,6 +143,8 @@ def test_summarize_records_and_enforces_each_platform_median(tmp_path):
 
     assert completed.returncode == 0, completed.stdout
     assert summary["passed"] is True
+    assert summary["tested_github_sha"] == "merge123"
+    assert summary["pull_request_head_sha"] == "head123"
     assert summary["platforms"]["linux-container"]["median_seconds"] == 200
     assert summary["platforms"]["wsl"]["median_seconds"] == 899.5
     assert "Overall: **PASS**" in (output / "first-run-summary.md").read_text()
@@ -152,3 +163,11 @@ def test_summarize_fails_when_a_platform_median_reaches_the_budget(tmp_path):
     assert summary["passed"] is False
     assert all(not result["under_budget"] for result in summary["platforms"].values())
     assert "is not under 900s" in completed.stdout
+
+
+def test_first_run_script_records_evidence_before_profile_smoke_check():
+    script = (SCRIPT.parent / "first-run.sh").read_text(encoding="utf-8")
+
+    assert script.index('run_stage "first-result validation"') < script.index(
+        'run_stage "graphcheck profile smoke check"'
+    )

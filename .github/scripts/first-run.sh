@@ -5,8 +5,11 @@ set -euo pipefail
 : "${GRAPHCHECK_WHEEL_DIR:?Set GRAPHCHECK_WHEEL_DIR to the directory containing one wheel}"
 : "${FIRST_RUN_PLATFORM:?Set FIRST_RUN_PLATFORM to the evidence platform name}"
 : "${FIRST_RUN_TRIAL:?Set FIRST_RUN_TRIAL to the one-based trial number}"
+: "${FIRST_RUN_TESTED_GITHUB_SHA:?Set FIRST_RUN_TESTED_GITHUB_SHA to github.sha}"
+: "${FIRST_RUN_GITHUB_EVENT_NAME:?Set FIRST_RUN_GITHUB_EVENT_NAME to github.event_name}"
 
 FIRST_RUN_DIR="${FIRST_RUN_DIR:-${RUNNER_TEMP:-/tmp}/graphcheck-first-run}"
+FIRST_RUN_PR_HEAD_SHA="${FIRST_RUN_PR_HEAD_SHA:-}"
 FIRST_RUN_RUNNER_OS="${FIRST_RUN_RUNNER_OS:-unknown}"
 FIRST_RUN_RUNNER_IMAGE="${FIRST_RUN_RUNNER_IMAGE:-unknown}"
 FIRST_RUN_VENV="${FIRST_RUN_VENV:-${RUNNER_TEMP:-/tmp}/graphcheck-first-run-venv-${FIRST_RUN_PLATFORM}-${FIRST_RUN_TRIAL}}"
@@ -68,15 +71,6 @@ run_finished_ns=$("$GRAPHCHECK_BOOTSTRAP_PYTHON" -c "import time; print(time.mon
 finished_at_ns=$("$GRAPHCHECK_BOOTSTRAP_PYTHON" -c "import time; print(time.time_ns())")
 grep -q "Traceback (most recent call last)" "$FIRST_RUN_DIR/run.log" && fail_stage "graphcheck run diagnostics" "Use the stable diagnostic instead of exposing a Python traceback."
 
-profile_log="$FIRST_RUN_DIR/profile.log"
-run_stage "graphcheck profile smoke check" "$profile_log" "Run graphcheck debug --json and correct the reported profiling problem." "$graphcheck_bin" profile
-grep -q "Traceback (most recent call last)" "$profile_log" && fail_stage "graphcheck profile diagnostics" "Use the stable diagnostic instead of exposing a Python traceback."
-baseline_found=0
-for baseline in .graphcheck/baselines/*.json; do
-  test -f "$baseline" && baseline_found=1 && break
-done
-test "$baseline_found" -eq 1 || fail_stage "graphcheck profile artifact validation" "Confirm the artifact directory is writable and retry graphcheck profile."
-
 python_version=$("$graphcheck_python" -c "import platform; print(platform.python_version())")
 run_stage "first-result validation" "$FIRST_RUN_DIR/validation.log" "Inspect results.json, report.html, and run.log; a valid result must be complete, scored, and execute at least one check." \
   "$GRAPHCHECK_BOOTSTRAP_PYTHON" "$evidence_script" record \
@@ -95,7 +89,19 @@ run_stage "first-result validation" "$FIRST_RUN_DIR/validation.log" "Inspect res
   --total-ns "$((run_finished_ns - started_monotonic_ns))" \
   --python-version "$python_version" \
   --runner-os "$FIRST_RUN_RUNNER_OS" \
-  --runner-image "$FIRST_RUN_RUNNER_IMAGE"
+  --runner-image "$FIRST_RUN_RUNNER_IMAGE" \
+  --tested-github-sha "$FIRST_RUN_TESTED_GITHUB_SHA" \
+  --pull-request-head-sha "$FIRST_RUN_PR_HEAD_SHA" \
+  --github-event-name "$FIRST_RUN_GITHUB_EVENT_NAME"
 
 total_seconds=$("$GRAPHCHECK_BOOTSTRAP_PYTHON" -c "print(round(($run_finished_ns - $started_monotonic_ns) / 1_000_000_000, 3))")
 printf 'Install -> init -> first valid run completed in %.3f seconds; median budget: <900 seconds.\n' "$total_seconds" | tee "$FIRST_RUN_DIR/timing.txt" | tee -a "$FIRST_RUN_DIR/run.log"
+
+profile_log="$FIRST_RUN_DIR/profile.log"
+run_stage "graphcheck profile smoke check" "$profile_log" "Run graphcheck debug --json and correct the reported profiling problem." "$graphcheck_bin" profile
+grep -q "Traceback (most recent call last)" "$profile_log" && fail_stage "graphcheck profile diagnostics" "Use the stable diagnostic instead of exposing a Python traceback."
+baseline_found=0
+for baseline in .graphcheck/baselines/*.json; do
+  test -f "$baseline" && baseline_found=1 && break
+done
+test "$baseline_found" -eq 1 || fail_stage "graphcheck profile artifact validation" "Confirm the artifact directory is writable and retry graphcheck profile."

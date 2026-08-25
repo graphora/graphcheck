@@ -8,12 +8,14 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - First-run CI now records three independent clean-runner install-to-first-valid-result samples on
   Linux, macOS, and Windows/WSL, uploads structured timing evidence, publishes the per-platform
-  medians in the Actions summary, and enforces the under-15-minute adoption budget.
+  medians in the Actions summary, records both the tested GitHub SHA and pull-request head SHA, and
+  enforces the under-15-minute adoption budget.
 
 ### Changed
 
 - The measured first-run path now installs a built wheel without a package cache and verifies the
-  baseline-free `init` → `run` path directly; `profile` remains a post-timing smoke check.
+  baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
+  separate post-timing smoke check.
 
 ### Fixed
 
