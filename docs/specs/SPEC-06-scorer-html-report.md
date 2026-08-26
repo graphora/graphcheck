@@ -36,9 +36,9 @@ The writer accepts:
 
 All inputs are normalized through `load_results()`, the SPEC-01 compatibility boundary.
 Historical schema 1.0, 1.1, and 1.2 artifacts are upgraded in memory to the current 2.0 contract.
-For a non-null historical target, the compatibility loader injects `labels:null`
-and `relationship_types:null` to mean that the older schema did not record the
-inventory. This compatibility read does not rewrite the source file. New runs
+For a non-null schema 1.0 or 1.1 target, the compatibility loader permits missing inventory and
+injects `labels:null` and `relationship_types:null`; schema 1.2 already records both arrays. This
+compatibility read does not rewrite the source file. New runs
 always use schema 2.0 and populate both fields with sorted, unique arrays; `[]`
 means the probe completed and found no tokens.
 
@@ -384,7 +384,7 @@ current HTML report.
 Reporting tests live in `tests/test_reporting.py`; report-command tests live in
 `tests/test_cli.py`.
 
-The 1.2 test matrix uses these SPEC-01 fixtures:
+The 2.0 test matrix uses these SPEC-01 fixtures:
 
 - `results.clean.json`
 - `results.complete.json`
@@ -431,9 +431,9 @@ The tests assert:
   runs, render every coverage state and skipped check name in `Not Evaluated`, preserve the stored
   selection boundary, link coverage entries to failure-first check details, and avoid a duplicate
   issue summary.
-- new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
-  probed empty arrays from historical not-recorded null, and never infer inventory from other
-  report data.
+- current 2.0 reports render the exact sorted label/type counts and names introduced in schema 1.2,
+  distinguish probed empty arrays from historical not-recorded null, and never infer inventory
+  from other report data.
 
 ## Deferred Work
 

@@ -37,6 +37,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - The default check concurrency is now two workers across project scaffolding, the engine, and the
   Neo4j connection pool; `graphcheck.yml` and `graphcheck run --concurrency N` still override it.
+- Migrated the breaking results contract from schema 1.2 to 2.0: `run.status` is now
+  `run.run_status`, summary `status` is now `coverage_status`, and `load_results()` retains a
+  compatibility path for historical artifacts.
+
 - The measured first-run path now installs a built wheel without a package cache and verifies the
   baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
   separate post-timing smoke check.

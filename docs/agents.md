@@ -87,11 +87,11 @@ field-presence, and exit-code rules.
 
 ### Run status is not the verdict
 
-`run.run_status` describes execution coverage:
+`run.run_status` describes the execution lifecycle/state:
 
 - `complete` means GraphCheck completed the selected universe. It does **not** mean all checks
   passed.
-- `partial` means coverage was lost. `partial_reason` explains why.
+- `partial` means the execution/run became partial. `partial_reason` explains why.
 - `failed` means the run could not be prepared or executed as a run. Inspect `run.error`.
 
 The per-check `verdict` describes each outcome:
@@ -111,6 +111,8 @@ entirely skipped selection are all non-clean outcomes.
 Report summaries derive `coverage_status` over the selected check universe. It is `partial` when
 the run is partial or any selected check is `errored` or `skipped`, including an intentional
 generated skip; `run_status` may still be `complete` because the engine itself finished.
+In other words, `coverage_status` describes selected-check evaluation coverage independently of
+the execution lifecycle recorded by `run_status`.
 
 ### Exit-code contract
 

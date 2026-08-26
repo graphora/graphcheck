@@ -22,8 +22,9 @@ def _results(path: Path, *, checks: int = 2, skipped: int = 0) -> None:
     path.write_text(
         json.dumps(
             {
+                "schema_version": "2.0",
                 "run": {
-                    "status": "complete",
+                    "run_status": "complete",
                     "exit_code": 0,
                     "graphcheck_version": "0.2.0",
                     "target": {"server_version": "5.26.28"},
