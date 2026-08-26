@@ -151,7 +151,7 @@ def test_llm_kg_builder_cli_matrix_handles_noisy_schema(neo4j_profile, tmp_path)
     relationship_types = {item["name"] for item in profile["schema"]["relationship_types"]}
     assert {"__Entity__", "Country / Region", "Odd`Label"} <= labels
     assert {"HAS_ENTITY", "WORKED-WITH", "points to"} <= relationship_types
-    assert _run_payload(tmp_path)["run"]["status"] == "complete"
+    assert _run_payload(tmp_path)["run"]["run_status"] == "complete"
 
 
 def test_apoc_less_cli_matrix_is_actionable_and_isolated(neo4j_profile, tmp_path):
