@@ -16,14 +16,13 @@ complete pull-request, scheduled, staging, and production workflows.
     user: neo4j
     database: neo4j
     fail-fast: false
-    concurrency: 2
     upload-artifacts: on-failure
   env:
     NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
 ```
 
-The Action uses the project's `graphcheck.yml`; its effective default is two concurrent checks.
-Set `concurrency` in that file or pass the Action's `concurrency` input to override it.
+The Action pins GraphCheck 0.2.0, whose effective default is one concurrent check when neither the
+project's `graphcheck.yml` nor the Action's `concurrency` input sets a different positive limit.
 
 ## Inputs
 
@@ -35,7 +34,7 @@ Set `concurrency` in that file or pass the Action's `concurrency` input to overr
 | `database` | no | `neo4j` | Neo4j database name |
 | `fail-fast` | no | `false` | Stop after the first error-severity failure |
 | `suite` | no | - | Suite name to run via `--suite`; skipped if empty |
-| `concurrency` | no | - | Maximum concurrent checks; empty uses `graphcheck.yml`, whose default is `2` |
+| `concurrency` | no | - | Maximum concurrent checks; empty uses `graphcheck.yml`, then GraphCheck 0.2.0's default of `1` |
 | `upload-artifacts` | no | `always` | Upload `always`, `on-failure`, or `never` |
 | `version` | no | `0.2.0` | Exact GraphCheck version to install from PyPI. Empty skips the install and uses whatever GraphCheck is already on PATH |
 
@@ -67,7 +66,7 @@ an error-severity errored check.
 3. If `profiles.yml` does not already exist, generates one from the `uri`/`user`/`database`
    inputs. Only `password_env: NEO4J_PASSWORD` is written - the real password is never in the
    generated file, and is read from the `NEO4J_PASSWORD` environment variable at runtime.
-4. Runs `graphcheck run` using the given profile and the effective default of two concurrent checks.
+4. Runs `graphcheck run` using the given profile and the effective default of one concurrent check.
 5. Removes the generated `profiles.yml`, only if this Action created it.
 6. Uploads the CLI-produced `results.json`, `summary.json`, and `report.html` according to
    `upload-artifacts`. If an early failure produced none, the summary says so explicitly rather
