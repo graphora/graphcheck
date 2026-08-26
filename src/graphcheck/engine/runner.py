@@ -132,7 +132,7 @@ class EngineConfig:
     evidence_cap: int = 100
     result_row_limit: int = 100_000
     eager_competency_evaluation: bool = False
-    max_concurrency: int = 1
+    max_concurrency: int = 2
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,

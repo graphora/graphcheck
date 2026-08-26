@@ -22,6 +22,8 @@ graphcheck init
 ```
 
 This scaffolds `graphcheck.yml`, `profiles.yml`, an example checks file, and the `.graphcheck/`
-artifacts directory. See the README's [Quickstart](../README.md#quickstart) section for configuring
-`profiles.yml`, then [Check reference](check-reference.md) for what to put in your checks file and
-[CI setup](ci-setup.md) for running GraphCheck in a pipeline.
+artifacts directory. The generated project runs up to two checks concurrently by default; change
+`concurrency` in `graphcheck.yml` or pass `graphcheck run --concurrency N` to override it. See the
+README's [Quickstart](../README.md#quickstart) section for configuring `profiles.yml`, then
+[Check reference](check-reference.md) for what to put in your checks file and [CI setup](ci-setup.md)
+for running GraphCheck in a pipeline.

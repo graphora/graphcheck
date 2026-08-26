@@ -20,7 +20,7 @@ class ProjectConfig(BaseModel):
     project: str
     checks: str
     artifacts: str
-    concurrency: PositiveInt = 1
+    concurrency: PositiveInt = 2
     generate: GenerateConfig | None = None
 
     @field_validator("concurrency", mode="before")
@@ -36,7 +36,7 @@ def default_project_config() -> ProjectConfig:
         project="graphcheck",
         checks=CHECKS_DIR,
         artifacts=ARTIFACTS_DIR,
-        concurrency=1,
+        concurrency=2,
     )
 
 

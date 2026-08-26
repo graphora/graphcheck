@@ -492,7 +492,7 @@ competency:
 
 @pytest.mark.parametrize(
     ("arguments", "expected"),
-    [(["run"], 2), (["run", "--concurrency", "3"], 3)],
+    [(["run"], 4), (["run", "--concurrency", "3"], 3)],
 )
 def test_run_concurrency_precedence_cli_over_project(tmp_path, monkeypatch, arguments, expected):
     _project(
@@ -510,7 +510,7 @@ competency:
     )
     project_path = tmp_path / "graphcheck.yml"
     project_path.write_text(
-        project_path.read_text(encoding="utf-8").replace("concurrency: 1", "concurrency: 2"),
+        project_path.read_text(encoding="utf-8").replace("concurrency: 2", "concurrency: 4"),
         encoding="utf-8",
     )
     client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
