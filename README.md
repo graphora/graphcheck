@@ -3,7 +3,7 @@
 # GraphCheck
 
 [![Release](https://img.shields.io/badge/release-v0.1.0-5b5bd6)](https://github.com/graphora/graphcheck/releases)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-3776ab)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f)](LICENSE)
 
 **Semantic observability for property graphs.**
@@ -27,7 +27,7 @@ YAML and produces deterministic, evidence-backed JSON and offline HTML reports f
 For complete setup, credential, authoring, redaction, baseline, and configuration instructions, see
 the **[full user guide](docs/user-guide.md)**.
 
-GraphCheck requires Python 3.12 or 3.13 and a supported Neo4j server. See the
+GraphCheck requires Python 3.12, 3.13, or 3.14 and a supported Neo4j server. See the
 [compatibility matrix](docs/compatibility.md) for the tested Neo4j and Cypher versions.
 
 Install the published CLI and scaffold a project:
