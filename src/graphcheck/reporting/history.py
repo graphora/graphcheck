@@ -382,6 +382,8 @@ def _load_report_run(results_path: Path) -> ReportRun:
 def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
     try:
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and payload.get("schema_version") == "1.0":
+            return _load_report_run(results_path)
         summary = _parse_summary(payload)
         modified_ns = results_path.stat().st_mtime_ns
     except (KeyError, OSError, TypeError, ValueError):

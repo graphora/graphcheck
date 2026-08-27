@@ -503,3 +503,38 @@ def test_historical_summary_schema_1_0_maps_status_to_coverage_status():
     )
 
     assert summary.coverage_status.value == "partial"
+
+
+def test_historical_complete_summary_recomputes_generated_only_coverage(tmp_path):
+    legacy_dir = _write_run(
+        tmp_path,
+        "legacy-generated",
+        "2026-07-01T10:00:00Z",
+        fixture="generated-only",
+    )
+    legacy_results_path = legacy_dir / "results.json"
+    payload = json.loads(legacy_results_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "1.2"
+    payload["run"]["status"] = payload["run"].pop("run_status")
+    legacy_results_path.write_text(json.dumps(payload), encoding="utf-8")
+    (legacy_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "id": "legacy-generated",
+                "finished_at": "2026-07-01T10:00:00Z",
+                "status": "complete",
+                "suite_scores": [{"id": "customer-360", "score": None}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_run(tmp_path, "current-run", "2026-07-02T10:00:00Z")
+
+    records = discover_report_runs(tmp_path / ".graphcheck" / "runs")
+    legacy = find_report_run(records, "legacy-generated")
+    current = find_report_run(records, "current-run")
+
+    assert legacy.summary.coverage_status is CoverageStatus.PARTIAL
+    assert legacy.results.run.id == "legacy-generated"
+    assert "Comparing legacy-generated -> current-run" in format_report_comparison(legacy, current)

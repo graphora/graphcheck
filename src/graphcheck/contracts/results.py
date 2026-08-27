@@ -362,7 +362,7 @@ class Results(_Strict):
             and (self.run.target.labels is None or self.run.target.relationship_types is None)
             and not historical
         ):
-            raise ValueError("schema 1.2 target inventory must contain non-null arrays")
+            raise ValueError("schema 2.0 target inventory must contain non-null arrays")
 
         if (self.run.partial_reason is not None) != (status is RunStatus.PARTIAL):
             raise ValueError("partial_reason must be non-null iff run_status is partial")
