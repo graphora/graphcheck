@@ -251,7 +251,7 @@ class Neo4jClient:
         self,
         profile: ConnectionProfile,
         *,
-        max_concurrency: int = 1,
+        max_concurrency: int = 2,
         read_guard_cache_capacity: int = READ_GUARD_CACHE_CAPACITY,
     ) -> None:
         validate_profile_uri(profile.uri)

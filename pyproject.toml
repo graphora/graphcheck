@@ -92,6 +92,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 testpaths = ["tests"]
 markers = [
     "performance: opt-in performance budget tests against a preloaded customer-scale graph",
+    "hostile: real CLI coverage against the hostile graph certification set",
+    "hostile_scale: opt-in public dataset scale certification",
 ]
 # Coverage is enforced in CI (.github/workflows/ci.yml), not here — so focused
 # `pytest -k ...` runs don't trip the package-wide 80% gate.

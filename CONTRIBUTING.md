@@ -62,6 +62,26 @@ uv run python scripts/generate_sample_reports.py --check
 
 Hosting or serving the reports is outside the scope of this workflow.
 
+## Hostile graph certification
+
+The fast hostile set runs the real `debug`, `profile`, and `run` command boundary against empty,
+APOC-less, and noisy LLM Graph Builder-shaped databases in a supported Neo4j Testcontainer:
+
+```bash
+uv run python scripts/run_hostile_graphs.py --case fast
+```
+
+The complete set also starts a three-member Neo4j 4.4 Enterprise cluster and downloads the
+checksum-pinned Stanford SNAP EU email graph. It is intentionally slower and requires Docker,
+network access, and acceptance of Neo4j's Enterprise license:
+
+```bash
+uv run python scripts/run_hostile_graphs.py --case all
+```
+
+Each distinct product defect found by this matrix must receive its own issue and focused regression
+test; link those issues from the hostile-graph parent issue.
+
 ## PR flow
 
 1. Branch off `development` (never off `main`, and never push directly to either).

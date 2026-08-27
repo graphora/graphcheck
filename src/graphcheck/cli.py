@@ -660,7 +660,16 @@ def profile(
                     else SafeErrorCode.UNKNOWN
                 ),
             )
-        raise
+        typer.echo(
+            "profile.internal_error: GraphCheck could not complete the graph profile.",
+            err=True,
+        )
+        typer.echo(
+            "Fix: Run `graphcheck debug --json`; if the connection is healthy, retry "
+            "`graphcheck profile` and report the debug JSON and GraphCheck version.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
     if telemetry is not None and not telemetry.profile_result_recorded:
         telemetry.record_profile_result(
@@ -683,7 +692,12 @@ def profile(
                 SafeErrorCode.BASELINE_WRITE_FAILED,
             )
         typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        typer.echo(
+            "Fix: Check the configured artifacts path and filesystem permissions, then retry "
+            "`graphcheck profile`.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
     if telemetry is not None:
         telemetry.baseline_artifact = ArtifactOutcome.WRITTEN
         telemetry.artifact_write_ms = max(
@@ -1616,7 +1630,7 @@ def run_command(
         None,
         "--concurrency",
         min=1,
-        help="Maximum concurrent checks; overrides graphcheck.yml.",
+        help="Maximum concurrent checks; overrides the graphcheck.yml default of 2.",
     ),
     redacted: bool = typer.Option(
         False,

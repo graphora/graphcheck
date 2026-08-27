@@ -30,11 +30,12 @@ The v0 project config is intentionally small:
 project: graphcheck
 checks: checks
 artifacts: .graphcheck
-concurrency: 1
+concurrency: 2
 ```
 
 Unknown keys and non-positive/non-integer concurrency values are rejected when the config is
-loaded. `graphcheck run --concurrency N` has precedence over the project value.
+loaded. The project default is two concurrent checks; `graphcheck run --concurrency N` has
+precedence over the project value.
 
 ## `profiles.yml`
 

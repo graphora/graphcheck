@@ -193,14 +193,15 @@ The default engine configuration is:
 | Evidence cap | `100` unique pointers | Must be a positive integer |
 | Competency result-row limit | `100,000` rows | Positive safety ceiling for complete assertions |
 | Eager competency evaluation | `false` | Temporary rollback switch for bounded rollout |
-| Check concurrency | `1` worker | Positive integer; CLI overrides project config |
+| Check concurrency | `2` workers | Positive integer; CLI overrides project config |
 | Exhaustive sampling limit | `100,000` elements | At or below this population, policy execution is exact |
 | Default sample size | `10,000` elements | Used above the exhaustive limit unless a check overrides it |
 | Sampling seed | `0` | Non-negative integer or non-blank string |
 
 Effective concurrency is `--concurrency`, then `graphcheck.yml concurrency`, then the engine
 default. Non-fail-fast checks use at most that many workers; fail-fast remains sequential. The
-default stays at one because higher scan concurrency is workload/server dependent.
+default is two to reduce wall time while keeping database load bounded; projects can explicitly
+select one worker when sequential execution is required.
 
 ## Run lifecycle
 

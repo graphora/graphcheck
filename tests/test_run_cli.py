@@ -492,7 +492,7 @@ competency:
 
 @pytest.mark.parametrize(
     ("arguments", "expected"),
-    [(["run"], 2), (["run", "--concurrency", "3"], 3)],
+    [(["run"], 4), (["run", "--concurrency", "3"], 3)],
 )
 def test_run_concurrency_precedence_cli_over_project(tmp_path, monkeypatch, arguments, expected):
     _project(
@@ -510,7 +510,7 @@ competency:
     )
     project_path = tmp_path / "graphcheck.yml"
     project_path.write_text(
-        project_path.read_text(encoding="utf-8").replace("concurrency: 1", "concurrency: 2"),
+        project_path.read_text(encoding="utf-8").replace("concurrency: 2", "concurrency: 4"),
         encoding="utf-8",
     )
     client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
@@ -1457,6 +1457,25 @@ def test_run_invalid_suite_is_configuration_failure(tmp_path, monkeypatch):
     assert result.exit_code == 3
     payload = _payload(tmp_path)
     assert payload["run"]["error"]["code"] == "run.suite_invalid"
+    assert "Fix:" in result.output
+    _assert_no_traceback(result)
+
+
+def test_run_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, monkeypatch):
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "graphcheck.project.load_project_config",
+        lambda root: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
+    )
+
+    result = runner.invoke(app, ["run"])
+
+    assert result.exit_code == 3
+    payload = _payload(tmp_path)
+    assert payload["run"]["error"]["code"] == "run.configuration"
+    assert "Fix:" in result.output
+    _assert_no_traceback(result)
 
 
 def test_graceful_failure_matrix_missing_apoc_names_fix_and_continues(tmp_path, monkeypatch):

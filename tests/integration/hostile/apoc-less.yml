@@ -1,0 +1,10 @@
+suite: hostile-apoc-less
+competency:
+  - id: missing-apoc-is-isolated
+    question: Is a missing optional procedure reported without crashing the run?
+    query: CALL apoc.version() YIELD version RETURN version
+    expect: {rows: {min: 1}, columns: [version]}
+  - id: later-check-still-runs
+    question: Does a regular read still run after the missing procedure?
+    query: RETURN 1 AS healthy
+    expect: {rows: {exactly: 1}, columns: [healthy], equals: [1]}

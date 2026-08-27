@@ -646,6 +646,7 @@ def test_unexpected_profile_failure_is_classified_as_profile_collection(
     tmp_path,
     monkeypatch,
     recording_transport,
+    capsys,
 ):
     write_default_project(tmp_path)
     write_default_profiles(tmp_path)
@@ -657,11 +658,14 @@ def test_unexpected_profile_failure_is_classified_as_profile_collection(
         raise RuntimeError("private unexpected profiler failure")
 
     monkeypatch.setattr(cli_module, "build_profile", fail_profile)
-    monkeypatch.setattr(sys, "argv", ["graphcheck", "profile"])
+    exit_code = _invoke_entrypoint(monkeypatch, "profile")
+    diagnostic = capsys.readouterr().err
 
-    with pytest.raises(RuntimeError, match="private unexpected profiler failure"):
-        cli()
-
+    assert exit_code == 1
+    assert "profile.internal_error" in diagnostic
+    assert "Fix: Run `graphcheck debug --json`" in diagnostic
+    assert "Traceback" not in diagnostic
+    assert "private unexpected profiler failure" not in diagnostic
     command = _command_event(recording_transport)
     assert command["process_outcome"] == "unexpected_error"
     assert command["failure_stage"] == "profile_collection"

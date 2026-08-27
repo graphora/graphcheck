@@ -4,9 +4,48 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- The GitHub Action now emits bounded inline workflow annotations for failed, errored, and
+  warning-severity checks, attaches repository source locations when available, and reports any
+  annotations dropped at the per-run cap while retaining the existing Step Summary.
+- Added one CI/CD guide with copy-paste workflows for pull-request gating, scheduled audits with
+  alerting, staging merges, and server-enforced read-only production runs.
+
 ### Changed
 
 - Added Python 3.14 to the CI test matrix and package classifiers.
+- Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
+  installation, consolidated configuration/profile preparation, and direct helper execution from
+  the Action environment.
+
+### Removed
+
+- Removed the retired in-repository GraphCheck Action copy and its implementation tests; CI now
+  guards the boundary and consumes only the standalone `graphora/graphcheck-action@v1` release.
+- First-run CI now records three independent clean-runner install-to-first-valid-result samples on
+  Linux, macOS, and Windows/WSL, uploads structured timing evidence, publishes the per-platform
+  medians in the Actions summary, records both the tested GitHub SHA and pull-request head SHA, and
+  enforces the under-15-minute adoption budget.
+
+- Added a scripted hostile-graph certification set that runs the real `debug`, `profile`, and
+  `run` command boundary against noisy LLM Graph Builder-shaped data, a checksum-pinned Stanford
+  SNAP scale graph, a three-member Neo4j 4.4 cluster, an APOC-less server, and an empty graph. Its
+  manifest drives the runner and integration expectations; the legacy lane uses Docker-assigned
+  ports and verifies three unique cluster members, one leader, and two followers before testing.
+
+### Changed
+
+- The default check concurrency is now two workers across project scaffolding, the engine, and the
+  Neo4j connection pool; `graphcheck.yml` and `graphcheck run --concurrency N` still override it.
+- The measured first-run path now installs a built wheel without a package cache and verifies the
+  baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
+  separate post-timing smoke check.
+
+### Fixed
+
+- First-run stage failures, unexpected profiling faults, and baseline write errors now return an
+  actionable `Fix:` diagnostic without exposing a Python traceback.
 
 ## [0.2.0] - 2026-08-20
 
@@ -147,7 +186,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
   predicates while preserving the existing eager connector API.
 - Positive project and CLI concurrency controls through `graphcheck.yml` and
   `graphcheck run --concurrency`, with deterministic output ordering, deadline-aware scheduling,
-  a conservative default of one worker, and Neo4j pool sizing matched to effective concurrency.
+  an initial conservative default of one worker, and Neo4j pool sizing matched to effective
+  concurrency.
 - A secure local report explorer launched by `graphcheck report --open`, with searchable history,
   in-place report switching, two-run comparisons, multi-select deletion, safe `latest` repair,
   authenticated same-origin APIs, restrictive browser security headers, and idle shutdown.
