@@ -16,7 +16,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --group dev
       - name: Run debug, profile, and run against SNAP email-EuAll
-        run: uv run python scripts/run_hostile_graphs.py --case public-scale
+        run: uv run python tools/run_hostile_graphs.py --case public-scale
       - name: Retain hostile-scale evidence
         if: always()
         uses: actions/upload-artifact@v4

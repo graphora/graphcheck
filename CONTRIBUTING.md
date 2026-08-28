@@ -39,9 +39,9 @@ uv run ruff format .
 
 ## Canonical sample reports
 
-The canonical report artifacts are `docs/samples/report-findings.html` and
-`docs/samples/report-clean.html`. Docker Engine or Docker Desktop must be running, and the pinned
-`vendor/graphcheck-fraud-ring-fixture` submodule must be initialized at the committed gitlink.
+The canonical report artifacts are `docs/samples/reports/report-findings.html` and
+`docs/samples/reports/report-clean.html`. Docker Engine or Docker Desktop must be running, and the
+pinned `tests/fixtures/external/fraud-ring` submodule must be initialized at the committed gitlink.
 
 ```bash
 git submodule update --init --recursive
@@ -51,13 +51,13 @@ The generator creates and removes its own disposable Neo4j 5.26.28 Testcontainer
 does not use `profiles.yml` or the persistent Docker Compose database. Regenerate the artifacts:
 
 ```bash
-uv run python scripts/generate_sample_reports.py
+uv run python tools/generate_sample_reports.py
 ```
 
 Verify them byte-for-byte without writing:
 
 ```bash
-uv run python scripts/generate_sample_reports.py --check
+uv run python tools/generate_sample_reports.py --check
 ```
 
 Hosting or serving the reports is outside the scope of this workflow.
@@ -68,7 +68,7 @@ The fast hostile set runs the real `debug`, `profile`, and `run` command boundar
 APOC-less, and noisy LLM Graph Builder-shaped databases in a supported Neo4j Testcontainer:
 
 ```bash
-uv run python scripts/run_hostile_graphs.py --case fast
+uv run python tools/run_hostile_graphs.py --case fast
 ```
 
 The complete set also starts a three-member Neo4j 4.4 Enterprise cluster and downloads the
@@ -76,7 +76,7 @@ checksum-pinned Stanford SNAP EU email graph. It is intentionally slower and req
 network access, and acceptance of Neo4j's Enterprise license:
 
 ```bash
-uv run python scripts/run_hostile_graphs.py --case all
+uv run python tools/run_hostile_graphs.py --case all
 ```
 
 Each distinct product defect found by this matrix must receive its own issue and focused regression

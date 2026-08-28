@@ -127,7 +127,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --group dev
       - name: Certify graceful rejection of a Neo4j 4.4 cluster
-        run: uv run python scripts/run_hostile_graphs.py --case neo4j-4.4-cluster
+        run: uv run python tools/run_hostile_graphs.py --case neo4j-4.4-cluster
       - name: Retain hostile-cluster evidence
         if: always()
         uses: actions/upload-artifact@v4

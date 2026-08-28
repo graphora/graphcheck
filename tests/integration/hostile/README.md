@@ -23,13 +23,13 @@ suites, expected command exit codes, server versions, and scale-dataset identity
 Run the fast hostile cases with:
 
 ```console
-uv run python scripts/run_hostile_graphs.py --case fast
+uv run python tools/run_hostile_graphs.py --case fast
 ```
 
 Run the complete certification set, including the public dataset and 4.4 cluster, with:
 
 ```console
-uv run python scripts/run_hostile_graphs.py --case all
+uv run python tools/run_hostile_graphs.py --case all
 ```
 
 Neo4j Enterprise is used only for the legacy cluster test and requires acceptance of Neo4j's

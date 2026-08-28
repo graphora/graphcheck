@@ -9,7 +9,7 @@ import pytest
 from graphcheck.connection_profiles import write_default_profiles
 from graphcheck.project import write_default_project
 
-_FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
+_FIXTURES = Path(__file__).parents[1] / "unit" / "contracts" / "fixtures"
 
 
 def stdio_params(project: Path):

@@ -1,5 +1,6 @@
-*                             @ezhilvendhan
-/docs/specs/                  @ghilda-graphora @kev-graphora
-/src/graphcheck/contracts/    @ghilda-graphora @kev-graphora
-/tests/contracts/             @ghilda-graphora @kev-graphora
-/tests/fixtures/              @jayachandra-bit @kev-graphora
+*                                  @ezhilvendhan
+/docs/schemas/                     @ghilda-graphora @kev-graphora
+/docs/specifications/              @ghilda-graphora @kev-graphora
+/src/graphcheck/contracts/         @ghilda-graphora @kev-graphora
+/tests/fixtures/                   @jayachandra-bit @kev-graphora
+/tests/unit/contracts/             @ghilda-graphora @kev-graphora

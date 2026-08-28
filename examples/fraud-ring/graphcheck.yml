@@ -1,0 +1,4 @@
+project: graphcheck-fraud-ring-demo
+checks: checks
+artifacts: .graphcheck
+concurrency: 2
