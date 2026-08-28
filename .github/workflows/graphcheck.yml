@@ -22,6 +22,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install GraphCheck from source
         run: pip install .
+      - name: Stage the fraud-ring project for the Action
+        run: cp -R examples/fraud-ring/graphcheck.yml examples/fraud-ring/checks .
       - uses: graphora/graphcheck-action@v1
         with:
           profile: ci
