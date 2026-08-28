@@ -216,7 +216,12 @@ completed artifact below the correspondingly named `runs/<report-name>/` directo
 then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 
-Its final summary prints the shared result sentence without a separate aggregate coverage line.
+Its final summary first prints `Run status: <run_status>` from the canonical lifecycle field and
+`Coverage status: <coverage_status>` from the derived selected-check coverage state. Run status is
+`complete`, `partial`, or `failed`; coverage status is independently `partial` when the run is
+partial or any selected check is errored or skipped, including a generated skip, and is `failed`
+when the run failed, otherwise it is `complete`. It then prints the shared result sentence without
+a separate aggregate coverage-count line.
 When checks were skipped, the Result line introduces a concise borderless table with Suite, Check,
 and Reason columns. Suite names and the Check cell's human name are italicized, the stable check id
 remains visible, and Reason contains the persisted code and shared generic explanation. A blank
@@ -445,4 +450,4 @@ The following require C1, the fixture graph, or additional tooling:
 - Full pipeline fixture graph coverage.
 - Browser-level offline asset/network test.
 - MCP transport implementation beyond the approved requirement that every result-returning tool
-  and declared output schema consume the canonical SPEC-01 1.2 shape.
+  and declared output schema consume the canonical SPEC-01 2.0 shape.

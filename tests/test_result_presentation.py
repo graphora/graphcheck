@@ -241,5 +241,7 @@ def test_generated_skips_use_partial_coverage_in_cli_html_and_presentation(facto
     assert "Run status: complete" in stdout
     assert "Coverage status: partial" in stdout
     assert "Coverage status: complete" not in stdout
-    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in html
+    assert "<strong>Run Complete.</strong>" in html
+    assert "<strong>Partial Run.</strong>" not in html
     assert '<span class="status-pill status-pill-complete">COMPLETE</span>' not in html

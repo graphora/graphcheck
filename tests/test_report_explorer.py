@@ -195,6 +195,22 @@ def test_report_explorer_payload_marks_generated_only_coverage_partial(tmp_path)
 
     assert reports[0]["coverage_status"] == "partial"
 
+    with _server(runs_dir) as (server, token):
+        _, headers, _ = _request(server, "GET", f"/report?id=generated-run&token={token}")
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+        status, _, payload = _request(
+            server,
+            "GET",
+            "/api/report?id=generated-run",
+            headers={"Cookie": cookie, "X-GraphCheck-Token": token},
+        )
+
+    run_title = json.loads(payload)["report"]["fragments"]["run_title"]
+    assert status == 200
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in run_title
+    assert "<strong>Run Complete.</strong>" in run_title
+    assert "<strong>Partial Run.</strong>" not in run_title
+
 
 def test_report_explorer_rejects_unauthenticated_and_cross_origin_actions(tmp_path):
     runs_dir = tmp_path / "runs"

@@ -360,6 +360,7 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
 def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
     assert "<strong>Partial Run.</strong>" in html
     assert (
         '<span class="header-status-message">No failures in the 1 check evaluated. '
@@ -390,6 +391,9 @@ def test_html_renderer_reports_partial_coverage():
 def test_html_renderer_reports_all_checks_skipped():
     html = render_html_report(_fixture("generated-only"))
 
+    assert "<strong>Run Complete.</strong>" in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in html
+    assert "<strong>Partial Run.</strong>" not in html
     assert '<span class="suite-check-stats">0/1 checks run</span>' in html
     assert (
         '<div class="suite-badges-row">'
@@ -398,7 +402,6 @@ def test_html_renderer_reports_all_checks_skipped():
     ) in html
     assert '<span class="badge badge-score badge-score-na">SCORE: N/A</span>' in html
     assert "CHECKED ON" not in html
-    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
     assert "No checks were evaluated. Coverage is incomplete" in html
     assert "skipped check(s) from <em>customer-360</em>" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
@@ -723,8 +726,9 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     html = render_html_report(raw)
 
-    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
-    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in html
+    assert "<strong>Run Complete.</strong>" in html
+    assert "<strong>Partial Run.</strong>" not in html
     assert (
         '<span class="header-status-message">1 warning and 3 execution errors. '
         "Coverage is incomplete.</span>" in html

@@ -237,12 +237,12 @@ def _run_title(results: Results) -> str:
         )
         troubleshooting = _troubleshooting_dialog(results)
     elif status is CoverageStatus.PARTIAL:
-        kind, label, heading, message = (
-            "partial",
-            "PARTIAL",
-            "Partial Run.",
-            _result_html(presentation),
-        )
+        kind = "partial"
+        if results.run.run_status is RunStatus.COMPLETE:
+            label, heading = "PARTIAL COVERAGE", "Run Complete."
+        else:
+            label, heading = "PARTIAL", "Partial Run."
+        message = _result_html(presentation)
         action = (
             '<button id="run-summary-toggle" class="header-status-action" type="button" '
             'data-action="coverage" aria-controls="not-evaluated">Review coverage.</button>'
