@@ -240,7 +240,7 @@ line, and blank lines separate the lifecycle, score, result/artifact, and exit c
 blank line follows the exit-code line.
 
 History operations load and validate each run's `results.json`, including the
-schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
+schema 1.0, 1.1, and 1.2 compatibility read described above. If `runs/latest` duplicates a
 historical run id, it appears only once in history. History is ordered
 chronologically by the validated UTC `run.finished_at`, newest first; ordering
 never compares timestamp strings lexically.
