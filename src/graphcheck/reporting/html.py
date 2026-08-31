@@ -14,7 +14,7 @@ from graphcheck.contracts.results import (
     RunStatus,
     Verdict,
 )
-from graphcheck.reporting.history import calculate_coverage_status
+from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.presentation import ResultPresentation, present_check, present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 

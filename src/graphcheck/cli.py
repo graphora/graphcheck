@@ -2335,7 +2335,7 @@ def _print_run_summary(
     *,
     display_run_id: str | None = None,
 ) -> None:
-    from graphcheck.reporting.history import calculate_coverage_status
+    from graphcheck.reporting.coverage import calculate_coverage_status
     from graphcheck.reporting.presentation import present_results
 
     totals = results.totals

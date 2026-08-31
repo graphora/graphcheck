@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from graphcheck.contracts.results import CheckResult, CoverageStatus, Results, SkipReason, Verdict
-from graphcheck.reporting.history import calculate_coverage_status
+from graphcheck.reporting.coverage import calculate_coverage_status
 
 
 @dataclass(frozen=True, slots=True)

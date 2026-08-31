@@ -12,11 +12,11 @@ from graphcheck.contracts.results import (
     CheckResult,
     CoverageStatus,
     Results,
-    RunStatus,
     Severity,
     Verdict,
     parse_utc_timestamp,
 )
+from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.writer import load_results
 
 SUMMARY_FILENAME = "summary.json"
@@ -138,19 +138,6 @@ def report_name(results: Results) -> str:
     target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
     timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{target}_{timestamp}"
-
-
-def calculate_coverage_status(results: Results) -> CoverageStatus:
-    """Derive report coverage without changing the engine's execution status."""
-    if results.run.run_status is RunStatus.FAILED:
-        return CoverageStatus.FAILED
-    return (
-        CoverageStatus.PARTIAL
-        if results.run.run_status is not RunStatus.COMPLETE
-        or results.totals.errored > 0
-        or results.totals.skipped > 0
-        else CoverageStatus.COMPLETE
-    )
 
 
 def format_report_comparison(first: ReportRun, second: ReportRun) -> str:

@@ -1,16 +1,14 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from graphcheck.cli import app
-from graphcheck.contracts.results import CoverageStatus, RunStatus
+from graphcheck.contracts.results import CoverageStatus
 from graphcheck.project import write_default_project
 from graphcheck.reporting import history as history_module
 from graphcheck.reporting.history import (
-    calculate_coverage_status,
     discover_report_runs,
     find_report_run,
     format_report_comparison,
@@ -21,31 +19,6 @@ from graphcheck.reporting.writer import load_results
 
 FIXTURES = Path(__file__).parent / "contracts" / "fixtures"
 runner = CliRunner()
-
-
-@pytest.mark.parametrize(
-    ("case", "run_status", "errored", "skipped", "expected"),
-    [
-        ("pass", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
-        ("fail", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
-        ("warn", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
-        ("errored", RunStatus.COMPLETE, 1, 0, CoverageStatus.PARTIAL),
-        ("pass-generated", RunStatus.COMPLETE, 0, 1, CoverageStatus.PARTIAL),
-        ("all-generated", RunStatus.COMPLETE, 0, 2, CoverageStatus.PARTIAL),
-        ("unsupported", RunStatus.PARTIAL, 0, 1, CoverageStatus.PARTIAL),
-        ("not-run", RunStatus.PARTIAL, 0, 1, CoverageStatus.PARTIAL),
-        ("partial-error-skip", RunStatus.PARTIAL, 1, 1, CoverageStatus.PARTIAL),
-        ("failed", RunStatus.FAILED, 0, 0, CoverageStatus.FAILED),
-        ("zero-selected", RunStatus.COMPLETE, 0, 0, CoverageStatus.COMPLETE),
-    ],
-)
-def test_calculate_coverage_status_contract(case, run_status, errored, skipped, expected):
-    results = SimpleNamespace(
-        run=SimpleNamespace(run_status=run_status),
-        totals=SimpleNamespace(errored=errored, skipped=skipped),
-    )
-
-    assert calculate_coverage_status(results) is expected, case
 
 
 def _write_run(

@@ -5,7 +5,7 @@ import pytest
 
 from graphcheck.cli import _print_run_summary
 from graphcheck.contracts.results import CoverageStatus
-from graphcheck.reporting.history import calculate_coverage_status
+from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.presentation import present_check, present_results
 from graphcheck.reporting.writer import load_results
