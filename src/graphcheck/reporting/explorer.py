@@ -311,7 +311,7 @@ def _report_payload(records: list[ReportRun]) -> list[dict[str, object]]:
         {
             "id": record.id,
             "finished_at": record.summary.finished_at,
-            "status": record.summary.status.value,
+            "coverage_status": record.summary.coverage_status.value,
             "suite_scores": [
                 {"id": suite_id, "score": score} for suite_id, score in record.summary.suite_scores
             ],

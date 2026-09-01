@@ -1,12 +1,12 @@
 {
-  "schema_version": "1.2",
+  "schema_version": "2.0",
   "run": {
     "id": "run_01HXATZ",
     "started_at": "2026-07-06T09:00:00Z",
     "finished_at": "2026-07-06T09:02:41Z",
     "graphcheck_version": "0.1.0",
     "pack_version": "0.1.0",
-    "status": "complete",
+    "run_status": "complete",
     "partial_reason": null,
     "exit_code": 2,
     "selection": {

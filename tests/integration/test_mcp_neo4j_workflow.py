@@ -10,7 +10,7 @@ from graphcheck.reporting.writer import load_results
 
 def _assert_spec01_contract(payload: dict) -> None:
     """The payload must be a complete, contract-valid SPEC-01 results.json."""
-    assert payload["schema_version"] == "1.2"
+    assert payload["schema_version"] == "2.0"
     assert payload["run"]["id"]
     assert "score" in payload  # present, may be null
     assert isinstance(payload["suites"], list) and payload["suites"]

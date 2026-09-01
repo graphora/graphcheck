@@ -181,6 +181,37 @@ def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_pa
     assert private.read_text(encoding="utf-8") == "not a report"
 
 
+def test_report_explorer_payload_marks_generated_only_coverage_partial(tmp_path):
+    runs_dir = tmp_path / "runs"
+    _write_run(
+        runs_dir,
+        "generated-run",
+        "2026-07-01T10:00:00Z",
+        fixture="generated-only",
+    )
+
+    records = explorer_module.discover_report_runs(runs_dir)
+    reports = explorer_module._report_payload(records)
+
+    assert reports[0]["coverage_status"] == "partial"
+
+    with _server(runs_dir) as (server, token):
+        _, headers, _ = _request(server, "GET", f"/report?id=generated-run&token={token}")
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+        status, _, payload = _request(
+            server,
+            "GET",
+            "/api/report?id=generated-run",
+            headers={"Cookie": cookie, "X-GraphCheck-Token": token},
+        )
+
+    run_title = json.loads(payload)["report"]["fragments"]["run_title"]
+    assert status == 200
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in run_title
+    assert "<strong>Run Complete.</strong>" in run_title
+    assert "<strong>Partial Run.</strong>" not in run_title
+
+
 def test_report_explorer_rejects_unauthenticated_and_cross_origin_actions(tmp_path):
     runs_dir = tmp_path / "runs"
     _write_run(runs_dir, "run-one", "2026-07-01T10:00:00Z")

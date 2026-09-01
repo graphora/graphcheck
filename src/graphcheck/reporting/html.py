@@ -6,8 +6,15 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from graphcheck.contracts.results import CheckResult, RedactionPolicy, Results, RunStatus, Verdict
-from graphcheck.reporting.history import display_run_status
+from graphcheck.contracts.results import (
+    CheckResult,
+    CoverageStatus,
+    RedactionPolicy,
+    Results,
+    RunStatus,
+    Verdict,
+)
+from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.presentation import ResultPresentation, present_check, present_results
 from graphcheck.reporting.writer import json_compatible, load_results
 
@@ -213,11 +220,11 @@ def _run_title(results: Results) -> str:
 
     action = ""
     troubleshooting = ""
-    status = display_run_status(results)
+    status = calculate_coverage_status(results)
     if results.run.error is not None:
         kind, label, heading = (
             ("error", "FAILED", "Run Failed.")
-            if status is RunStatus.FAILED
+            if status is CoverageStatus.FAILED
             else ("partial", "PARTIAL", "Partial Run.")
         )
         message = (
@@ -229,13 +236,13 @@ def _run_title(results: Results) -> str:
             'aria-haspopup="dialog" aria-controls="troubleshooting-dialog">Troubleshoot.</button>'
         )
         troubleshooting = _troubleshooting_dialog(results)
-    elif status is RunStatus.PARTIAL:
-        kind, label, heading, message = (
-            "partial",
-            "PARTIAL",
-            "Partial Run.",
-            _result_html(presentation),
-        )
+    elif status is CoverageStatus.PARTIAL:
+        kind = "partial"
+        if results.run.run_status is RunStatus.COMPLETE:
+            label, heading = "PARTIAL COVERAGE", "Run Complete."
+        else:
+            label, heading = "PARTIAL", "Partial Run."
+        message = _result_html(presentation)
         action = (
             '<button id="run-summary-toggle" class="header-status-action" type="button" '
             'data-action="coverage" aria-controls="not-evaluated">Review coverage.</button>'
@@ -535,7 +542,7 @@ def _not_evaluated(results: Results) -> str:
         (check for check in results.checks if check.verdict is Verdict.SKIPPED),
         key=lambda check: (check.suite_id, check.id),
     )
-    if results.run.status is RunStatus.FAILED:
+    if results.run.run_status is RunStatus.FAILED:
         summary = "The run failed before checks could be evaluated."
     elif selected == 0:
         summary = "No checks were selected for this run."
@@ -1597,7 +1604,7 @@ function reportRow(report) {
   id.className = 'report-id';
   id.textContent = report.id;
   meta.className = 'report-meta';
-  meta.textContent = `${formatReportFinishedAt(report.finished_at)} · ${report.status}`;
+  meta.textContent = `${formatReportFinishedAt(report.finished_at)} · ${report.coverage_status}`;
   link.append(id, meta);
   row.append(checkbox, link);
   return row;
@@ -1622,7 +1629,7 @@ function appendReportRows(list, reports, emptyMessage) {
 }
 
 function reportMatchesSearch(report, query) {
-  return !query || `${report.id} ${report.finished_at} ${report.status}`.toLowerCase().includes(query);
+  return !query || `${report.id} ${report.finished_at} ${report.coverage_status}`.toLowerCase().includes(query);
 }
 
 function reportGroupState() {
@@ -1741,7 +1748,9 @@ function renderComparisonMessage(content, message) {
   const lines = String(message).split('\\n');
   content.replaceChildren();
   lines.forEach((line, index) => {
-    const status = line.match(/^Status: (complete|partial|failed) -> (complete|partial|failed)$/);
+    const status = line.match(
+      /^Coverage status: (complete|partial|failed) -> (complete|partial|failed)$/
+    );
     const delta = line.match(/^(  .+: .* )(\\([+-]\\d+\\))$/);
     if (status) {
       content.append('Status: ');

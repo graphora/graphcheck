@@ -154,8 +154,8 @@ def run_suite(profile: ConnectionProfile) -> Results:
 
 
 def validate_variant(results: Results, variant: str) -> None:
-    if results.run.status is not RunStatus.COMPLETE:
-        raise RuntimeError(f"{variant} run was not complete: {results.run.status.value}")
+    if results.run.run_status is not RunStatus.COMPLETE:
+        raise RuntimeError(f"{variant} run was not complete: {results.run.run_status.value}")
     if len(results.checks) != 2 or any(not check.executed for check in results.checks):
         raise RuntimeError(f"{variant} run did not execute both canonical checks")
     if any(check.verdict in {Verdict.ERRORED, Verdict.SKIPPED} for check in results.checks):

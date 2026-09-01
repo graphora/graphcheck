@@ -19,9 +19,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Added Python 3.14 to the CI test matrix and package classifiers.
 - Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
   installation, consolidated configuration/profile preparation, and direct helper execution from
   the Action environment.
+- Regenerated the canonical fraud-ring sample reports and linked them from `README.md` and
+  `docs/guides/user-guide.md`.
 - Reorganized repository-facing material into dedicated `examples/`, `docs/`, `tools/`, and
   layered `tests/` directories, including a minimal starter and the preserved fraud-ring demo, so
   the repository root stays focused on project essentials.
@@ -31,6 +34,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
   enforces the under-15-minute adoption budget.
 - The default check concurrency is now two workers across project scaffolding, the engine, and the
   Neo4j connection pool; `graphcheck.yml` and `graphcheck run --concurrency N` still override it.
+- Migrated the breaking results contract from schema 1.2 to 2.0: `run.status` is now
+  `run.run_status`, summary `status` is now `coverage_status`, and `load_results()` retains a
+  compatibility path for historical artifacts.
+- The Step Summary of `graphora/graphcheck-action` reports the run status and the coverage status
+  separately from `v1.0.2`, which reads the schema 2.0 fields and falls back to the historical
+  `run.status` and summary `status` for artifacts produced before this migration.
 - The measured first-run path now installs a built wheel without a package cache and verifies the
   baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
   separate post-timing smoke check.
@@ -77,7 +86,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
   GitHub Release, guarding that the release tag matches the built version and smoke-testing a
   clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
-  and a single-source version literal in `src/graphcheck/__init__.py`, read at build time by hatch. See `docs/releasing.md`.
+  and a single-source version literal in `src/graphcheck/__init__.py`, read at build time by hatch. See `docs/maintainers/releasing.md`.
 - A release-oriented top-level README with a versioned project header, embedded CLI demo,
   concise problem statement, quickstart, check-suite example, explicit non-goals, and a preserved
   full user guide for detailed operational workflows.
@@ -169,7 +178,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
   timed-out, refused, or otherwise unsuccessful delivery.
 - Telemetry privacy and transparency safeguards: no queries, schema tokens, graph values,
   credentials, project/check identity, results, verdicts, paths, arguments, or free-form
-  diagnostics; a complete public event/field inventory in `docs/telemetry.md`; CI enforcement
+  diagnostics; a complete public event/field inventory in `docs/reference/telemetry.md`; CI enforcement
   against allowlist drift; property-based anonymization coverage; explicit network-failure tests;
   and a fresh-install command matrix proving zero events before opt-in.
 - A fifteen-part performance roadmap with repeatable cold-CLI, query-plan, allocation-retention,

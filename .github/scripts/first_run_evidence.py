@@ -61,8 +61,9 @@ def _result_facts(
     )
     if executed is None or executed < 1:
         errors.append("results.json must contain at least one executed check")
-    if run.get("status") != "complete":
-        errors.append("results.json run.status must be complete")
+    run_status = run.get("run_status", run.get("status"))
+    if run_status != "complete":
+        errors.append("results.json run.run_status must be complete")
     if run_exit_code not in {0, 1, 2}:
         errors.append("a complete scored run must exit with code 0, 1, or 2")
     if run.get("exit_code") != run_exit_code:

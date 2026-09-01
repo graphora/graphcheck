@@ -106,7 +106,7 @@ competency:
     payload = json.loads(
         (tmp_path / ".graphcheck" / "runs" / "latest" / "results.json").read_text(encoding="utf-8")
     )
-    assert payload["run"]["status"] == "complete"
+    assert payload["run"]["run_status"] == "complete"
     assert payload["run"]["exit_code"] == 0
 
 

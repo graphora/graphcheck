@@ -38,7 +38,7 @@ locations, but never include matched property values or claim complete PII disco
 
 ## Requirements
 
-- Python 3.12 or 3.13
+- Python 3.12, 3.13, or 3.14
 - Neo4j Python driver 5.20 through 6.x
 - Neo4j Server 5.26 LTS or a tested calendar-version release
 - Cypher 5, or Cypher 25 on the tested calendar-version server
@@ -273,6 +273,8 @@ Every prepared run writes:
 interaction script and has no external assets or network calls, so it can be opened and shared
 offline. The run-id directory preserves history; `latest` is a consistently published convenience
 copy of the newest run.
+
+See two real examples: a [findings run](https://graphora.github.io/graphcheck/docs/samples/reports/report-findings.html) and a [clean run](https://graphora.github.io/graphcheck/docs/samples/reports/report-clean.html).
 
 Use `graphcheck run --redact` (`--redacted` remains an alias) when the generated artifacts will be
 shared. Mask mode preserves

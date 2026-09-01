@@ -34,20 +34,23 @@ The writer accepts:
 - a JSON string,
 - or a `Path` to a `results.json` file.
 
-All inputs are normalized through the SPEC-01 source-of-truth model. Historical
-schema 1.0 and 1.1 artifacts are upgraded in memory to the current 1.2 contract.
-For a non-null historical target, the compatibility loader injects `labels:null`
-and `relationship_types:null` to mean that the older schema did not record the
-inventory. This compatibility read does not rewrite the source file. New runs
-always use schema 1.2 and populate both fields with sorted, unique arrays; `[]`
+All inputs are normalized through `load_results()`, the SPEC-01 compatibility boundary.
+Historical schema 1.0, 1.1, and 1.2 artifacts are upgraded in memory to the current 2.0 contract.
+For a non-null schema 1.0 or 1.1 target, the compatibility loader permits missing inventory and
+injects `labels:null` and `relationship_types:null`; schema 1.2 already records both arrays. This
+compatibility read does not rewrite the source file. New runs
+always use schema 2.0 and populate both fields with sorted, unique arrays; `[]`
 means the probe completed and found no tokens.
 
-Current inputs are validated through:
+Current schema 2.0 inputs may be validated directly through:
 
 ```python
 Results.model_validate(...)
 Results.model_validate_json(...)
 ```
+
+Historical schema 1.0, 1.1, and 1.2 artifacts must use `load_results()` so their
+`run.status` field and version-specific target shape are mapped into the current contract.
 
 ### Validation
 
@@ -213,7 +216,12 @@ completed artifact below the correspondingly named `runs/<report-name>/` directo
 then refreshes the consistently staged `runs/latest` convenience copy. This is
 the history consumed by the commands below.
 
-Its final summary prints the shared result sentence without a separate aggregate coverage line.
+Its final summary first prints `Run status: <run_status>` from the canonical lifecycle field and
+`Coverage status: <coverage_status>` from the derived selected-check coverage state. Run status is
+`complete`, `partial`, or `failed`; coverage status is independently `partial` when the run is
+partial or any selected check is errored or skipped, including a generated skip, and is `failed`
+when the run failed, otherwise it is `complete`. It then prints the shared result sentence without
+a separate aggregate coverage-count line.
 When checks were skipped, the Result line introduces a concise borderless table with Suite, Check,
 and Reason columns. Suite names and the Check cell's human name are italicized, the stable check id
 remains visible, and Reason contains the persisted code and shared generic explanation. A blank
@@ -232,7 +240,7 @@ line, and blank lines separate the lifecycle, score, result/artifact, and exit c
 blank line follows the exit-code line.
 
 History operations load and validate each run's `results.json`, including the
-schema 1.0/1.1 compatibility read described above. If `runs/latest` duplicates a
+schema 1.0, 1.1, and 1.2 compatibility read described above. If `runs/latest` duplicates a
 historical run id, it appears only once in history. History is ordered
 chronologically by the validated UTC `run.finished_at`, newest first; ordering
 never compares timestamp strings lexically.
@@ -381,7 +389,7 @@ current HTML report.
 Reporting tests live in `tests/unit/reporting/test_reporting.py`; report-command tests live in
 `tests/unit/cli/test_cli.py`.
 
-The 1.2 test matrix uses these SPEC-01 fixtures:
+The 2.0 test matrix uses these SPEC-01 fixtures:
 
 - `results.clean.json`
 - `results.complete.json`
@@ -428,9 +436,9 @@ The tests assert:
   runs, render every coverage state and skipped check name in `Not Evaluated`, preserve the stored
   selection boundary, link coverage entries to failure-first check details, and avoid a duplicate
   issue summary.
-- new 1.2 reports render exact sorted label/type counts and names from the artifact, distinguish
-  probed empty arrays from historical not-recorded null, and never infer inventory from other
-  report data.
+- current 2.0 reports render the exact sorted label/type counts and names introduced in schema 1.2,
+  distinguish probed empty arrays from historical not-recorded null, and never infer inventory
+  from other report data.
 
 ## Deferred Work
 
@@ -442,4 +450,4 @@ The following require C1, the fixture graph, or additional tooling:
 - Full pipeline fixture graph coverage.
 - Browser-level offline asset/network test.
 - MCP transport implementation beyond the approved requirement that every result-returning tool
-  and declared output schema consume the canonical SPEC-01 1.2 shape.
+  and declared output schema consume the canonical SPEC-01 2.0 shape.

@@ -8,7 +8,7 @@ protocol and triage; recruiting the 5 testers is owner-driven.
 
 - A fresh OS or container the tester has not used GraphCheck on before.
 - Docker installed and running (for a local Neo4j instance).
-- Python 3.12 or 3.13 and `uv` available.
+- Python 3.12, 3.13, or 3.14 and `uv` available.
 - Nothing pre-configured: no existing `profiles.yml`, no GraphCheck already installed.
 - Pick a unique container name for this session (for example `graphcheck-clean-test-1`,
   `-2`, ...) so back-to-back sessions never collide on a name still in use from a prior run.
