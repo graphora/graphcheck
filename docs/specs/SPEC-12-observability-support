@@ -385,7 +385,7 @@ Prometheus retention. Normal GraphCheck commands remain available.
 
 | Component | Tested version | Status |
 | --- | --- | --- |
-| Python | 3.12 and 3.13 | Covered by project CI |
+| Python | 3.12, 3.13, and 3.14 | Covered by project CI |
 | Prometheus | 3.5.0 | Pinned by the reference Compose file |
 | Grafana | 12.1.0 | Pinned by the reference Compose file |
 | Docker Compose | v5.1.4 | Validated with the reference implementation |

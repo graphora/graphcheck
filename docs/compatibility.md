@@ -1,11 +1,11 @@
 # Neo4j compatibility
 
 GraphCheck keeps the Python driver, Neo4j Server, and Cypher language versions separate. The
-tested release matrix for GraphCheck 0.1 is:
+tested release matrix for the current release is:
 
 | Dimension | Tested target | Policy |
 | --- | --- | --- |
-| Python | 3.12 and 3.13 | Both run the unit gate |
+| Python | 3.12, 3.13, and 3.14 | All run the unit gate |
 | Neo4j Python driver | 5.20.0 | Minimum supported driver |
 | Neo4j Python driver | latest 6.x | Primary driver line |
 | Neo4j Python driver | 7.x | Excluded until tested |

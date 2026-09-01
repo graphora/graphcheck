@@ -38,7 +38,7 @@ locations, but never include matched property values or claim complete PII disco
 
 ## Requirements
 
-- Python 3.12 or 3.13
+- Python 3.12, 3.13, or 3.14
 - Neo4j Python driver 5.20 through 6.x
 - Neo4j Server 5.26 LTS or a tested calendar-version release
 - Cypher 5, or Cypher 25 on the tested calendar-version server
