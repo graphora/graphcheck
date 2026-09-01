@@ -14,6 +14,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Added Python 3.14 to the CI test matrix and package classifiers.
 - Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
   installation, consolidated configuration/profile preparation, and direct helper execution from
   the Action environment.
