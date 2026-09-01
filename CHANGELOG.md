@@ -19,6 +19,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Reduced pull-request CI from 26 expanded jobs to 12: driver compatibility now tests the two
+  supported edge combinations, pull requests scan only their commit range for secrets, and the
+  Neo4j 4.4 hostile lane, cross-platform first-run trials, and Windows performance gates moved to
+  a weekly and manually runnable Extended CI workflow.
 - Added Python 3.14 to the CI test matrix and package classifiers.
 - Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
   installation, consolidated configuration/profile preparation, and direct helper execution from

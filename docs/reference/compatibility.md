@@ -14,11 +14,14 @@ tested release matrix for the current release is:
 | Cypher | 5 | Tested on 5.26.28 and 2026.06.0 |
 | Cypher | 25 | Tested on 2026.06.0 |
 
-The production dependency is bounded to `neo4j>=5.20,<7`. CI installs 5.20.0 and the latest
-available 6.x release independently, so a future untested driver major cannot enter dependency
-resolution. The driver APIs used at the compatibility floor are `GraphDatabase.driver`,
-read-access sessions, explicit transactions, `neo4j.Query` timeouts, result summaries and plans,
-query-type classification, notifications, and GQL status objects with compatibility fallbacks.
+The production dependency is bounded to `neo4j>=5.20,<7`. Pull-request CI pairs driver 5.20.0
+with Python 3.12 and the latest available driver 6.x with Python 3.14, then runs the focused
+driver-facing tests. The separate unit matrix runs the full suite on Python 3.12, 3.13, and 3.14.
+This tests both supported edges without repeating every combination, and the upper bound prevents
+a future untested driver major from entering dependency resolution. The driver APIs used at the
+compatibility floor are `GraphDatabase.driver`, read-access sessions, explicit transactions,
+`neo4j.Query` timeouts, result summaries and plans, query-type classification, notifications, and
+GQL status objects with compatibility fallbacks.
 
 Server images are exact rather than floating: `neo4j:5.26.28` and `neo4j:2026.06.0`, with matching
 `-enterprise` images for the built-in `reader` role gate, effective privileges, HOME database, and

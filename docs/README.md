@@ -5,5 +5,5 @@
 - [Reference](reference/) documents checks, compatibility, and telemetry.
 - [Specifications](specifications/) define GraphCheck's frozen and versioned contracts.
 - [Schemas](schemas/) contains the machine-readable JSON Schema artifacts.
-- [Maintainer documentation](maintainers/) covers release and clean-machine verification.
+- [Maintainer documentation](maintainers/) covers CI, release, and clean-machine verification.
 - [Examples](../examples/) contains complete runnable projects and reference deployments.
