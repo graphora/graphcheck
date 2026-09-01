@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from graphcheck.contracts.results import CheckResult, Results, RunStatus, SkipReason, Verdict
+from graphcheck.contracts.results import CheckResult, CoverageStatus, Results, SkipReason, Verdict
+from graphcheck.reporting.coverage import calculate_coverage_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,22 +99,21 @@ def present_results(results: Results) -> ResultPresentation:
     skipped_suites = tuple(
         sorted({check.suite_id for check in results.checks if check.verdict is Verdict.SKIPPED})
     )
+    coverage_status = calculate_coverage_status(results)
     fully_clean = (
-        results.run.status is RunStatus.COMPLETE
+        coverage_status is CoverageStatus.COMPLETE
         and selected > 0
         and evaluated == selected
         and totals.passed == selected
     )
-    incomplete = (
-        results.run.status is not RunStatus.COMPLETE or evaluated < selected or totals.errored > 0
-    )
+    incomplete = coverage_status is CoverageStatus.PARTIAL
 
-    if results.run.status is RunStatus.FAILED:
+    if coverage_status is CoverageStatus.FAILED:
         sentence, coverage_incomplete = "Run failed before checks could complete.", False
     elif selected == 0:
         sentence, coverage_incomplete = "No checks were selected or evaluated.", False
     elif evaluated == 0:
-        sentence, coverage_incomplete = "No checks were evaluated.", False
+        sentence, coverage_incomplete = "No checks were evaluated.", incomplete
     elif findings or totals.errored:
         sentence = f"{_outcome_counts(totals.fail, totals.warn, totals.errored)}."
         coverage_incomplete = incomplete

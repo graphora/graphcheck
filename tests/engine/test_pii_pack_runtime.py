@@ -503,7 +503,7 @@ conformance:
     check = results.checks[0]
     assert check.verdict is Verdict.SKIPPED
     assert check.skip_reason is SkipReason.UNSUPPORTED
-    assert results.run.status is RunStatus.PARTIAL
+    assert results.run.run_status is RunStatus.PARTIAL
     assert "requires missing capability: apoc" in results.run.partial_reason
     assert client.calls == []
 

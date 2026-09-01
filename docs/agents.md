@@ -59,7 +59,7 @@ source of truth. Its top-level shape is:
 
 - `schema_version` versions this contract independently of the GraphCheck release. Reject an
   unsupported version rather than guessing at its meaning.
-- `run` contains identity, timestamps, status, exit code, selection, redaction, target metadata,
+- `run` contains identity, timestamps, `run_status`, exit code, selection, redaction, target metadata,
   and a run-level error when setup failed.
 - `score` is a severity-weighted score or `null` when no check executed. It is useful for reporting,
   but it does not replace the exit code or verdicts.
@@ -87,11 +87,11 @@ field-presence, and exit-code rules.
 
 ### Run status is not the verdict
 
-`run.status` describes execution coverage:
+`run.run_status` describes the execution lifecycle/state:
 
 - `complete` means GraphCheck completed the selected universe. It does **not** mean all checks
   passed.
-- `partial` means coverage was lost. `partial_reason` explains why.
+- `partial` means the execution/run became partial. `partial_reason` explains why.
 - `failed` means the run could not be prepared or executed as a run. Inspect `run.error`.
 
 The per-check `verdict` describes each outcome:
@@ -108,6 +108,12 @@ The per-check `verdict` describes each outcome:
 "no `fail` verdicts" as a success test because warnings, execution errors, partial runs, and an
 entirely skipped selection are all non-clean outcomes.
 
+Report summaries derive `coverage_status` over the selected check universe. It is `partial` when
+the run is partial or any selected check is `errored` or `skipped`, including an intentional
+generated skip; `run_status` may still be `complete` because the engine itself finished.
+In other words, `coverage_status` describes selected-check evaluation coverage independently of
+the execution lifecycle recorded by `run_status`.
+
 ### Exit-code contract
 
 Use the stored `run.exit_code` as the overall automation decision. It is derived using the first
@@ -115,7 +121,7 @@ matching row:
 
 | Exit | Meaning |
 | --- | --- |
-| `3` | `run.status` is `failed`; the run-level `run.error` contains the cause and fix. |
+| `3` | `run.run_status` is `failed`; the run-level `run.error` contains the cause and fix. |
 | `1` | At least one `fail`, or an `errored` check with `severity:error`. A partial-run `engine.timeout` is handled by exit `2` instead. |
 | `2` | The run is partial, nothing was evaluated, or at least one `warn` or `severity:warn` error occurred. This is review/inconclusive, not success. |
 | `0` | The run is complete, at least one check executed, and all executed checks passed; generated skips may coexist with those passes. |

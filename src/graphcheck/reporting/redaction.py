@@ -113,7 +113,7 @@ def _is_safe_literal_path(path: tuple[str | int, ...]) -> bool:
         ("run", "finished_at"),
         ("run", "graphcheck_version"),
         ("run", "pack_version"),
-        ("run", "status"),
+        ("run", "run_status"),
         ("run", "redaction", "policy"),
         ("run", "target", "server_version"),
         ("run", "target", "edition"),

@@ -392,7 +392,8 @@ the `graphcheck-results` artifact for the full result, compact summary, and offl
 Locally, inspect the exact outcome with:
 
 ```console
-jq '.run.exit_code, .run.status, .totals' .graphcheck/runs/latest/results.json
+jq '.run.exit_code, .run.run_status, .totals' .graphcheck/runs/latest/results.json
+jq '.coverage_status' .graphcheck/runs/latest/summary.json
 ```
 
 See the [`results.json` specification](specs/SPEC-01-results-json.md) for the complete result shape

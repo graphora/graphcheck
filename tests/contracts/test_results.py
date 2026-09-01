@@ -275,7 +275,7 @@ def _run(**over):
         finished_at="2026-07-22T10:00:01Z",
         graphcheck_version="0.1.0",
         pack_version="0.1.0",
-        status=RunStatus.COMPLETE,
+        run_status=RunStatus.COMPLETE,
         partial_reason=None,
         exit_code=0,
         selection={"suites": [], "tags": [], "fail_fast": False},
@@ -318,7 +318,7 @@ def _results(checks, status=RunStatus.COMPLETE, **run_over):
     sc = score_value(checks)
     return Results(
         schema_version=SCHEMA_VERSION,
-        run=_run(status=status, exit_code=exit_code(status, checks), **run_over),
+        run=_run(run_status=status, exit_code=exit_code(status, checks), **run_over),
         score=None if sc is None else _score(sc),
         totals=totals(checks),
         suites=[{"id": "s", "source_sha": "x", "score": sc, "totals": totals(checks)}],
@@ -484,3 +484,7 @@ def test_fixture_validates_against_schema_and_round_trips(name):
 def test_committed_results_schema_is_current():
     committed = json.loads((SPECS_DIR / "results.schema.json").read_text())
     assert committed == results_schema()  # regenerate + recommit if this fails
+    assert committed["properties"]["schema_version"]["const"] == "2.0"
+    run = committed["$defs"]["Run"]
+    assert "run_status" in run["required"]
+    assert "status" not in run["properties"]

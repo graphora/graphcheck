@@ -513,15 +513,15 @@
         "redaction": {
           "$ref": "#/$defs/Redaction"
         },
+        "run_status": {
+          "$ref": "#/$defs/RunStatus"
+        },
         "selection": {
           "$ref": "#/$defs/Selection"
         },
         "started_at": {
           "title": "Started At",
           "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/RunStatus"
         },
         "target": {
           "anyOf": [
@@ -540,7 +540,7 @@
         "finished_at",
         "graphcheck_version",
         "pack_version",
-        "status",
+        "run_status",
         "partial_reason",
         "exit_code",
         "selection",
@@ -734,7 +734,7 @@
       "$ref": "#/$defs/Run"
     },
     "schema_version": {
-      "const": "1.2",
+      "const": "2.0",
       "title": "Schema Version",
       "type": "string"
     },

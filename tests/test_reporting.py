@@ -31,10 +31,14 @@ def _fixture(name: str) -> Path:
 def _historical_results_schema(version: str) -> dict:
     schema = deepcopy(results_schema())
     schema["properties"]["schema_version"]["const"] = version
-    target = schema["$defs"]["ResultsTarget"]
-    for field in ("labels", "relationship_types"):
-        target["properties"].pop(field)
-        target["required"].remove(field)
+    run = schema["$defs"]["Run"]
+    run["properties"]["status"] = run["properties"].pop("run_status")
+    run["required"][run["required"].index("run_status")] = "status"
+    if version in {"1.0", "1.1"}:
+        target = schema["$defs"]["ResultsTarget"]
+        for field in ("labels", "relationship_types"):
+            target["properties"].pop(field)
+            target["required"].remove(field)
     if version == "1.0":
         schema["$defs"]["EvidenceElement"]["properties"]["kind"]["enum"].remove("aggregate")
     return schema
@@ -87,24 +91,29 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
     assert Results.model_validate(raw) == model
 
 
-@pytest.mark.parametrize("historical_version", ["1.0", "1.1"])
+@pytest.mark.parametrize("historical_version", ["1.0", "1.1", "1.2"])
 def test_writer_emits_output_valid_for_declared_historical_schema(historical_version):
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["schema_version"] = historical_version
-    raw["run"]["target"].pop("labels")
-    raw["run"]["target"].pop("relationship_types")
+    raw["run"]["status"] = raw["run"].pop("run_status")
+    if historical_version in {"1.0", "1.1"}:
+        raw["run"]["target"].pop("labels")
+        raw["run"]["target"].pop("relationship_types")
 
     output = json.loads(results_json(raw))
 
     assert output["schema_version"] == historical_version
-    assert "labels" not in output["run"]["target"]
-    assert "relationship_types" not in output["run"]["target"]
+    assert "status" in output["run"] and "run_status" not in output["run"]
+    if historical_version in {"1.0", "1.1"}:
+        assert "labels" not in output["run"]["target"]
+        assert "relationship_types" not in output["run"]["target"]
     jsonschema.validate(output, _historical_results_schema(historical_version))
 
 
 def test_writer_reloads_serialized_historical_results(tmp_path):
     raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
     raw["schema_version"] = "1.1"
+    raw["run"]["status"] = raw["run"].pop("run_status")
     raw["run"]["target"].pop("labels")
     raw["run"]["target"].pop("relationship_types")
 
@@ -292,7 +301,7 @@ def test_html_skipped_cards_show_generic_reason_without_internal_code(reason, ex
     raw = json.loads(_fixture("generated-only").read_text(encoding="utf-8"))
     raw["checks"][0]["skip_reason"] = reason
     if reason != "generated":
-        raw["run"].update(status="partial", partial_reason="coverage unavailable")
+        raw["run"].update(run_status="partial", partial_reason="coverage unavailable")
     card = _check_cards(render_html_report(raw))[0]
 
     assert "Reason" in card["text"]
@@ -351,6 +360,7 @@ def test_html_renderer_shows_health_overview_and_outcome_breakdown():
 def test_html_renderer_reports_partial_coverage():
     html = render_html_report(_fixture("partial"))
 
+    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
     assert "<strong>Partial Run.</strong>" in html
     assert (
         '<span class="header-status-message">No failures in the 1 check evaluated. '
@@ -381,6 +391,9 @@ def test_html_renderer_reports_partial_coverage():
 def test_html_renderer_reports_all_checks_skipped():
     html = render_html_report(_fixture("generated-only"))
 
+    assert "<strong>Run Complete.</strong>" in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in html
+    assert "<strong>Partial Run.</strong>" not in html
     assert '<span class="suite-check-stats">0/1 checks run</span>' in html
     assert (
         '<div class="suite-badges-row">'
@@ -389,7 +402,8 @@ def test_html_renderer_reports_all_checks_skipped():
     ) in html
     assert '<span class="badge badge-score badge-score-na">SCORE: N/A</span>' in html
     assert "CHECKED ON" not in html
-    assert '<span class="header-status-message">No checks were evaluated.</span>' in html
+    assert "No checks were evaluated. Coverage is incomplete" in html
+    assert "skipped check(s) from <em>customer-360</em>" in html
     assert '<span class="exit-2">1 check skipped</span>' not in html
     assert 'data-tooltip="draft competency check awaiting approval — skipped"' in html
     assert "Check did not pass" not in html
@@ -559,7 +573,7 @@ def test_html_renderer_does_not_call_an_empty_selection_all_clear():
 
 def test_html_renderer_does_not_count_intentional_skips_as_issues():
     raw = json.loads(_fixture("partial").read_text(encoding="utf-8"))
-    raw["run"]["status"] = "complete"
+    raw["run"]["run_status"] = "complete"
     raw["run"]["partial_reason"] = None
     raw["run"]["exit_code"] = 0
     raw["checks"][1]["skip_reason"] = "generated"
@@ -626,6 +640,7 @@ def test_html_renderer_distinguishes_empty_and_historical_inventory(tmp_path):
 
     historical = deepcopy(empty)
     historical["schema_version"] = "1.1"
+    historical["run"]["status"] = historical["run"].pop("run_status")
     historical["run"]["target"].pop("labels")
     historical["run"]["target"].pop("relationship_types")
     path = tmp_path / "results.json"
@@ -711,8 +726,9 @@ def test_html_renderer_reports_errored_checks_separately_from_failures():
 
     html = render_html_report(raw)
 
-    assert '<span class="status-pill status-pill-partial">PARTIAL</span>' in html
-    assert "<strong>Partial Run.</strong>" in html
+    assert '<span class="status-pill status-pill-partial">PARTIAL COVERAGE</span>' in html
+    assert "<strong>Run Complete.</strong>" in html
+    assert "<strong>Partial Run.</strong>" not in html
     assert (
         '<span class="header-status-message">1 warning and 3 execution errors. '
         "Coverage is incomplete.</span>" in html

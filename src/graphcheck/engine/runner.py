@@ -1321,7 +1321,7 @@ class Engine:
             return
         self._emit_unprocessed_as_not_run()
         finished_perf = self._monotonic()
-        status = results.run.status
+        status = results.run.run_status
         if status is RunStatus.FAILED:
             executed = engine_errors = generated = unsupported = 0
             not_run = len(self._telemetry_checks)
@@ -1461,7 +1461,7 @@ class Engine:
                 "finished_at": finished_at,
                 "graphcheck_version": __version__,
                 "pack_version": PACK_VERSION,
-                "status": status,
+                "run_status": status,
                 "partial_reason": partial_reason,
                 "exit_code": exit_code(status, checks),
                 "selection": {
@@ -1506,7 +1506,7 @@ class Engine:
                 "finished_at": _timestamp(self._clock()),
                 "graphcheck_version": __version__,
                 "pack_version": PACK_VERSION,
-                "status": status,
+                "run_status": status,
                 "partial_reason": None,
                 "exit_code": exit_code(status, []),
                 "selection": {
@@ -1569,7 +1569,7 @@ def failed_results(
             "finished_at": now,
             "graphcheck_version": __version__,
             "pack_version": PACK_VERSION,
-            "status": status,
+            "run_status": status,
             "partial_reason": None,
             "exit_code": exit_code(status, []),
             "selection": {
