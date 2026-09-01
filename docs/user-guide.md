@@ -274,6 +274,8 @@ interaction script and has no external assets or network calls, so it can be ope
 offline. The run-id directory preserves history; `latest` is a consistently published convenience
 copy of the newest run.
 
+See two real examples: a [findings run](https://graphora.github.io/graphcheck/docs/samples/report-findings.html) and a [clean run](https://graphora.github.io/graphcheck/docs/samples/report-clean.html).
+
 Use `graphcheck run --redact` (`--redacted` remains an alias) when the generated artifacts will be
 shared. Mask mode preserves
 verdicts, scores, run-level counts, keys, and container structure while replacing query text,

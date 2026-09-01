@@ -18,6 +18,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
   installation, consolidated configuration/profile preparation, and direct helper execution from
   the Action environment.
+- Regenerated the canonical fraud-ring sample reports and linked them from README.md and docs/user-guide.md.
 
 ### Removed
 
