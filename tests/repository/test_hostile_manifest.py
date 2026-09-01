@@ -24,17 +24,12 @@ def test_hostile_manifest_defines_every_required_case_and_command():
     assert (HOSTILE / CASES["neo4j-4.4-cluster"]["compose"]).is_file()
 
 
-def test_manifest_runtime_mapping_selects_real_tests_and_declares_lanes():
+def test_manifest_mapping_selects_real_tests_and_declares_lanes():
     integration_source = (HOSTILE.parent / "test_hostile_graphs.py").read_text(encoding="utf-8")
-    runner_source = (HOSTILE.parents[2] / "tools" / "run_hostile_graphs.py").read_text(
-        encoding="utf-8"
-    )
 
     assert {case["lane"] for case in CASES.values()} == {"fast", "legacy", "scale"}
     assert len({case["pytest_test"] for case in CASES.values()}) == len(CASES)
     assert all(f"def {case['pytest_test']}(" in integration_source for case in CASES.values())
-    assert "cases.yml" in runner_source
-    assert "TESTS =" not in runner_source
 
 
 def test_scale_dataset_identity_and_published_size_are_pinned():

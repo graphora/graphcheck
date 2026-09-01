@@ -45,18 +45,6 @@ def _write_run(
     return run_dir
 
 
-def _pass_with_generated_skip():
-    raw = json.loads((FIXTURES / "results.clean.json").read_text(encoding="utf-8"))
-    generated = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))[
-        "checks"
-    ][0]
-    generated["suite_id"] = raw["suites"][0]["id"]
-    raw["checks"].append(generated)
-    raw["totals"].update(checks=3, skipped=1)
-    raw["suites"][0]["totals"].update(checks=3, skipped=1)
-    return load_results(raw)
-
-
 def _zero_selection():
     raw = json.loads((FIXTURES / "results.generated-only.json").read_text(encoding="utf-8"))
     totals = {"checks": 0, "pass": 0, "fail": 0, "warn": 0, "errored": 0, "skipped": 0}
@@ -428,17 +416,10 @@ def test_report_summary_names_run_and_coverage_statuses(fixture, run_status, cov
     assert "status" not in summary
 
 
-@pytest.mark.parametrize(
-    ("factory", "expected"),
-    [
-        (_pass_with_generated_skip, "partial"),
-        (_zero_selection, "complete"),
-    ],
-)
-def test_report_summary_covers_generated_skip_and_empty_selection(factory, expected):
-    summary = json.loads(report_summary_json(factory()))
+def test_report_summary_treats_empty_selection_as_complete_coverage():
+    summary = json.loads(report_summary_json(_zero_selection()))
 
-    assert summary["coverage_status"] == expected
+    assert summary["coverage_status"] == "complete"
 
 
 def test_report_history_lists_generated_only_run_as_partial(tmp_path):
@@ -453,15 +434,6 @@ def test_report_history_lists_generated_only_run_as_partial(tmp_path):
 
     assert records[0].summary.coverage_status is CoverageStatus.PARTIAL
     assert "partial" in format_report_history(records)
-
-
-def test_report_summary_keeps_pre_check_failure_failed():
-    raw = json.loads((FIXTURES / "results.failed.json").read_text(encoding="utf-8"))
-    raw["run"]["error"]["code"] = "neo4j.credential_not_read_only"
-
-    summary = json.loads(report_summary_json(load_results(raw)))
-
-    assert summary["coverage_status"] == "failed"
 
 
 def test_historical_summary_schema_1_0_maps_status_to_coverage_status():

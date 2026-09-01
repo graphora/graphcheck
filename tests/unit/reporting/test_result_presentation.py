@@ -226,9 +226,8 @@ def test_cli_distinguishes_complete_run_from_partial_coverage(capsys):
     assert "Coverage status: partial" in stdout
 
 
-@pytest.mark.parametrize("factory", [_pass_with_generated_skip, lambda: _fixture("generated-only")])
-def test_generated_skips_use_partial_coverage_in_cli_html_and_presentation(factory, capsys):
-    results = factory()
+def test_generated_skip_uses_partial_coverage_in_cli_html_and_presentation(capsys):
+    results = _pass_with_generated_skip()
     presentation = present_results(results)
 
     _print_run_summary(results, Path("results.json"), Path("report.html"))

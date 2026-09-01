@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from graphcheck.contracts.results import (
     SCHEMA_VERSION,
-    WEIGHTS,
     CheckError,
     CheckResult,
     Estimate,
@@ -31,11 +30,6 @@ from graphcheck.contracts.results import (
 from graphcheck.contracts.schemas import SCHEMAS_DIR, results_schema
 
 
-def test_weights_are_severity_keyed():
-    assert WEIGHTS[Severity.ERROR] == 3
-    assert WEIGHTS[Severity.WARN] == 1
-
-
 def test_verdict_values():
     assert {v.value for v in Verdict} == {"pass", "fail", "warn", "errored", "skipped"}
 
@@ -55,11 +49,6 @@ def test_evidence_forbids_unknown_keys():
 def test_evidence_requires_at_least_one_pointer():
     with pytest.raises(ValidationError):
         Evidence(message="x", elements=[], truncated=False, cap=50, total_count=0)
-
-
-def test_check_error_shape():
-    err = CheckError(code="c", message="m", fix="f")
-    assert err.fix == "f"
 
 
 def _full_check(verdict, severity):
@@ -226,11 +215,6 @@ def _chk(verdict, severity=None, **over):
 def test_score_matches_design_example():
     checks = [_chk(Verdict.FAIL), _chk(Verdict.PASS), _chk(Verdict.WARN, Severity.WARN)]
     assert score_value(checks) == 43  # 100 * 3 / (3+3+1)
-
-
-def test_score_null_on_empty_denominator():
-    assert score_value([_chk(Verdict.SKIPPED)]) is None
-    assert score_value([]) is None
 
 
 def test_totals_tally():

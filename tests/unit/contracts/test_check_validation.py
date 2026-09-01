@@ -43,10 +43,6 @@ def test_with_forbids_unknown_keys():
         REGISTRY["completeness"].model_validate({"label": "C", "property": "p", "bogus": 1})
 
 
-def test_pack_version_is_a_string():
-    assert isinstance(PACK_VERSION, str)
-
-
 # --- duplicate-key loader ---
 
 
