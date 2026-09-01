@@ -14,6 +14,11 @@
   <img src="docs/graphcheck-demo.gif" width="900" alt="GraphCheck command-line demo">
 </p>
 
+<p align="center">
+  See a real report: <a href="https://graphora.github.io/graphcheck/docs/samples/report-findings.html">findings</a> and
+  <a href="https://graphora.github.io/graphcheck/docs/samples/report-clean.html">clean run</a>
+</p>
+
 ## The problem
 
 Property graphs can stay queryable while silently losing required properties, cardinalities,
