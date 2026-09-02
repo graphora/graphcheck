@@ -252,6 +252,18 @@ def test_committed_sample_is_complete_and_self_contained(variant: str):
     assert html.count("<style>") == 1
 
 
+@pytest.mark.parametrize("variant", ["findings", "clean"])
+def test_established_sample_url_redirects_to_canonical_report(variant: str):
+    legacy = ROOT / "docs" / "samples" / f"report-{variant}.html"
+    target = f"reports/report-{variant}.html"
+    html = legacy.read_text(encoding="utf-8")
+
+    assert (legacy.parent / target).resolve() == samples.OUTPUTS[variant].resolve()
+    assert f'<meta http-equiv="refresh" content="0; url={target}">' in html
+    assert f'<link rel="canonical" href="{target}">' in html
+    assert f'href="{target}"' in html
+
+
 def test_committed_samples_embed_current_renderer_assets():
     current = render_validated_html_report(samples.canonicalize_results(_results("clean"), "clean"))
 

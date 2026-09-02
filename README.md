@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  See a real report: <a href="https://graphora.github.io/graphcheck/docs/samples/reports/report-findings.html">findings</a> and
-  <a href="https://graphora.github.io/graphcheck/docs/samples/reports/report-clean.html">clean run</a>
+  See a real report: <a href="https://graphora.github.io/graphcheck/docs/samples/report-findings.html">findings</a> and
+  <a href="https://graphora.github.io/graphcheck/docs/samples/report-clean.html">clean run</a>
 </p>
 
 ## The problem

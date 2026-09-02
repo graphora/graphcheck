@@ -50,6 +50,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Preserved the established GitHub Pages URLs for both sample reports with tested compatibility
+  redirects after moving the canonical HTML files under `docs/samples/reports/`.
+- Kept the minimal example's documented first run baseline-free by moving its optional drift check
+  outside the default `checks/` discovery directory.
 - Restored pull-request smoke CI after the repository reorganization by staging the fraud-ring
   `graphcheck.yml` and `checks/` at the workspace root expected by the published GitHub Action.
 - First-run stage failures, unexpected profiling faults, and baseline write errors now return an

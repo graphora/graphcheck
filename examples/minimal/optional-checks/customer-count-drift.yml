@@ -1,0 +1,8 @@
+suite: customer-drift
+defaults: { severity: warn, tags: [example, drift] }
+
+drift:
+  - id: customer-count-stable
+    metric: node_count
+    target: { label: Customer }
+    tolerance: { max_drop_pct: 10 }
