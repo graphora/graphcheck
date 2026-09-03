@@ -1,0 +1,4 @@
+project: graphcheck-minimal-example
+checks: checks
+artifacts: .graphcheck
+concurrency: 2

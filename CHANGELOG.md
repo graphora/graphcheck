@@ -11,24 +11,6 @@ All notable changes to this project are documented here. Format follows [Keep a 
   annotations dropped at the per-run cap while retaining the existing Step Summary.
 - Added one CI/CD guide with copy-paste workflows for pull-request gating, scheduled audits with
   alerting, staging merges, and server-enforced read-only production runs.
-
-### Changed
-
-- Added Python 3.14 to the CI test matrix and package classifiers.
-- Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
-  installation, consolidated configuration/profile preparation, and direct helper execution from
-  the Action environment.
-- Regenerated the canonical fraud-ring sample reports and linked them from README.md and docs/user-guide.md.
-
-### Removed
-
-- Removed the retired in-repository GraphCheck Action copy and its implementation tests; CI now
-  guards the boundary and consumes only the standalone `graphora/graphcheck-action@v1` release.
-- First-run CI now records three independent clean-runner install-to-first-valid-result samples on
-  Linux, macOS, and Windows/WSL, uploads structured timing evidence, publishes the per-platform
-  medians in the Actions summary, records both the tested GitHub SHA and pull-request head SHA, and
-  enforces the under-15-minute adoption budget.
-
 - Added a scripted hostile-graph certification set that runs the real `debug`, `profile`, and
   `run` command boundary against noisy LLM Graph Builder-shaped data, a checksum-pinned Stanford
   SNAP scale graph, a three-member Neo4j 4.4 cluster, an APOC-less server, and an empty graph. Its
@@ -37,6 +19,23 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Reduced pull-request CI from 26 expanded jobs to 12: driver compatibility now tests the two
+  supported edge combinations, pull requests scan only their commit range for secrets, and the
+  Neo4j 4.4 hostile lane, cross-platform first-run trials, and Windows performance gates moved to
+  a weekly and manually runnable Extended CI workflow.
+- Added Python 3.14 to the CI test matrix and package classifiers.
+- Reduced GitHub Action startup overhead with cached `uv` and Python setup, binary-only package
+  installation, consolidated configuration/profile preparation, and direct helper execution from
+  the Action environment.
+- Regenerated the canonical fraud-ring sample reports and linked them from `README.md` and
+  `docs/guides/user-guide.md`.
+- Reorganized repository-facing material into dedicated `examples/`, `docs/`, `tools/`, and
+  layered `tests/` directories, including a minimal starter and the preserved fraud-ring demo, so
+  the repository root stays focused on project essentials.
+- First-run CI now records three independent clean-runner install-to-first-valid-result samples on
+  Linux, macOS, and Windows/WSL, uploads structured timing evidence, publishes the per-platform
+  medians in the Actions summary, records both the tested GitHub SHA and pull-request head SHA, and
+  enforces the under-15-minute adoption budget.
 - The default check concurrency is now two workers across project scaffolding, the engine, and the
   Neo4j connection pool; `graphcheck.yml` and `graphcheck run --concurrency N` still override it.
 - Migrated the breaking results contract from schema 1.2 to 2.0: `run.status` is now
@@ -45,15 +44,25 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - The Step Summary of `graphora/graphcheck-action` reports the run status and the coverage status
   separately from `v1.0.2`, which reads the schema 2.0 fields and falls back to the historical
   `run.status` and summary `status` for artifacts produced before this migration.
-
 - The measured first-run path now installs a built wheel without a package cache and verifies the
   baseline-free `init` → `run` path directly and persists that evidence before `profile` runs as a
   separate post-timing smoke check.
 
 ### Fixed
 
+- Preserved the established GitHub Pages URLs for both sample reports with tested compatibility
+  redirects after moving the canonical HTML files under `docs/samples/reports/`.
+- Kept the minimal example's documented first run baseline-free by moving its optional drift check
+  outside the default `checks/` discovery directory.
+- Restored pull-request smoke CI after the repository reorganization by staging the fraud-ring
+  `graphcheck.yml` and `checks/` at the workspace root expected by the published GitHub Action.
 - First-run stage failures, unexpected profiling faults, and baseline write errors now return an
   actionable `Fix:` diagnostic without exposing a Python traceback.
+
+### Removed
+
+- Removed the retired in-repository GraphCheck Action copy and its implementation tests; CI now
+  guards the boundary and consumes only the standalone `graphora/graphcheck-action@v1` release.
 
 ## [0.2.0] - 2026-08-20
 
@@ -85,7 +94,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - PyPI release tooling: a Trusted Publishing (OIDC) release workflow triggered by a published
   GitHub Release, guarding that the release tag matches the built version and smoke-testing a
   clean install before upload; packaging metadata (project URLs, classifiers, keywords, author);
-  and a single-source version literal in `src/graphcheck/__init__.py`, read at build time by hatch. See `docs/releasing.md`.
+  and a single-source version literal in `src/graphcheck/__init__.py`, read at build time by hatch. See `docs/maintainers/releasing.md`.
 - A release-oriented top-level README with a versioned project header, embedded CLI demo,
   concise problem statement, quickstart, check-suite example, explicit non-goals, and a preserved
   full user guide for detailed operational workflows.
@@ -177,7 +186,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
   timed-out, refused, or otherwise unsuccessful delivery.
 - Telemetry privacy and transparency safeguards: no queries, schema tokens, graph values,
   credentials, project/check identity, results, verdicts, paths, arguments, or free-form
-  diagnostics; a complete public event/field inventory in `docs/telemetry.md`; CI enforcement
+  diagnostics; a complete public event/field inventory in `docs/reference/telemetry.md`; CI enforcement
   against allowlist drift; property-based anonymization coverage; explicit network-failure tests;
   and a fresh-install command matrix proving zero events before opt-in.
 - A fifteen-part performance roadmap with repeatable cold-CLI, query-plan, allocation-retention,

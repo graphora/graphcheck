@@ -21,6 +21,8 @@ import pytest
 
 from graphcheck.connection_profiles import ConnectionProfile
 
+collect_ignore = [str(Path(__file__).parent / "fixtures" / "external")]
+
 
 @dataclass(frozen=True)
 class Neo4jTestTarget:

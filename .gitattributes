@@ -1,2 +1,2 @@
 *.sh text eol=lf
-docs/samples/*.html text eol=lf
+docs/samples/reports/*.html text eol=lf

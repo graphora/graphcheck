@@ -18,7 +18,7 @@ from graphcheck.generation.proposals import ProposalRequest, RawProposal, RawPro
 from graphcheck.generation.service import GenerationService
 from graphcheck.project import write_default_project
 
-FIXTURE = Path(__file__).parents[1] / "contracts" / "fixtures" / "baseline.json"
+FIXTURE = Path(__file__).parents[1] / "unit" / "contracts" / "fixtures" / "baseline.json"
 TARGET = ResultsTarget(
     database="neo4j",
     server_version="5.18.0",
