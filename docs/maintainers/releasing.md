@@ -29,8 +29,11 @@ first upload — the name `graphcheck` is claimed only on the first successful p
 
 ## Cutting a release
 
-1. Bump `version` in `pyproject.toml`. This is the single source of truth; `--version` reads it
-   from the installed distribution metadata (`importlib.metadata`), so the two never drift.
+1. Bump `__version__` in `src/graphcheck/__init__.py`. This is the single source of truth:
+   `pyproject.toml` declares the version as `dynamic` and `[tool.hatch.version]` reads the literal
+   at build time, and `--version` prints the same literal, so the wheel and the CLI never drift.
+   Do not add a `version` key to `pyproject.toml` — the build fails if the field is both dynamic
+   and static.
 2. Update `CHANGELOG.md`.
 3. Merge to `development` through the normal PR gate.
 4. Create a GitHub Release whose tag is `v<version>` (for example `v0.1.0`), targeting the merge

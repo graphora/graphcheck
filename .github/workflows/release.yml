@@ -30,7 +30,7 @@ jobs:
           built="$(basename "$wheel" | sed -E 's/^graphcheck-(.+)-py3-none-any\.whl$/\1/')"
           echo "release tag '$RELEASE_TAG' -> expected version '$expected'; built wheel version '$built'"
           if [ "$expected" != "$built" ]; then
-            echo "::error::Release tag does not match the built version ($expected != $built). Bump version in pyproject.toml or fix the release tag."
+            echo "::error::Release tag does not match the built version ($expected != $built). Bump __version__ in src/graphcheck/__init__.py or fix the release tag."
             exit 1
           fi
 
