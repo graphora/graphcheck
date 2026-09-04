@@ -82,9 +82,30 @@ unpublishable for good.
    graphcheck --version
    ```
 
-2. Promote `development` to `main` with a pull request titled
+2. Land any follow-up documentation on `development` first, so one promotion carries it. Every
+   promotion costs a back-merge (step 4), so promoting twice for one release is worth avoiding.
+3. Promote `development` to `main` with a pull request titled
    `Promote development to main (v<version>)`.
-3. Update the GitHub Action, or its users stay on the previous release. In
+4. Back-merge `main` into `development`. The promotion creates a merge commit on `main` that never
+   returns, so without this the next promotion opens `BEHIND`, and
+   `strict_required_status_checks_policy` will not merge a `BEHIND` pull request.
+
+   Do not open the back-merge as `main` into `development`. The strict policy requires the head
+   branch to be up to date with the base, and after a promotion the two branches are mutually
+   behind — `development` lacks the promotion merge, `main` lacks everything merged since — so
+   neither branch can serve as the head. **Update branch** is refused as well, because
+   `development` requires a pull request. Use a topic branch on top of `development`:
+
+   ```console
+   git switch development && git pull
+   git switch -c backmerge-main-after-v<version>
+   git merge origin/main
+   git push -u origin backmerge-main-after-v<version>
+   ```
+
+   `git diff origin/development HEAD` should be empty: the branch carries the merge commit and no
+   content. Open it as a pull request into `development`.
+5. Update the GitHub Action, or its users stay on the previous release. In
    `graphora/graphcheck-action`:
    - bump the `version` input default in `action.yml` to `<version>`,
    - re-read the other input descriptions for behaviour this release changed,
