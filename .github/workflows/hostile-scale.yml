@@ -1,0 +1,26 @@
+name: Hostile public scale graph
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 1"
+
+jobs:
+  public-scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTEST_ADDOPTS: --junitxml=.hostile-artifacts/public-scale.xml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - name: Run debug, profile, and run against SNAP email-EuAll
+        run: uv run python tools/run_hostile_graphs.py --case public-scale
+      - name: Retain hostile-scale evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostile-public-scale
+          path: .hostile-artifacts/
+          if-no-files-found: warn

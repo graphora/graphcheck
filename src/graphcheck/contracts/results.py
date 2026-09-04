@@ -17,7 +17,7 @@ from pydantic import (
 
 from graphcheck.scoring import SEVERITY_WEIGHTS, calculate_score, calculate_suite_scores
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "2.0"
 
 
 class Verdict(StrEnum):
@@ -47,6 +47,12 @@ class SkipReason(StrEnum):
 
 
 class RunStatus(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class CoverageStatus(StrEnum):
     COMPLETE = "complete"
     PARTIAL = "partial"
     FAILED = "failed"
@@ -300,8 +306,8 @@ class Run(_Strict):
     finished_at: str
     graphcheck_version: str
     pack_version: str
-    status: RunStatus
-    partial_reason: str | None  # present-but-nullable; non-null iff status is partial
+    run_status: RunStatus
+    partial_reason: str | None  # present-but-nullable; non-null iff run_status is partial
     exit_code: int
     selection: Selection
     redaction: Redaction
@@ -329,7 +335,7 @@ class Suite(_Strict):
 
 
 class Results(_Strict):
-    schema_version: Literal["1.2"]  # frozen top-level key, required and present
+    schema_version: Literal["2.0"]  # frozen top-level key, required and present
     run: Run
     score: Score | None
     totals: Totals
@@ -339,7 +345,7 @@ class Results(_Strict):
 
     @model_validator(mode="after")
     def _consistency(self, info: ValidationInfo) -> Results:
-        status = self.run.status
+        status = self.run.run_status
         if status is RunStatus.FAILED:
             if self.run.error is None:
                 raise ValueError("failed run must carry run.error")
@@ -356,10 +362,10 @@ class Results(_Strict):
             and (self.run.target.labels is None or self.run.target.relationship_types is None)
             and not historical
         ):
-            raise ValueError("schema 1.2 target inventory must contain non-null arrays")
+            raise ValueError("schema 2.0 target inventory must contain non-null arrays")
 
         if (self.run.partial_reason is not None) != (status is RunStatus.PARTIAL):
-            raise ValueError("partial_reason must be non-null iff status is partial")
+            raise ValueError("partial_reason must be non-null iff run_status is partial")
 
         expected_totals = totals(self.checks)
         if self.totals.model_dump(by_alias=True) != expected_totals:
@@ -380,7 +386,7 @@ class Results(_Strict):
             c.skip_reason in (SkipReason.UNSUPPORTED, SkipReason.NOT_RUN) for c in self.checks
         )
         if has_gap and status is not RunStatus.PARTIAL:
-            raise ValueError("an unsupported/not_run skip requires run.status:partial")
+            raise ValueError("an unsupported/not_run skip requires run.run_status:partial")
 
         identities = [(c.suite_id, c.id) for c in self.checks]
         if len(identities) != len(set(identities)):

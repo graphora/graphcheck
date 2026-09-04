@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import yaml
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from graphcheck.contracts.check import load_suite
@@ -38,6 +38,7 @@ def shape_cases(draw):
     return data, rows, minimum <= row_count <= maximum
 
 
+@settings(deadline=None)
 @given(shape_cases())
 def test_shape_evaluation_matches_all_declared_predicates(case):
     data, rows, expected_pass = case

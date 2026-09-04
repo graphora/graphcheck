@@ -660,7 +660,16 @@ def profile(
                     else SafeErrorCode.UNKNOWN
                 ),
             )
-        raise
+        typer.echo(
+            "profile.internal_error: GraphCheck could not complete the graph profile.",
+            err=True,
+        )
+        typer.echo(
+            "Fix: Run `graphcheck debug --json`; if the connection is healthy, retry "
+            "`graphcheck profile` and report the debug JSON and GraphCheck version.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
     if telemetry is not None and not telemetry.profile_result_recorded:
         telemetry.record_profile_result(
@@ -683,7 +692,12 @@ def profile(
                 SafeErrorCode.BASELINE_WRITE_FAILED,
             )
         typer.echo(f"baseline.write_failed: Could not write the baseline: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        typer.echo(
+            "Fix: Check the configured artifacts path and filesystem permissions, then retry "
+            "`graphcheck profile`.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
     if telemetry is not None:
         telemetry.baseline_artifact = ArtifactOutcome.WRITTEN
         telemetry.artifact_write_ms = max(
@@ -1616,7 +1630,7 @@ def run_command(
         None,
         "--concurrency",
         min=1,
-        help="Maximum concurrent checks; overrides graphcheck.yml.",
+        help="Maximum concurrent checks; overrides the graphcheck.yml default of 2.",
     ),
     redacted: bool = typer.Option(
         False,
@@ -1840,11 +1854,11 @@ def run_command(
             raise typer.Exit(3) from artifact_exc
 
     if (
-        results.run.status.value == "failed"
+        results.run.run_status.value == "failed"
         and telemetry is not None
         and telemetry.process_outcome is ProcessOutcome.SUCCESS
     ):
-        # A failed run.status here comes from the shared service converting a preflight,
+        # A failed run.run_status here comes from the shared service converting a preflight,
         # configuration, or unexpected-engine error into a result. Classify an engine fault as
         # ENGINE / ENGINE_ERROR and everything else by its error code, so preflight failures
         # are not mislabelled as engine errors and engine faults are not mislabelled as user
@@ -2321,16 +2335,21 @@ def _print_run_summary(
     *,
     display_run_id: str | None = None,
 ) -> None:
-    from graphcheck.reporting.history import display_run_status
+    from graphcheck.reporting.coverage import calculate_coverage_status
     from graphcheck.reporting.presentation import present_results
 
     totals = results.totals
     presentation = present_results(results)
-    status = display_run_status(results).value
+    run_status = results.run.run_status.value
+    coverage_status = calculate_coverage_status(results).value
     run_label = "GraphCheck redacted run" if results.run.redaction.applied else "GraphCheck run"
+    typer.echo(f"{run_label} {display_run_id or results.run.id}")
     typer.echo(
-        f"{run_label} {display_run_id or results.run.id}: "
-        f"{typer.style(status, fg=_run_status_color(status), bold=True)}"
+        f"Run status: {typer.style(run_status, fg=_run_status_color(run_status), bold=True)}"
+    )
+    typer.echo(
+        f"Coverage status: "
+        f"{typer.style(coverage_status, fg=_run_status_color(coverage_status), bold=True)}"
     )
     _print_suite_score_table(results)
     typer.echo()

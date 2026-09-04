@@ -222,8 +222,8 @@ __marimo__/
 # GraphCheck
 /checks/
 profiles.yml
-!/profiles.yml
 .graphcheck/
+.hostile-artifacts/
 .superpowers/
 
 

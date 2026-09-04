@@ -1,0 +1,16 @@
+# Copy this file to profiles.yml before running the disposable local demo.
+# These credentials are intentionally public and must not be reused elsewhere.
+default: local
+profiles:
+  local:
+    uri: bolt://localhost:7687
+    user: neo4j
+    password: Password@123
+    password_env: null
+    database: graphcheck-demo
+  ci:
+    uri: bolt://localhost:7687
+    user: neo4j
+    password: null
+    password_env: NEO4J_PASSWORD
+    database: neo4j

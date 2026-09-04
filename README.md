@@ -2,8 +2,8 @@
 
 # GraphCheck
 
-[![Release](https://img.shields.io/badge/release-v0.1.0-5b5bd6)](https://github.com/graphora/graphcheck/releases)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-3776ab)](https://www.python.org/)
+[![Release](https://img.shields.io/badge/release-v0.2.0-5b5bd6)](https://github.com/graphora/graphcheck/releases)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f)](LICENSE)
 
 **Semantic observability for property graphs.**
@@ -11,7 +11,12 @@
 </div>
 
 <p align="center">
-  <img src="docs/graphcheck-demo.gif" width="900" alt="GraphCheck command-line demo">
+  <img src="docs/assets/graphcheck-demo.gif" width="900" alt="GraphCheck command-line demo">
+</p>
+
+<p align="center">
+  See a real report: <a href="https://graphora.github.io/graphcheck/docs/samples/report-findings.html">findings</a> and
+  <a href="https://graphora.github.io/graphcheck/docs/samples/report-clean.html">clean run</a>
 </p>
 
 ## The problem
@@ -25,10 +30,10 @@ YAML and produces deterministic, evidence-backed JSON and offline HTML reports f
 ## Quickstart
 
 For complete setup, credential, authoring, redaction, baseline, and configuration instructions, see
-the **[full user guide](docs/user-guide.md)**.
+the **[full user guide](docs/guides/user-guide.md)**.
 
-GraphCheck requires Python 3.12 or 3.13 and a supported Neo4j server. See the
-[compatibility matrix](docs/compatibility.md) for the tested Neo4j and Cypher versions.
+GraphCheck requires Python 3.12, 3.13, or 3.14 and a supported Neo4j server. See the
+[compatibility matrix](docs/reference/compatibility.md) for the tested Neo4j and Cypher versions.
 
 Install the published CLI and scaffold a project:
 
@@ -58,6 +63,9 @@ checks/example.yml      Example check suite
 .graphcheck/            Baselines, run history, JSON, and HTML reports
 ```
 
+New projects run up to two checks concurrently by default. Set `concurrency` in `graphcheck.yml`
+or pass `graphcheck run --concurrency N` to choose a different positive worker limit.
+
 Edit `profiles.yml` with the URI, database, and credential for your Neo4j instance. Enterprise and
 Developer deployments must use a user assigned only Neo4j's built-in `reader` role plus the
 automatic `PUBLIC` role; GraphCheck rejects missing, additional, or custom roles. Community
@@ -75,14 +83,18 @@ Each prepared run writes immutable history plus convenient `latest` copies:
 
 ```text
 .graphcheck/runs/<run-id>/results.json
+.graphcheck/runs/<run-id>/summary.json
 .graphcheck/runs/<run-id>/report.html
 .graphcheck/runs/latest/results.json
+.graphcheck/runs/latest/summary.json
 .graphcheck/runs/latest/report.html
 ```
 
 The HTML report is self-contained and works offline. Exit codes are stable for CI: `0` means all
 executed checks passed, `1` means an error-severity finding or execution error, `2` means a warning or
 incomplete evaluation, and `3` means the run could not be prepared or completed.
+See the **[CI/CD guide](docs/guides/ci-cd.md)** for copy-paste pull-request, scheduled, staging, and
+production workflows using the published GitHub Action.
 
 For development, use the locked environment instead:
 
@@ -90,6 +102,9 @@ For development, use the locked environment instead:
 uv sync --group dev
 uv run graphcheck --version
 ```
+
+Complete runnable projects and reference deployments live under [`examples/`](examples/), including
+the self-contained fraud-ring Docker quickstart and the Prometheus/Grafana monitoring stack.
 
 ## Example
 
@@ -137,10 +152,10 @@ Suite YAML is strict: duplicate keys, unknown fields, invalid payloads, and inco
 fail before execution. Runtime evaluation is rule-based; generated check suggestions remain inert
 until a person reviews and activates them.
 
-For the full contracts, see the [check YAML specification](docs/specs/SPEC-02-check-yaml.md),
-[`results.json` specification](docs/specs/SPEC-01-results-json.md), and
-[engine and CLI specification](docs/specs/SPEC-04%20Engine.md). The
-[agent guide](docs/agents.md), [telemetry disclosure](docs/telemetry.md),
+For the full contracts, see the [check YAML specification](docs/specifications/spec-02-check-yaml.md),
+[`results.json` specification](docs/specifications/spec-01-results-json.md), and
+[engine and CLI specification](docs/specifications/spec-04-engine.md). The
+[agent guide](docs/guides/agents.md), [telemetry disclosure](docs/reference/telemetry.md),
 and [contributor guide](CONTRIBUTING.md) cover integration and operational workflows.
 
 ## Non-goals

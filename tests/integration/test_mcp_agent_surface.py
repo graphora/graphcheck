@@ -37,8 +37,10 @@ async def test_mcp_agent_surface_uses_modern_protocol_and_supports_discovery(
         latest = await client.call_tool("get_results", {})
         assert latest.is_error is False
         assert latest.structured_content is not None
-        assert latest.structured_content["schema_version"]
+        assert latest.structured_content["schema_version"] == "2.0"
         assert "run" in latest.structured_content
+        assert "run_status" in latest.structured_content["run"]
+        assert "status" not in latest.structured_content["run"]
 
 
 @pytest.mark.anyio

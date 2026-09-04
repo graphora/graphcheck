@@ -1,0 +1,6 @@
+suite: hostile-empty
+competency:
+  - id: connector-remains-queryable
+    question: Can a read-only scalar query run when the graph is empty?
+    query: RETURN 1 AS healthy
+    expect: {rows: {exactly: 1}, columns: [healthy], equals: [1]}

@@ -1,0 +1,772 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "apoc": {
+          "title": "Apoc",
+          "type": "boolean"
+        },
+        "count_store": {
+          "title": "Count Store",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "apoc",
+        "count_store"
+      ],
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "CheckError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "fix": {
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "fix"
+      ],
+      "title": "CheckError",
+      "type": "object"
+    },
+    "CheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "compiled_query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Compiled Query"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "estimate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Estimate"
+            },
+            {
+              "const": false,
+              "type": "boolean"
+            }
+          ],
+          "title": "Estimate"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Evidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected": {
+          "additionalProperties": true,
+          "title": "Expected",
+          "type": "object"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "measured": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Measured"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Params"
+        },
+        "pattern": {
+          "$ref": "#/$defs/Pattern"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provenance"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "skip_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkipReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Started At"
+        },
+        "suite_id": {
+          "title": "Suite Id",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "required": [
+        "id",
+        "suite_id",
+        "pattern",
+        "name",
+        "provenance",
+        "severity",
+        "verdict",
+        "skip_reason",
+        "started_at",
+        "duration_ms",
+        "compiled_query",
+        "params",
+        "measured",
+        "expected",
+        "estimate",
+        "evidence",
+        "error"
+      ],
+      "title": "CheckResult",
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "properties": {
+        "ci": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ci"
+        },
+        "confidence": {
+          "title": "Confidence",
+          "type": "number"
+        },
+        "population": {
+          "title": "Population",
+          "type": "integer"
+        },
+        "sample_size": {
+          "title": "Sample Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sample_size",
+        "population",
+        "confidence"
+      ],
+      "title": "Estimate",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "cap": {
+          "title": "Cap",
+          "type": "integer"
+        },
+        "elements": {
+          "items": {
+            "$ref": "#/$defs/EvidenceElement"
+          },
+          "minItems": 1,
+          "title": "Elements",
+          "type": "array"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "total_count": {
+          "title": "Total Count",
+          "type": "integer"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "elements",
+        "truncated",
+        "cap",
+        "total_count"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "EvidenceElement": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "node",
+            "rel",
+            "aggregate"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Labels"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "title": "EvidenceElement",
+      "type": "object"
+    },
+    "Pattern": {
+      "enum": [
+        "conformance",
+        "drift",
+        "competency-shape",
+        "competency-regression"
+      ],
+      "title": "Pattern",
+      "type": "string"
+    },
+    "Redaction": {
+      "additionalProperties": false,
+      "properties": {
+        "applied": {
+          "title": "Applied",
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/RedactionPolicy"
+        }
+      },
+      "required": [
+        "policy",
+        "applied"
+      ],
+      "title": "Redaction",
+      "type": "object"
+    },
+    "RedactionPolicy": {
+      "enum": [
+        "none",
+        "mask",
+        "hash"
+      ],
+      "title": "RedactionPolicy",
+      "type": "string"
+    },
+    "ResultsTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "database": {
+          "title": "Database",
+          "type": "string"
+        },
+        "edition": {
+          "title": "Edition",
+          "type": "string"
+        },
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Labels"
+        },
+        "nodes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nodes"
+        },
+        "relationship_types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Relationship Types"
+        },
+        "relationships": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relationships"
+        },
+        "server_version": {
+          "title": "Server Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "database",
+        "server_version",
+        "edition",
+        "fingerprint",
+        "capabilities",
+        "labels",
+        "relationship_types"
+      ],
+      "title": "ResultsTarget",
+      "type": "object"
+    },
+    "Run": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit_code": {
+          "title": "Exit Code",
+          "type": "integer"
+        },
+        "finished_at": {
+          "title": "Finished At",
+          "type": "string"
+        },
+        "graphcheck_version": {
+          "title": "Graphcheck Version",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "pack_version": {
+          "title": "Pack Version",
+          "type": "string"
+        },
+        "partial_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Partial Reason"
+        },
+        "redaction": {
+          "$ref": "#/$defs/Redaction"
+        },
+        "run_status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection"
+        },
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResultsTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "started_at",
+        "finished_at",
+        "graphcheck_version",
+        "pack_version",
+        "run_status",
+        "partial_reason",
+        "exit_code",
+        "selection",
+        "redaction",
+        "target",
+        "error"
+      ],
+      "title": "Run",
+      "type": "object"
+    },
+    "RunStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "title": "RunStatus",
+      "type": "string"
+    },
+    "Score": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "const": "weighted-by-severity",
+          "title": "Method",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "integer"
+        },
+        "weights": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Weights",
+          "type": "object"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "weights"
+      ],
+      "title": "Score",
+      "type": "object"
+    },
+    "Selection": {
+      "additionalProperties": false,
+      "properties": {
+        "fail_fast": {
+          "title": "Fail Fast",
+          "type": "boolean"
+        },
+        "suites": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Suites",
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "suites",
+        "tags",
+        "fail_fast"
+      ],
+      "title": "Selection",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "error",
+        "warn"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SkipReason": {
+      "enum": [
+        "generated",
+        "unsupported",
+        "not_run"
+      ],
+      "title": "SkipReason",
+      "type": "string"
+    },
+    "Suite": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Score"
+        },
+        "source_sha": {
+          "title": "Source Sha",
+          "type": "string"
+        },
+        "totals": {
+          "$ref": "#/$defs/Totals"
+        }
+      },
+      "required": [
+        "id",
+        "source_sha",
+        "score",
+        "totals"
+      ],
+      "title": "Suite",
+      "type": "object"
+    },
+    "Totals": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "title": "Checks",
+          "type": "integer"
+        },
+        "errored": {
+          "title": "Errored",
+          "type": "integer"
+        },
+        "fail": {
+          "title": "Fail",
+          "type": "integer"
+        },
+        "pass": {
+          "title": "Pass",
+          "type": "integer"
+        },
+        "skipped": {
+          "title": "Skipped",
+          "type": "integer"
+        },
+        "warn": {
+          "title": "Warn",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checks",
+        "pass",
+        "fail",
+        "warn",
+        "errored",
+        "skipped"
+      ],
+      "title": "Totals",
+      "type": "object"
+    },
+    "Verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "warn",
+        "errored",
+        "skipped"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/CheckResult"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "run": {
+      "$ref": "#/$defs/Run"
+    },
+    "schema_version": {
+      "const": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "score": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Score"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "suites": {
+      "items": {
+        "$ref": "#/$defs/Suite"
+      },
+      "title": "Suites",
+      "type": "array"
+    },
+    "totals": {
+      "$ref": "#/$defs/Totals"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run",
+    "score",
+    "totals",
+    "suites",
+    "checks"
+  ],
+  "title": "Results",
+  "type": "object"
+}

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
     reason="set GRAPHCHECK_LLM_INTEGRATION=1 to run live generation smoke tests",
 )
 
-FIXTURE = Path(__file__).parents[1] / "contracts" / "fixtures" / "baseline.json"
+FIXTURE = Path(__file__).parents[1] / "unit" / "contracts" / "fixtures" / "baseline.json"
 
 
 def test_live_generation_smoke(tmp_path: Path) -> None:

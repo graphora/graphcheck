@@ -1,0 +1,124 @@
+{
+  "schema_version": "2.0",
+  "run": {
+    "id": "run_01HXCLEAN",
+    "started_at": "2026-07-06T09:00:00Z",
+    "finished_at": "2026-07-06T09:00:01Z",
+    "graphcheck_version": "0.1.0",
+    "pack_version": "0.1.0",
+    "run_status": "complete",
+    "partial_reason": null,
+    "exit_code": 0,
+    "selection": {
+      "suites": [
+        "customer-360"
+      ],
+      "tags": [],
+      "fail_fast": false
+    },
+    "redaction": {
+      "policy": "none",
+      "applied": false
+    },
+    "target": {
+      "database": "neo4j",
+      "server_version": "5.18.0",
+      "edition": "community",
+      "fingerprint": "sha256:clean123",
+      "capabilities": {
+        "apoc": true,
+        "count_store": true
+      },
+      "nodes": 1250,
+      "relationships": 3480,
+      "labels": [
+        "Account",
+        "Customer"
+      ],
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS"
+      ]
+    },
+    "error": null
+  },
+  "score": {
+    "value": 100,
+    "method": "weighted-by-severity",
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "totals": {
+    "checks": 2,
+    "pass": 2,
+    "fail": 0,
+    "warn": 0,
+    "errored": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "id": "customer-360",
+      "source_sha": "sha256:clean-suite",
+      "score": 100,
+      "totals": {
+        "checks": 2,
+        "pass": 2,
+        "fail": 0,
+        "warn": 0,
+        "errored": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "checks": [
+    {
+      "id": "cust-tax-id-present",
+      "suite_id": "customer-360",
+      "pattern": "conformance",
+      "name": "Customer.tax_id is present",
+      "provenance": null,
+      "severity": "error",
+      "verdict": "pass",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:00:00Z",
+      "duration_ms": 61,
+      "compiled_query": "MATCH (c:Customer) RETURN count(c) AS total, count(c.tax_id) AS present",
+      "params": {},
+      "measured": {
+        "coverage": 1.0
+      },
+      "expected": {
+        "threshold": 1.0
+      },
+      "estimate": false,
+      "evidence": null,
+      "error": null
+    },
+    {
+      "id": "account-id-present",
+      "suite_id": "customer-360",
+      "pattern": "conformance",
+      "name": "Account.id is present",
+      "provenance": null,
+      "severity": "warn",
+      "verdict": "pass",
+      "skip_reason": null,
+      "started_at": "2026-07-06T09:00:00Z",
+      "duration_ms": 42,
+      "compiled_query": "MATCH (a:Account) RETURN count(a) AS total, count(a.id) AS present",
+      "params": {},
+      "measured": {
+        "coverage": 1.0
+      },
+      "expected": {
+        "threshold": 1.0
+      },
+      "estimate": false,
+      "evidence": null,
+      "error": null
+    }
+  ]
+}

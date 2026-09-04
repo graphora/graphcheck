@@ -1,0 +1,14 @@
+suite: hostile-llm-kg-builder
+conformance:
+  - id: entity-identifiers-survive
+    check: completeness
+    with: {label: __Entity__, property: id}
+competency:
+  - id: escaped-label-is-queryable
+    question: Can GraphCheck query a label containing punctuation?
+    query: "MATCH (n:`Country / Region`) RETURN count(n) AS count"
+    expect: {rows: {exactly: 1}, columns: [count], equals: [1]}
+  - id: escaped-backtick-label-is-queryable
+    question: Can GraphCheck query a label containing a backtick?
+    query: "MATCH (n:`Odd``Label`) RETURN count(n) AS count"
+    expect: {rows: {exactly: 1}, columns: [count], equals: [1]}

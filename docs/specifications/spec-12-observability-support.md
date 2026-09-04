@@ -1,0 +1,417 @@
+# SPEC-12 --- Observability Support
+
+GraphCheck provides optional, customer-owned observability using Prometheus and Grafana. A
+dedicated `graphcheck monitor` process performs lightweight read-only health checks through the
+existing Neo4j connector and exposes the resulting operational metrics in Prometheus format.
+
+Observability is disabled by default and is not required for GraphCheck's validation, profiling,
+generation, reporting, or other CLI workflows. It is separate from GraphCheck's anonymous product
+telemetry.
+
+------------------------------------------------------------------------
+
+# Problem Statement
+
+Operators need a low-cost signal showing whether the database configured for GraphCheck is
+reachable and responsive from GraphCheck's point of view. Requiring direct access to a
+database-native monitoring endpoint would add database configuration and deployment requirements
+that are unnecessary for this initial signal.
+
+GraphCheck therefore owns the health probe and exports only its result and timing. Prometheus
+scrapes GraphCheck, and Grafana reads the stored series from Prometheus. Neither system connects to
+Neo4j.
+
+------------------------------------------------------------------------
+
+# Goals
+
+Observability answers:
+
+1.  Is the configured Neo4j database reachable through GraphCheck's connector?
+2.  Is the GraphCheck connector able to execute a lightweight read query?
+3.  How long do GraphCheck health checks take?
+4.  How many health checks have failed since the monitoring process started?
+5.  When did the last successful health check complete?
+
+The implementation must:
+
+-   remain opt-in;
+-   reuse GraphCheck's existing project, profile, and Neo4j connector mechanisms;
+-   perform only a lightweight read-only health check;
+-   expose a small, fixed set of Prometheus metrics;
+-   keep monitoring failures isolated from normal GraphCheck commands; and
+-   avoid exposing graph contents, credentials, queries authored by customers, check results,
+    graph fingerprints, or project identity.
+
+------------------------------------------------------------------------
+
+# Non-goals
+
+This specification does not provide:
+
+-   database-internal or host-level resource monitoring;
+-   semantic check results as Prometheus metrics;
+-   continuous monitoring unless `graphcheck monitor` is running;
+-   automatic startup of GraphCheck, Prometheus, or Grafana;
+-   modification of Neo4j configuration or infrastructure;
+-   automatic remediation or restart behavior; or
+-   alert definitions or alert delivery.
+
+------------------------------------------------------------------------
+
+# Design Principles
+
+## Optional
+
+Monitoring starts only when a user explicitly runs `graphcheck monitor`. Stopping that process has
+no effect on GraphCheck's normal CLI commands.
+
+## GraphCheck-centric
+
+GraphCheck observes Neo4j through the same connector used by its other database operations.
+Prometheus scrapes GraphCheck's `/metrics` endpoint, not Neo4j. Grafana queries only Prometheus.
+
+## Non-invasive
+
+GraphCheck never modifies Neo4j. The health probe is the read-only query:
+
+```cypher
+RETURN 1 AS healthy
+```
+
+GraphCheck does not change Neo4j configuration, install monitoring software, or restart services.
+
+## Separation from telemetry
+
+Observability exposes operational health metrics to customer-owned infrastructure. Telemetry is a
+separate, opt-in mechanism for anonymous GraphCheck product-usage analytics. The observability
+modules do not depend on the telemetry package.
+
+------------------------------------------------------------------------
+
+# Architecture
+
+```text
+                  Neo4j
+                     ^
+                     | existing read-only connector
+                     |
+          graphcheck monitor process
+                     |
+                     | /metrics on port 9100 by default
+                     v
+                Prometheus
+                     |
+                     | PromQL
+                     v
+                  Grafana
+```
+
+GraphCheck runs on the host machine in the reference deployment. Prometheus and Grafana run in
+Docker containers. Prometheus reaches the host through `host.docker.internal`, which Docker
+Compose maps to the host gateway. The metrics endpoint binds to `127.0.0.1` by default. The
+reference Docker deployment therefore requires the user to explicitly opt in to a host-accessible
+bind address with `graphcheck monitor --host 0.0.0.0`.
+
+------------------------------------------------------------------------
+
+# Monitoring Flow
+
+```text
+User starts graphcheck monitor
+        |
+        v
+GraphCheck loads the selected connection profile
+        |
+        v
+GraphCheck creates the existing Neo4jClient
+        |
+        +--------------------------+
+        |                          |
+        v                          v
+Metrics HTTP server starts     Periodic health check
+        |                          |
+        |                          v
+        |                    RETURN 1 AS healthy
+        |                          |
+        |                          v
+        |                    Metrics are updated
+        |                          |
+        +-------------+------------+
+                      |
+                      v
+             Prometheus scrapes /metrics
+                      |
+                      v
+              Grafana queries Prometheus
+```
+
+The default health-check interval is 15 seconds. Each health query uses the connector's existing
+per-query timeout mechanism with a five-second timeout.
+
+------------------------------------------------------------------------
+
+# Components and Responsibilities
+
+## `metrics.py`
+
+Defines the module-level Prometheus metric objects. It contains no health checks, connection logic,
+HTTP behavior, scheduling, or CLI behavior.
+
+## `health.py`
+
+Performs one health check through `Neo4jClient.run_read`. It measures elapsed time with a monotonic
+clock and records the completion time as a Unix timestamp. It returns an immutable structured
+result containing database state, connector state, duration, timestamp, and an optional error.
+Connector reachability and database health are intentionally reported independently so that
+transport or connectivity failures can be distinguished from database-specific or query failures.
+
+Expected connector and query failures are returned as failed health results rather than propagated
+to the monitoring loop. The module does not import or update Prometheus metrics.
+
+## `collector.py`
+
+Calls the health component once and maps its structured result into the Prometheus metrics. It
+increments the failure counter only after failed checks and updates the last-success timestamp only
+after successful checks. It returns the health result to its caller.
+
+## `server.py`
+
+Starts the Prometheus client's HTTP server for the existing registry. The default bind address is
+`127.0.0.1` and the default port is `9100`. It does not perform health checks or schedule
+collection.
+
+## `runner.py`
+
+Orchestrates the monitoring lifecycle. It starts the metrics server once, then sequentially invokes
+the collector and sleeps for the configured interval. It owns the loop and stops when interrupted
+with Ctrl+C. Checks never overlap within one monitoring process.
+
+## `graphcheck monitor` CLI
+
+Acts as a thin entry point. It:
+
+1.  discovers the GraphCheck project;
+2.  loads and selects an existing connection profile;
+3.  constructs the existing `Neo4jClient`;
+4.  displays the endpoint and collection interval;
+5.  delegates to `run_monitor`; and
+6.  closes the Neo4j client when monitoring ends.
+
+The command supports `--profile`, `--host`, `--port`, and `--interval`. By default, the server binds
+to `127.0.0.1` and the CLI displays `http://127.0.0.1:9100/metrics`. Docker or remote scraping
+requires an explicit `--host 0.0.0.0`; the CLI displays that all-interface bind address as
+`localhost` when presenting a usable local endpoint.
+
+The metrics endpoint is unauthenticated. Binding it to all interfaces is therefore an intentional
+opt-in, and operators are responsible for restricting access with appropriate network controls.
+
+The CLI does not execute health queries, update metrics, serve HTTP, or implement a monitoring loop.
+
+------------------------------------------------------------------------
+
+# Prometheus Metrics
+
+The implementation exports exactly these GraphCheck-owned metric families:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `graphcheck_database_up` | Gauge | Whether the configured database health query succeeded (`1`) or failed (`0`). |
+| `graphcheck_connector_connected` | Gauge | Whether GraphCheck successfully communicated with the configured Neo4j instance during the latest health check (`1`) or encountered a transport/connectivity failure (`0`). This may remain `1` when the health query fails because of a database-specific condition, such as permission denied, the configured database not being found, or a query failure. |
+| `graphcheck_healthcheck_duration_seconds` | Histogram | Total elapsed time spent performing database health checks. |
+| `graphcheck_healthcheck_failures_total` | Counter | Number of failed database health checks since process start. |
+| `graphcheck_last_healthcheck_timestamp_seconds` | Gauge | Unix timestamp of the last successful database health check. |
+
+The metrics contain no labels and therefore introduce no customer-derived or unbounded label
+cardinality. The Prometheus Python client may also expose its standard process and Python runtime
+collectors through the default registry.
+
+------------------------------------------------------------------------
+
+# Prometheus Integration
+
+The reference Prometheus configuration defines a `graphcheck` scrape job targeting:
+
+```text
+host.docker.internal:9100
+```
+
+The default Prometheus scrape interval is 15 seconds. The metrics path is the Prometheus default,
+`/metrics`.
+
+Because Prometheus runs in Docker in the reference deployment, GraphCheck must be started with an
+explicit host-accessible bind address:
+
+```bash
+graphcheck monitor --host 0.0.0.0
+```
+
+The default `127.0.0.1` bind address is intended for local, non-containerized scraping only.
+
+Prometheus performs read-only HTTP scrapes of GraphCheck. It does not connect to Neo4j and does not
+execute Cypher.
+
+------------------------------------------------------------------------
+
+# Grafana Integration
+
+Grafana is provisioned with Prometheus as its default datasource and loads the bundled GraphCheck
+database-health dashboard from the mounted dashboard directory.
+
+The implemented dashboard displays:
+
+-   database reachability;
+-   connector state;
+-   95th-percentile health-check duration over five minutes;
+-   cumulative health-check failures; and
+-   seconds since the last successful health check.
+
+The last-success timestamp is updated only after a successful health check. Before the first
+successful check it remains uninitialized, and the "Seconds Since Last Successful Health Check"
+panel displays `Never` (or its configured no-data state) instead of interpreting the uninitialized
+timestamp as elapsed time.
+
+Grafana reads only from Prometheus. It does not connect to GraphCheck or Neo4j.
+
+------------------------------------------------------------------------
+
+# Docker Deployment Architecture
+
+The reference Docker Compose project starts only Prometheus and Grafana:
+
+```text
+Host machine
+  graphcheck monitor --host 0.0.0.0  (explicit opt-in)
+    0.0.0.0:9100
+          ^
+          | host.docker.internal:9100
+          |
+Docker Compose network
+  Prometheus:9090 ----> Grafana:3000
+```
+
+The Compose configuration maps `host.docker.internal` to Docker's host gateway for Prometheus.
+GraphCheck and Neo4j are not launched, configured, or modified by this Compose project. The
+all-interface bind is required for this container-to-host scrape path and must be explicitly
+selected because the metrics endpoint is unauthenticated. Without `--host 0.0.0.0`, GraphCheck
+remains bound to `127.0.0.1` and is available only on the host machine.
+
+Repository layout:
+
+```text
+examples/monitoring/
+|-- compose.yml
+|-- prometheus/
+|   `-- prometheus.yml
+`-- grafana/
+    |-- dashboards/
+    |   `-- graphcheck-database-health.json
+    `-- provisioning/
+        |-- dashboards/
+        `-- datasources/
+```
+
+------------------------------------------------------------------------
+
+# Runtime Sequence
+
+1.  The user starts `graphcheck monitor` from a GraphCheck project. For the reference Docker
+    deployment or remote scraping, the user explicitly runs `graphcheck monitor --host 0.0.0.0`.
+2.  The CLI resolves the requested or default Neo4j connection profile.
+3.  The CLI creates `Neo4jClient` and calls `run_monitor`.
+4.  The runner starts the metrics HTTP server on `127.0.0.1:9100` by default, or on the explicitly
+    configured host and port.
+5.  The runner invokes the collector immediately.
+6.  The health component executes `RETURN 1 AS healthy` with a five-second connector timeout.
+7.  The collector updates gauges, the histogram, and either the last-success timestamp or failure
+    counter.
+8.  The runner sleeps for the configured interval and repeats from step 5.
+9.  Prometheus periodically scrapes GraphCheck's `/metrics` endpoint.
+10. Grafana queries Prometheus and renders the provisioned dashboard.
+11. Ctrl+C stops the monitoring loop, and the CLI closes the Neo4j client.
+
+------------------------------------------------------------------------
+
+# Operational Invariants
+
+1.  Monitoring is opt-in and starts only through `graphcheck monitor`.
+2.  Normal GraphCheck commands do not depend on the monitor process, Prometheus, or Grafana.
+3.  Stopping monitoring does not change normal GraphCheck CLI behavior.
+4.  GraphCheck never modifies Neo4j or its configuration.
+5.  Health checks are lightweight and read-only.
+6.  GraphCheck reuses the existing connection profile and `Neo4jClient` implementation.
+7.  Prometheus scrapes GraphCheck, not Neo4j.
+8.  Grafana reads only from Prometheus.
+9.  Health-check failures are represented in metrics and do not terminate the monitoring loop.
+10. No graph contents, credentials, customer queries, semantic check outcomes, fingerprints, or
+    project identifiers are exposed as observability metrics.
+11. The CLI contains no health-check, metric-update, HTTP-server, or scheduling logic.
+
+------------------------------------------------------------------------
+
+# Failure Handling
+
+## Profile and connector setup
+
+Project and profile errors use GraphCheck's existing structured error handling. The CLI exits with a
+non-zero status and closes an initialized client during cleanup.
+
+## Metrics server startup
+
+If the metrics server cannot bind, including when the selected port is already in use, the CLI
+prints a concise error without a Python traceback and exits non-zero. The displayed address uses
+`127.0.0.1` for the default bind address. When `0.0.0.0` is explicitly supplied, the CLI presents
+it as `localhost` for a usable local endpoint.
+
+## Health checks
+
+Connector, authentication, Bolt, timeout, query, and unexpected-result failures produce a failed
+`HealthResult`. The collector sets the database gauge to `0`; it sets the connector gauge according
+to whether GraphCheck communicated with Neo4j, allowing transport/connectivity failures to be
+distinguished from database-specific or query failures. It observes the attempt's duration and
+increments the failure counter. It does not replace the last-success timestamp.
+
+After a later successful check, the gauges return to `1` and the last-success timestamp advances.
+
+## Monitoring process termination
+
+Ctrl+C stops the runner. When the process stops, `/metrics` is no longer available and Prometheus
+marks its GraphCheck target unavailable. Existing Prometheus time series remain subject to
+Prometheus retention. Normal GraphCheck commands remain available.
+
+------------------------------------------------------------------------
+
+# Compatibility Matrix
+
+| Component | Tested version | Status |
+| --- | --- | --- |
+| Python | 3.12, 3.13, and 3.14 | Covered by project CI |
+| Prometheus | 3.5.0 | Pinned by the reference Compose file |
+| Grafana | 12.1.0 | Pinned by the reference Compose file |
+| Docker Compose | v5.1.4 | Validated with the reference implementation |
+| Neo4j | Neo4j Desktop (DBMS 2026.05.0) | Validated with the reference implementation |
+
+Additional compatibility testing for Docker Compose and Neo4j versions will be documented in future revisions of this specification.
+
+------------------------------------------------------------------------
+
+# Acceptance Criteria
+
+The observability feature is accepted when all of the following hold:
+
+1.  `graphcheck monitor` loads an existing profile, constructs `Neo4jClient`, and starts
+    successfully with valid configuration and an available port.
+2.  The command exposes a Prometheus-compatible `/metrics` endpoint on the configured host and port.
+3.  The endpoint exports all five GraphCheck metric families defined by this specification.
+4.  Prometheus successfully scrapes the GraphCheck target from the reference Docker deployment.
+5.  The provisioned Grafana dashboard loads successfully and queries the GraphCheck metrics through
+    Prometheus.
+6.  While Neo4j is reachable, successful checks set the database and connector gauges to `1` and
+    advance the last-success timestamp.
+7.  Stopping or making Neo4j unreachable causes subsequent health checks to set the database and
+    connector gauges to `0` and increment the failure counter.
+8.  Health-check durations are observed for both successful and failed checks.
+9.  Stopping `graphcheck monitor` makes the Prometheus GraphCheck target unavailable without
+    affecting other GraphCheck CLI commands.
+10. A metrics-server startup failure exits non-zero with a concise message and no Python traceback.
+11. All automated lint, formatting, unit, integration, and configuration tests pass.
