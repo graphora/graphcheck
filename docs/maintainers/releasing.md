@@ -29,12 +29,24 @@ first upload — the name `graphcheck` is claimed only on the first successful p
 
 ## Cutting a release
 
-1. Bump `version` in `pyproject.toml`. This is the single source of truth; `--version` reads it
-   from the installed distribution metadata (`importlib.metadata`), so the two never drift.
-2. Update `CHANGELOG.md`.
+1. Bump `__version__` in `src/graphcheck/__init__.py`. This is the single source of truth:
+   `pyproject.toml` declares the version as `dynamic` and `[tool.hatch.version]` reads the literal
+   at build time, and `--version` prints the same literal, so the wheel and the CLI never drift.
+   Do not add a `version` key to `pyproject.toml` — the build fails if the field is both dynamic
+   and static.
+2. Update `CHANGELOG.md`: move the `[Unreleased]` entries under `## [<version>] - <date>`.
 3. Merge to `development` through the normal PR gate.
-4. Create a GitHub Release whose tag is `v<version>` (for example `v0.1.0`), targeting the merge
-   commit. Publishing the release triggers the workflow.
+4. Build once locally and read the filename before you tag. This catches a forgotten version bump
+   while it still costs nothing:
+
+   ```console
+   uv build
+   ls dist/graphcheck-*-py3-none-any.whl
+   ```
+
+   The filename must contain the version you are about to tag. If it does not, step 1 was missed.
+5. Create a GitHub Release whose tag is `v<version>` (for example `v0.1.0`), targeting the merge
+   commit from step 3. Publishing the release triggers the workflow.
 
 The workflow then:
 
@@ -43,11 +55,62 @@ The workflow then:
 - runs `twine check` and a clean-environment install smoke test (`graphcheck --version`),
 - publishes to PyPI from the protected `pypi` environment via Trusted Publishing.
 
-## Verifying a release
+### If the release fails its version guard
 
-After the workflow succeeds:
+The tag cannot be reused. `[tool.hatch.version]` reads the literal from the tree at the tagged
+commit, so re-running the workflow on the same tag rebuilds the same wrong version. Correct the
+literal on `development` through the normal PR gate, then recreate the release on the new merge
+commit:
 
-```bash
-pipx install "graphcheck==<version>"
-graphcheck --version
+```console
+gh release view v<version> --json body --jq .body > /tmp/release-notes.md   # keep the notes first
+gh release delete v<version> --yes --cleanup-tag
+gh release create v<version> --target <new merge commit> \
+  --title "GraphCheck <version>" --notes-file /tmp/release-notes.md
 ```
+
+A failed guard uploads nothing, so no filename is burned. That is what the guard is for: PyPI never
+allows a filename to be reused, so a wheel uploaded under the wrong version would make that version
+unpublishable for good.
+
+## After the release publishes
+
+1. Verify from the index rather than from a green workflow:
+
+   ```console
+   pipx install "graphcheck==<version>"
+   graphcheck --version
+   ```
+
+2. Land any follow-up documentation on `development` first, so one promotion carries it. Every
+   promotion costs a back-merge (step 4), so promoting twice for one release is worth avoiding.
+3. Promote `development` to `main` with a pull request titled
+   `Promote development to main (v<version>)`.
+4. Back-merge `main` into `development`. The promotion creates a merge commit on `main` that never
+   returns, so without this the next promotion opens `BEHIND`, and
+   `strict_required_status_checks_policy` will not merge a `BEHIND` pull request.
+
+   Do not open the back-merge as `main` into `development`. The strict policy requires the head
+   branch to be up to date with the base, and after a promotion the two branches are mutually
+   behind — `development` lacks the promotion merge, `main` lacks everything merged since — so
+   neither branch can serve as the head. **Update branch** is refused as well, because
+   `development` requires a pull request. Use a topic branch on top of `development`:
+
+   ```console
+   git switch development && git pull
+   git switch -c backmerge-main-after-v<version>
+   git merge origin/main
+   git push -u origin backmerge-main-after-v<version>
+   ```
+
+   `git diff origin/development HEAD` should be empty: the branch carries the merge commit and no
+   content. Open it as a pull request into `development`.
+5. Update the GitHub Action, or its users stay on the previous release. In
+   `graphora/graphcheck-action`:
+   - bump the `version` input default in `action.yml` to `<version>`,
+   - re-read the other input descriptions for behaviour this release changed,
+   - merge, cut a `v1.0.x` release, and move the `v1` tag to it.
+
+   Merging alone does not move `v1`, and `v1` is the ref real workflows use. The `v1.0.x` tags are
+   immutable under that repository's `Immutable semantic release` ruleset; `v1` is deliberately
+   outside the pattern so it can be repointed.
