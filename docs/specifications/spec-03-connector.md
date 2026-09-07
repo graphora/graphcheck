@@ -110,7 +110,10 @@ transaction. Conditional measurement/evidence plans use it so both queries obser
 snapshot and share the original monotonic deadline.
 
 Successful read classifications are cached only on the owning `Neo4jClient`, keyed by exact query
-text and database. The per-client LRU holds at most 256 entries, shares one in-flight preflight
+text, database, and the missing-schema allowance. Preflight summaries reject missing labels,
+relationship types, and property keys before execution unless the engine explicitly permits them
+for empty-graph conformance. A permissive cached preflight cannot authorize a stricter read.
+The per-client LRU holds at most 256 entries, shares one in-flight preflight
 between concurrent identical reads, never caches rejected, unknown, timed-out, or failed
 classifications, and is cleared when the client closes. Query parameters are excluded because
 Neo4j classifies the query structure; live connector coverage verifies that changing parameter

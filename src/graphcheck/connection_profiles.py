@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from graphcheck.errors import (
     profile_invalid,
@@ -15,14 +15,15 @@ from graphcheck.errors import (
     profile_uri_invalid,
 )
 from graphcheck.project import PROFILES_FILE
+from graphcheck.yaml_loader import load_yaml_mapping
 
 
 class ConnectionProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     uri: str
     user: str
-    password: str | None = None
+    password: str | None = Field(default=None, repr=False)
     password_env: str | None = None
     database: str
 
@@ -39,7 +40,7 @@ class ConnectionProfile(BaseModel):
 
 
 class ProfilesFile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     default: str
     profiles: dict[str, ConnectionProfile]
@@ -82,10 +83,15 @@ def load_profiles(root: Path) -> ProfilesFile:
     if not path.exists():
         raise profile_missing()
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml_mapping(path.read_text(encoding="utf-8"), description="profiles.yml")
         return ProfilesFile.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
-        raise profile_invalid(f"Invalid profiles.yml: {exc}") from exc
+    except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, ValidationError)
+            else "Use valid UTF-8 YAML with unique mapping keys."
+        )
+        raise profile_invalid(f"Invalid profiles.yml: {detail}") from None
 
 
 def select_profile(

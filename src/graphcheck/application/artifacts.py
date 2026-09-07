@@ -121,8 +121,7 @@ def publish_run_directory(artifacts: RenderedArtifacts, directory: Path) -> None
             (staging / name).write_bytes(content)
 
         if directory.exists():
-            is_junction = getattr(directory, "is_junction", lambda: False)
-            if not directory.is_dir() or directory.is_symlink() or is_junction():
+            if not directory.is_dir() or directory.is_symlink() or directory.is_junction():
                 raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
             directory.replace(backup)
             previous_moved = True

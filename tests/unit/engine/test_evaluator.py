@@ -76,6 +76,67 @@ def _competency(
     )
 
 
+@pytest.mark.parametrize("assertion", ["equals", "contains"])
+def test_regression_compares_all_fields_of_maps_that_resemble_evidence(assertion):
+    actual = {"kind": "node", "id": "same", "balance": 10}
+    pinned = {"kind": "node", "id": "same", "balance": 99}
+
+    result = evaluate_check(_competency({assertion: [pinned]}), [{"value": actual}])
+
+    assert result.passed is False
+
+
+def test_unique_compares_all_fields_of_maps_that_resemble_evidence():
+    rows = [{"kind": "node", "id": "same", "balance": value} for value in (10, 99)]
+
+    assert evaluate_check(_competency({"unique": True}), rows).passed is True
+
+
+def test_collection_valued_kind_is_an_ordinary_map_field():
+    value = {"kind": ["retail"], "id": "same"}
+
+    assert evaluate_check(_competency({"equals": [value]}), [{"value": value}]).passed is True
+    assert _pointers_from_row(value) == []
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_contains_normalizes_values_in_linear_work(monkeypatch, streaming):
+    from graphcheck.engine import evaluator as evaluator_module
+
+    count = 100
+    compiled = _competency({"contains": list(range(count))})
+    rows = [{"value": value} for value in range(count)]
+    calls = 0
+    comparisons = 0
+    original = evaluator_module._freeze
+
+    class Comparable:
+        def __init__(self, value):
+            self.value = value
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __eq__(self, other):
+            nonlocal comparisons
+            comparisons += 1
+            return self.value == other.value
+
+    def counted(value):
+        nonlocal calls
+        calls += 1
+        return Comparable(original(value))
+
+    monkeypatch.setattr(evaluator_module, "_freeze", counted)
+    if streaming:
+        consumption = evaluator_module.CompetencyConsumption(compiled, count)
+        assert [consumption.stop_when(row) for row in rows] == [False] * (count - 1) + [True]
+    else:
+        assert evaluate_check(compiled, rows).passed is True
+    assert calls <= 2 * count
+    assert comparisons <= 2 * count
+
+
 def _drift(
     tolerance: dict[str, object],
     *,
@@ -202,6 +263,20 @@ def test_raw_neo4j_entities_are_preserved_as_evidence_pointers():
         "labels": None,
         "type": "CONTROLS",
     }
+
+
+def test_graph_properties_cannot_override_real_entity_identity():
+    from neo4j.graph import Graph, Node
+
+    graph = Graph()
+    properties = {"kind": "node", "id": "domain-id"}
+    nodes = [Node(graph, f"4:graph:{index}", index, ["Customer"], properties) for index in (1, 2)]
+
+    assert evaluate_check(_competency({"unique": True}), [{"n": node} for node in nodes]).passed
+    assert [pointer.id for pointer in _pointers_from_row({"nodes": nodes})] == [
+        "4:graph:1",
+        "4:graph:2",
+    ]
 
 
 def test_nested_result_maps_and_path_like_values_preserve_graph_pointers():

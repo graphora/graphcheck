@@ -1571,6 +1571,56 @@ def test_bounded_result_stops_without_draining_and_closes_the_session(monkeypatc
     }
 
 
+def test_bounded_read_checks_plan_warnings_even_after_a_permissive_cache_entry(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    notification = {"code": "Neo.ClientNotification.Statement.UnknownLabelWarning"}
+
+    class Result:
+        def keys(self):
+            return ("count",)
+
+        def __iter__(self):
+            yield {"count": 0}
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def run(self, query, params):
+            calls.append(str(query))
+            if _is_explain(query):
+                return SimpleNamespace(
+                    consume=lambda: SimpleNamespace(
+                        query_type="r", metadata={"notifications": [notification]}
+                    )
+                )
+            return Result()
+
+    monkeypatch.setattr(
+        "graphcheck.neo4j_adapter.GraphDatabase.driver",
+        lambda *a, **k: SimpleNamespace(session=lambda **kw: Session()),
+    )
+    client = Neo4jClient(
+        ConnectionProfile(uri="bolt://x", user="u", password="p", database="neo4j")
+    )
+    query = "MATCH (n:Typo) RETURN count(n) AS count"
+    options = {"policy": ResultPolicy(max_rows=10), "stop_when": lambda row: True}
+
+    assert client.run_read_result_bounded(query, allow_missing_schema=True, **options).rows == [
+        {"count": 0}
+    ]
+    for _ in range(2):
+        with pytest.raises(GraphCheckError) as caught:
+            client.run_read_result_bounded(query, **options)
+        assert caught.value.error.code == "engine.schema_reference_missing"
+    assert calls.count(query) == 1
+
+
 def test_bounded_result_exactly_at_limit_is_complete(monkeypatch):
     import neo4j
 

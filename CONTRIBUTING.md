@@ -30,6 +30,11 @@ uv run pytest
 
 Coverage is enforced in CI, not locally, so focused `pytest -k ...` runs during development won't trip the package-wide threshold.
 
+Cold CLI benchmarks run in the dedicated performance CI job. Set
+`GRAPHCHECK_PERFORMANCE_OUTPUT` to a JSON file path when running
+`tests/performance/test_cli_startup.py` to collect local timing samples, or set
+`GRAPHCHECK_PERFORMANCE_GATE` to enforce a named reference budget.
+
 Lint and format:
 
 ```bash

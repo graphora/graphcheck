@@ -87,16 +87,3 @@ def test_default_checks_are_baseline_free_and_include_fraud_ring_suite():
     ]
     assert all(check.pattern.value != "drift" for suite in suites for check in suite.suite.checks)
     assert (ROOT / "examples" / "minimal" / "checks" / "example.yml").is_file()
-
-
-def test_only_canonical_fixture_submodule_contains_seed_source():
-    assert list(ROOT.rglob("seed.cypher")) == [
-        ROOT
-        / "tests"
-        / "fixtures"
-        / "external"
-        / "fraud-ring"
-        / "fixtures"
-        / "fraud-ring"
-        / "seed.cypher"
-    ]

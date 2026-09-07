@@ -483,3 +483,35 @@ def test_historical_complete_summary_recomputes_generated_only_coverage(tmp_path
     assert legacy.summary.coverage_status is CoverageStatus.PARTIAL
     assert legacy.results.run.id == "legacy-generated"
     assert "Comparing legacy-generated -> current-run" in format_report_comparison(legacy, current)
+
+
+@pytest.mark.parametrize("operation", ["delete", "prune"])
+def test_history_mutation_waits_for_publication_before_inspecting_latest(tmp_path, operation):
+    import shutil
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from graphcheck.application.artifacts import latest_publication_lock
+
+    _write_run(tmp_path, "run-old", "2026-07-01T10:00:00Z")
+    runs_dir = tmp_path / ".graphcheck" / "runs"
+    started = threading.Event()
+
+    def delete_old():
+        started.set()
+        return (
+            history_module.delete_report_runs(runs_dir, ["run-old"])
+            if operation == "delete"
+            else history_module.prune_report_runs(runs_dir, keep=1)
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with latest_publication_lock(runs_dir):
+            deletion = pool.submit(delete_old)
+            assert started.wait(timeout=5)
+            with pytest.raises(TimeoutError):
+                deletion.result(timeout=0.1)
+            new = _write_run(tmp_path, "run-new", "2026-07-02T10:00:00Z")
+            shutil.copytree(new, runs_dir / "latest")
+        assert [record.id for record in deletion.result(timeout=5)] == ["run-old"]
+    assert load_results(runs_dir / "latest" / "results.json").run.id == "run-new"

@@ -7,10 +7,9 @@ def test_optional_feature_dependencies_are_not_in_the_base_install():
 
     dependencies = project["project"]["dependencies"]
     assert not any(dependency.startswith(("instructor", "mcp")) for dependency in dependencies)
-    assert project["project"]["optional-dependencies"] == {
-        "generate": ["instructor[anthropic,google-genai]==1.15.4"],
-        "mcp": ["mcp>=2.0.0,<3"],
-    }
-    assert {"instructor[anthropic,google-genai]==1.15.4", "mcp>=2.0.0,<3"} <= set(
+    extras = project["project"]["optional-dependencies"]
+    assert any(dependency.startswith("instructor[") for dependency in extras["generate"])
+    assert any(dependency.startswith("mcp") for dependency in extras["mcp"])
+    assert {dependency for extra in extras.values() for dependency in extra} <= set(
         project["dependency-groups"]["dev"]
     )

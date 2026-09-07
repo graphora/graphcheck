@@ -49,7 +49,7 @@ class CompetencyConsumption:
         self._seen_rows: set[object] | None = set() if self.expected.unique is not None else None
         self._duplicate_found = False
         self._contains_remaining = (
-            [_freeze(value) for value in self.expected.contains]
+            {_freeze(value) for value in self.expected.contains}
             if self.expected.contains is not None
             else None
         )
@@ -68,9 +68,7 @@ class CompetencyConsumption:
                 failed = True
         if self._contains_remaining is not None:
             actual = _freeze(_regression_value(row, self._columns))
-            self._contains_remaining = [
-                expected for expected in self._contains_remaining if expected != actual
-            ]
+            self._contains_remaining.discard(actual)
         self.decisive = failed or self._all_assertions_pass_early()
         return self.decisive
 
@@ -385,7 +383,8 @@ class VerdictEvaluator:
             else []
         )
         if expected.contains is not None:
-            contains_ok = all(_contains(actual_values, value) for value in expected.contains)
+            frozen_values = {_freeze(value) for value in actual_values}
+            contains_ok = all(_freeze(value) in frozen_values for value in expected.contains)
             if complete or contains_ok:
                 measured["contains"] = contains_ok
             if complete and not contains_ok:
@@ -670,7 +669,12 @@ def _columns_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _freeze(value: object) -> object:
-    pointer = _pointer_from_value(value)
+    # Ordinary Cypher maps compare by value, even when their fields resemble evidence pointers.
+    pointer = (
+        None
+        if isinstance(value, Mapping) and not hasattr(value, "element_id")
+        else _pointer_from_value(value)
+    )
     if pointer is not None:
         return (pointer.kind, pointer.id)
     temporal = _freeze_temporal(value)
@@ -750,11 +754,6 @@ def _regression_values(rows: Sequence[Mapping[str, Any]], columns: Sequence[str]
 
 def _regression_value(row: Mapping[str, Any], columns: Sequence[str]) -> object:
     return row.get(columns[0]) if len(columns) == 1 else {key: row.get(key) for key in columns}
-
-
-def _contains(values: Sequence[object], expected: object) -> bool:
-    frozen_expected = _freeze(expected)
-    return any(_freeze(value) == frozen_expected for value in values)
 
 
 def _bag(values: Sequence[object]) -> Counter:
@@ -873,7 +872,12 @@ def _pointers_from_ids(values: Mapping[str, object]) -> list[EvidenceElement]:
 def _pointer_from_value(value: object) -> EvidenceElement | None:
     if isinstance(value, EvidenceElement):
         return value
-    if isinstance(value, Mapping) and value.get("kind") in {"node", "rel"}:
+    if (
+        isinstance(value, Mapping)
+        and getattr(value, "element_id", None) is None
+        and isinstance(value.get("kind"), str)
+        and value["kind"] in {"node", "rel"}
+    ):
         identifier = value.get("id")
         if identifier is None:
             return None

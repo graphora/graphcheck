@@ -67,6 +67,35 @@ def test_bounded_read_stops_a_large_stream_and_client_remains_usable(neo4j_profi
     assert follow_up.rows == [{"healthy": 1}]
 
 
+def test_bounded_read_rejects_missing_schema_before_early_success(neo4j_profile):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        with pytest.raises(GraphCheckError) as caught:
+            client.run_read_result_bounded(
+                "MATCH (n:GraphCheckAuditMissingLabel) RETURN count(n) AS count",
+                policy=ResultPolicy(max_rows=10),
+                stop_when=lambda row: True,
+            )
+        assert caught.value.error.code == "engine.schema_reference_missing"
+    finally:
+        client.close()
+
+
+def test_unicode_backtick_identifier_cannot_inject_an_additional_result(neo4j_profile):
+    from graphcheck.engine.identifiers import cypher_identifier
+
+    identifier = r"audit\u0060: 1} RETURN 99 AS injected //"
+    client = Neo4jClient(neo4j_profile)
+    try:
+        result = client.run_read_result(
+            f"RETURN {{{cypher_identifier(identifier)}: $value}} AS value", {"value": 42}
+        )
+        assert result.columns == ("value",)
+        assert list(result.rows[0]["value"].values()) == [42]
+    finally:
+        client.close()
+
+
 def test_read_classification_cache_key_does_not_include_parameters(neo4j_profile):
     client = Neo4jClient(neo4j_profile)
     try:

@@ -403,7 +403,7 @@ competency:
     )
     client = FakeClient([QueryResult([{"value": 1}], ("value",), ())])
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(
         app,
@@ -448,7 +448,7 @@ competency:
     )
     client = FakeClient([QueryResult([{"value": "CUST-SECRET-901"}], ("value",), ())])
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run", redact_option])
 
@@ -572,7 +572,7 @@ competency:
     )
     client = FakeClient()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -666,7 +666,7 @@ competency:
         ]
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -743,7 +743,7 @@ competency:
         ]
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run", "--redact"])
 
@@ -784,7 +784,9 @@ competency:
             )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: ErroredClient())
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: ErroredClient()
+    )
 
     result = runner.invoke(app, ["run", "--redact"])
 
@@ -898,7 +900,7 @@ competency:
 
     client = NoisyClient([QueryResult([{"value": 1}], ("value",), ())])
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
     caplog.set_level(logging.WARNING, logger="neo4j.notifications")
 
     result = runner.invoke(app, ["run"])
@@ -960,7 +962,7 @@ competency:
         return bar
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
     monkeypatch.setattr("graphcheck.cli._interactive_stderr", lambda: True)
     monkeypatch.setattr("graphcheck.cli.typer.progressbar", progressbar)
     real_print_target = cli_module._print_run_target
@@ -1085,7 +1087,7 @@ competency:
         ]
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -1152,7 +1154,7 @@ competency:
         ]
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -1184,7 +1186,9 @@ competency:
             raise GraphCheckError("neo4j.query_failed", "Query failed.", "Fix the query.")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: ErroredClient())
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: ErroredClient()
+    )
 
     result = runner.invoke(app, ["run"])
 
@@ -1254,7 +1258,7 @@ competency:
         )
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -1303,7 +1307,7 @@ competency:
 
     client = WrongRoleClient()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 
@@ -1328,7 +1332,7 @@ def test_run_connection_failure_keeps_root_error_when_artifact_write_fails(tmp_p
         )
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
     monkeypatch.setattr(
         cli_module,
         "_write_run_artifacts",
@@ -1389,11 +1393,11 @@ competency:
     )
     client = FakeClient()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run", "--suite", "missing"])
 
-    assert result.exit_code == 2
+    assert result.exit_code == 2, (result.stdout, result.stderr)
     payload = _payload(tmp_path)
     assert payload["run"]["selection"]["suites"] == ["missing"]
     assert payload["checks"] == []
@@ -1500,7 +1504,9 @@ conformance:
         "graphcheck.engine.compiler.builtin_pack_catalog",
         lambda: PackCatalog(checks=checks, pii=installed.pii),
     )
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: FakeClient())
+    monkeypatch.setattr(
+        "graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: FakeClient()
+    )
 
     result = runner.invoke(app, ["run"])
 
@@ -1540,7 +1546,9 @@ conformance:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "graphcheck.cli.Neo4jClient",
-        lambda profile: FakeClient([QueryResult([summary], tuple(summary), (), observed_rows=1)]),
+        lambda profile, *, max_concurrency: FakeClient(
+            [QueryResult([summary], tuple(summary), (), observed_rows=1)]
+        ),
     )
 
     result = runner.invoke(app, ["run"])
@@ -1585,7 +1593,9 @@ competency:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "graphcheck.cli.Neo4jClient",
-        lambda profile: PermissionDeniedClient(counts=Counts(nodes=0, relationships=0)),
+        lambda profile, *, max_concurrency: PermissionDeniedClient(
+            counts=Counts(nodes=0, relationships=0)
+        ),
     )
 
     result = runner.invoke(app, ["run"])
@@ -1655,7 +1665,7 @@ competency:
     monkeypatch.setattr("graphcheck.application.run.Engine", DeadlineEngine)
     monkeypatch.setattr(
         "graphcheck.cli.Neo4jClient",
-        lambda profile: DeadlineClient(),
+        lambda profile, *, max_concurrency: DeadlineClient(),
     )
 
     result = runner.invoke(app, ["run"])
@@ -1700,7 +1710,7 @@ conformance:
         counts=Counts(nodes=0, relationships=0),
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile: client)
+    monkeypatch.setattr("graphcheck.cli.Neo4jClient", lambda profile, *, max_concurrency: client)
 
     result = runner.invoke(app, ["run"])
 

@@ -17,7 +17,16 @@ from tests.performance.gates import (
 )
 from tests.performance.helpers import BenchmarkRecord, validate_record, write_records
 
-pytestmark = pytest.mark.performance
+pytestmark = [
+    pytest.mark.performance,
+    pytest.mark.skipif(
+        not (
+            os.environ.get("GRAPHCHECK_PERFORMANCE_GATE")
+            or os.environ.get("GRAPHCHECK_PERFORMANCE_OUTPUT")
+        ),
+        reason="set GRAPHCHECK_PERFORMANCE_GATE or GRAPHCHECK_PERFORMANCE_OUTPUT to benchmark",
+    ),
+]
 WARMUPS = 1
 SAMPLES = 10
 BUDGETS = Path(__file__).with_name("budgets.json")

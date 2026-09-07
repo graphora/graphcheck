@@ -45,11 +45,7 @@ class MappingBaselineProvider:
         if raw is None:
             return None
         if hasattr(raw, "model_dump"):
-            try:
-                raw = raw.model_dump(mode="python", by_alias=True)
-            except TypeError:
-                # Lightweight provider doubles may implement only the Pydantic v1-style subset.
-                raw = raw.model_dump(mode="python")
+            raw = raw.model_dump(mode="python", by_alias=True)
         if isinstance(raw, (int, float)):
             return _baseline_value(raw)
         if not isinstance(raw, Mapping):
