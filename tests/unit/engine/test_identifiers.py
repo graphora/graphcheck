@@ -17,6 +17,8 @@ from graphcheck.engine.identifiers import (
         ("MATCH", "`MATCH`"),
         ("odd`name", "`odd``name`"),
         ("Customer`) DELETE n //", "`Customer``) DELETE n //`"),
+        (r"Customer\u0060) DELETE n //", "`Customer``) DELETE n //`"),
+        (r"odd`\u0060name", "`odd````name`"),
     ],
 )
 def test_cypher_identifier_escapes_one_native_token(identifier, escaped):
@@ -35,3 +37,9 @@ def test_typed_query_fragments_share_the_identifier_escaping_contract():
     assert property_access("n", "select") == "n.`select`"
     assert node_pattern("n") == "(n)"
     assert relationship_pattern("r") == "[r]"
+
+
+def test_profiler_escapes_encoded_backticks_in_database_supplied_names():
+    from graphcheck.profiler import _cypher_identifier
+
+    assert _cypher_identifier(r"Customer\u0060) RETURN 1 //") == "`Customer``) RETURN 1 //`"

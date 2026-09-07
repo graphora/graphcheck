@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import math
 import threading
@@ -45,7 +44,7 @@ from graphcheck.engine.compiler import (
     name_for,
 )
 from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
-from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor
+from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor, _accepts_parameter
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
     ParameterTokenResolver,
@@ -214,7 +213,9 @@ class Engine:
         self._id_factory = id_factory or uuid.uuid4
         self._progress_callback = progress_callback
         probe = getattr(client, "probe", None)
-        self._probe_accepts_timeout = callable(probe) and _accepts_timeout(probe)
+        self._probe_accepts_timeout = callable(probe) and _accepts_parameter(
+            probe, "timeout_s", variadic=True
+        )
         self._event_sink = event_sink
         self._telemetry_clock = telemetry_clock
         self._telemetry_id_factory = telemetry_id_factory
@@ -482,6 +483,13 @@ class Engine:
                 )
 
         partial_reasons: list[str] = list(dict.fromkeys(_initial_partial_reasons))
+        missing_suites = sorted(set(recorded_suite_ids) - set(suite_ids))
+        if missing_suites:
+            partial_reasons.append(
+                f"Requested suites were not found: {', '.join(missing_suites)}. "
+                "Fix: correct --suite values or restore the missing suite files."
+            )
+            self._add_partial_code(PartialReasonCode.SUITE_INPUT_INVALID)
         capability_check = getattr(self.compiler, "missing_capabilities", None)
 
         def prepare(
@@ -1785,14 +1793,3 @@ def _unexpected_error(stage: str, exc: Exception) -> CheckError:
 def _append_once(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
-
-
-def _accepts_timeout(method: object) -> bool:
-    try:
-        parameters = inspect.signature(method).parameters.values()  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.name == "timeout_s" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )

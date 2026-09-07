@@ -139,6 +139,10 @@ For Enterprise/Developer, an administrator assigns Neo4j's built-in `reader` rol
 used by GraphCheck. That account must have no other assigned role except the automatic `PUBLIC`
 role. GraphCheck therefore rejects `admin`, `architect`, `publisher`, `editor`, and custom roles.
 
+Both `profiles.yml` and `graphcheck.yml` must be UTF-8 YAML mappings with unique keys at every
+depth. Configuration diagnostics omit input values and YAML excerpts so malformed files do not
+expose credentials in command output.
+
 Edit `profiles.yml`. This Enterprise/Developer example uses an account assigned the built-in
 `reader` role:
 

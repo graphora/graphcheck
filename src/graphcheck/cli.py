@@ -1933,20 +1933,7 @@ def redact_command(
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
-    """Construct the real workload-aware client while retaining simple CLI test doubles."""
-
-    import inspect
-
-    parameters = inspect.signature(Neo4jClient).parameters.values()
-    accepts_setting = any(
-        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-    return (
-        Neo4jClient(profile, max_concurrency=max_concurrency)
-        if accepts_setting
-        else Neo4jClient(profile)
-    )
+    return Neo4jClient(profile, max_concurrency=max_concurrency)
 
 
 def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:

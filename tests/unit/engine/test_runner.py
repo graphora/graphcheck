@@ -144,6 +144,19 @@ class RichClient:
         raise AssertionError("rich C2 path must be preferred over legacy run_read")
 
 
+def test_missing_requested_suite_prevents_passing_a_partially_matched_selection():
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run(
+        [SuiteInput.from_yaml(PASSING_SUITE)],
+        selection_suites=["customer-quality", "missing-suite"],
+    )
+
+    assert result.checks[0].verdict is Verdict.PASS
+    assert result.run.run_status is RunStatus.PARTIAL
+    assert result.run.exit_code == 2
+    assert "missing-suite" in result.run.partial_reason
+
+
 class LazyCompetencyClient:
     def __init__(self, rows, columns=("node_element_id",)):
         self.rows = rows

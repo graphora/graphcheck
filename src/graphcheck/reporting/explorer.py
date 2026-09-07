@@ -29,6 +29,7 @@ from graphcheck.reporting.html import (
 _COOKIE_NAME = "graphcheck_report_explorer"
 _MAX_REQUEST_BYTES = 64 * 1024
 _IDLE_SECONDS = 300.0
+_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 class ReportExplorerServer(ThreadingHTTPServer):
@@ -43,6 +44,10 @@ class ReportExplorerServer(ThreadingHTTPServer):
 
 class ReportExplorerHandler(BaseHTTPRequestHandler):
     server: ReportExplorerServer
+
+    def setup(self) -> None:
+        self.request.settimeout(_REQUEST_TIMEOUT_SECONDS)
+        super().setup()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         self.server.last_activity = time.monotonic()
@@ -120,7 +125,7 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         self.server.last_activity = time.monotonic()
         parsed = urllib.parse.urlsplit(self.path)
         if not self._valid_host() or not self._api_authorized() or not self._same_origin():
-            self._discard_request_body()
+            self.close_connection = True
             self._json_error(403, "Report explorer authorization failed.")
             return
         try:
@@ -190,16 +195,11 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
             raise ValueError("Report explorer request must be a JSON object.")
         return payload
 
-    def _discard_request_body(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            return
-        if 0 < length <= _MAX_REQUEST_BYTES:
-            self.rfile.read(length)
-
     def _authenticated(self) -> bool:
-        cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        try:
+            cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        except http.cookies.CookieError:
+            return False
         morsel = cookie.get(_COOKIE_NAME)
         return morsel is not None and self._valid_token(morsel.value)
 
@@ -213,7 +213,11 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
 
     def _valid_token(self, candidate: str | None) -> bool:
-        return candidate is not None and hmac.compare_digest(candidate, self.server.token)
+        return (
+            candidate is not None
+            and candidate.isascii()
+            and hmac.compare_digest(candidate, self.server.token)
+        )
 
     @property
     def _origin(self) -> str:

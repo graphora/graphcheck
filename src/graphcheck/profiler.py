@@ -24,11 +24,10 @@ from graphcheck.contracts.profile import (
     RelationshipTypeProfile,
     profile_fingerprint,
 )
+from graphcheck.engine.identifiers import cypher_identifier as _cypher_identifier
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.neo4j_adapter import Neo4jClient
 
-# test addition
-# DEFAULT_PROFILE_BUDGET_SECONDS = 3
 DEFAULT_PROFILE_BUDGET_SECONDS = 60
 ProfileTelemetryObserver = Callable[[str, str, int, object | None], None]
 ProfileResultTelemetryObserver = Callable[[str, str | None, bool], None]
@@ -735,7 +734,6 @@ def _run_read(
     if deadline is None:
         return client.run_read(query, params)
     remaining = _remaining_budget(deadline)
-    # print(f"Remaining timeout: {remaining:.2f}s")
     return client.run_read(query, params, timeout_s=remaining)
 
 
@@ -747,10 +745,6 @@ def _coverage(populated_count: int, total_count: int) -> float:
     if total_count == 0:
         return 0.0
     return round((populated_count / total_count) * 100, 2)
-
-
-def _cypher_identifier(value: str) -> str:
-    return f"`{value.replace('`', '``')}`"
 
 
 def collect_property_coverage(

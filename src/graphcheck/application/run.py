@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -193,17 +192,7 @@ def execute_run(
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
-    """Construct the workload-aware Neo4j client while retaining simple test doubles."""
-    parameters = inspect.signature(Neo4jClient).parameters.values()
-    accepts_setting = any(
-        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-    return (
-        Neo4jClient(profile, max_concurrency=max_concurrency)
-        if accepts_setting
-        else Neo4jClient(profile)
-    )
+    return Neo4jClient(profile, max_concurrency=max_concurrency)
 
 
 def _verify_cli_audit_credential(client: object) -> object | None:

@@ -191,11 +191,17 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
 
 def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
     """Remove old immediate run directories while always preserving ``latest``."""
+    from graphcheck.application.artifacts import latest_publication_lock
+
     if keep < 1:
         raise ReportHistoryError("--keep must be at least 1.")
     if not runs_dir.is_dir():
         return []
+    with latest_publication_lock(runs_dir):
+        return _prune_report_runs(runs_dir, keep)
 
+
+def _prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
     candidates: list[ReportRun] = []
     for directory in runs_dir.iterdir():
         if (
@@ -229,6 +235,15 @@ def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
 
 def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
     """Delete selected logical reports and safely repoint the ``latest`` alias."""
+    from graphcheck.application.artifacts import latest_publication_lock
+
+    if not runs_dir.is_dir():
+        raise ReportHistoryError("No report history found.")
+    with latest_publication_lock(runs_dir):
+        return _delete_report_runs(runs_dir, run_ids)
+
+
+def _delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
     requested = tuple(dict.fromkeys(run_id for run_id in run_ids if run_id))
     if not requested:
         raise ReportHistoryError("Select at least one report to delete.")
@@ -315,12 +330,11 @@ def _direct_report_runs(runs_dir: Path) -> list[ReportRun]:
 
 
 def _safe_report_directory(resolved_runs: Path, directory: Path) -> bool:
-    is_junction = getattr(directory, "is_junction", lambda: False)
     return (
         directory.is_dir()
         and not directory.name.startswith(".")
         and not directory.is_symlink()
-        and not is_junction()
+        and not directory.is_junction()
         and directory.resolve().parent == resolved_runs
     )
 

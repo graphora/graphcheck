@@ -9,7 +9,8 @@ def cypher_identifier(identifier: str) -> str:
         raise ValueError("a Cypher identifier must be a non-blank string")
     if any(unicodedata.category(character) == "Cc" for character in identifier):
         raise ValueError("a Cypher identifier cannot contain control characters")
-    return f"`{identifier.replace('`', '``')}`"
+    escaped = identifier.replace("\\u0060", "`").replace("`", "``")
+    return f"`{escaped}`"
 
 
 def node_pattern(variable: str, label: str | None = None) -> str:

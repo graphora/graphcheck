@@ -259,3 +259,49 @@ def test_profile_rejects_wrong_or_incomplete_uri_with_fix(tmp_path: Path, uri: s
     assert caught.value.error.code == "profile.uri_invalid"
     assert "bolt://" in caught.value.error.fix
     assert "neo4j+s://" in caught.value.error.fix
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "default: local\nprofiles:\n  local:\n    password: audit-secret-marker\n",
+        "default: local\nprofiles: {local: {password: [audit-secret-marker}\n",
+        "default: local\ndefault: other\nprofiles: {}\n",
+    ],
+)
+def test_invalid_profiles_never_disclose_values_and_reject_duplicate_keys(tmp_path, text):
+    (tmp_path / "profiles.yml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(GraphCheckError) as caught:
+        load_profiles(tmp_path)
+
+    assert caught.value.error.code == "profile.invalid"
+    assert "audit-secret-marker" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "project: audit-secret-marker\n",
+        "project: [audit-secret-marker}\n",
+        "project: test\nchecks: checks\nartifacts: .graphcheck\nconcurrency: 2\nconcurrency: 4\n",
+    ],
+)
+def test_invalid_project_config_is_safe_and_points_to_the_correct_file(tmp_path, text):
+    from graphcheck.project import load_project_config
+
+    (tmp_path / "graphcheck.yml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(GraphCheckError) as caught:
+        load_project_config(tmp_path)
+
+    assert "audit-secret-marker" not in str(caught.value)
+    assert "graphcheck.yml" in caught.value.error.fix
+
+
+def test_connection_profile_repr_hides_password():
+    from graphcheck.connection_profiles import ConnectionProfile
+
+    profile = ConnectionProfile(uri="bolt://localhost", user="u", password="secret", database="d")
+
+    assert "secret" not in repr(profile)

@@ -155,8 +155,8 @@ class ReadGuardCacheInfo:
 class _ReadClassificationCache:
     def __init__(self, max_size: int) -> None:
         self._max_size = max_size
-        self._entries: OrderedDict[tuple[str, str], None] = OrderedDict()
-        self._inflight: dict[tuple[str, str], threading.Event] = {}
+        self._entries: OrderedDict[tuple[str, str, bool], None] = OrderedDict()
+        self._inflight: dict[tuple[str, str, bool], threading.Event] = {}
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
@@ -171,8 +171,9 @@ class _ReadClassificationCache:
         database: str,
         deadline: float | None,
         attach_timeout: bool,
+        allow_missing_schema: bool = False,
     ) -> bool:
-        key = (database, query)
+        key = (database, query, allow_missing_schema)
         while True:
             with self._lock:
                 if key in self._entries:
@@ -201,6 +202,7 @@ class _ReadClassificationCache:
                 params,
                 timeout_s=_remaining_timeout(deadline),
                 attach_timeout=attach_timeout,
+                allow_missing_schema=allow_missing_schema,
             )
         except BaseException:
             if pending is not None:
@@ -437,6 +439,7 @@ class Neo4jClient:
                         cache=self._read_classifications,
                         database=self._profile.database,
                         deadline=deadline,
+                        allow_missing_schema=allow_missing_schema,
                     )
                     read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
                 driver_query = (
@@ -914,6 +917,7 @@ class _TransactionReader:
                 database=self._database,
                 deadline=deadline,
                 attach_timeout=False,
+                allow_missing_schema=self._allow_missing_schema,
             )
             read_guard_ms = max(0, round((time.monotonic() - guard_started) * 1000))
             result = self._transaction.run(query, values)
@@ -1034,20 +1038,7 @@ def _support_versions(client: object, target: ResultsTarget) -> SupportVersions:
 
 
 def init_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
-    client = Neo4jClient(profile)
-    try:
-        target, visibility, counts = client.probe()
-        _verify_audit_credential(client)
-        return DebugTrace(
-            profile=profile_name,
-            target=target,
-            visibility=visibility,
-            counts=counts,
-            probe_metrics=getattr(client, "last_probe_metrics", None),
-            versions=_support_versions(client, target),
-        )
-    finally:
-        client.close()
+    return debug_trace(profile_name, profile)
 
 
 def debug_trace(profile_name: str, profile: ConnectionProfile) -> DebugTrace:
@@ -1128,6 +1119,7 @@ def _assert_server_classified_read(
     *,
     timeout_s: float | None,
     attach_timeout: bool = True,
+    allow_missing_schema: bool = False,
 ) -> None:
     """Fail closed unless Neo4j's planner classifies the statement as read-only."""
 
@@ -1153,6 +1145,9 @@ def _assert_server_classified_read(
     summary = consume()
     query_type = str(getattr(summary, "query_type", "")).lower()
     if query_type == "r":
+        _raise_for_missing_schema_reference(
+            _summary_notifications(summary), allow_missing_schema=allow_missing_schema
+        )
         return
     if query_type in {"w", "rw", "s"}:
         raise GraphCheckError(
@@ -1177,6 +1172,7 @@ def _ensure_server_classified_read(
     database: str,
     deadline: float | None,
     attach_timeout: bool = True,
+    allow_missing_schema: bool = False,
 ) -> bool:
     return cache.ensure_read(
         session,
@@ -1185,6 +1181,7 @@ def _ensure_server_classified_read(
         database=database,
         deadline=deadline,
         attach_timeout=attach_timeout,
+        allow_missing_schema=allow_missing_schema,
     )
 
 

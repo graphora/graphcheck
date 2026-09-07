@@ -490,7 +490,7 @@ def test_completed_nonzero_run_is_success_and_correlates_all_events(
     _project(tmp_path, severity=severity)
     client = FakeClient()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile, *, max_concurrency: client)
 
     exit_code = _invoke_entrypoint(monkeypatch, "run")
 
@@ -745,7 +745,7 @@ def test_run_render_failure_is_reported_as_report_render_not_artifact_write(
     _project(tmp_path, severity="error")
     client = FakeClient()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile: client)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda profile, *, max_concurrency: client)
 
     def fail_render(model):
         raise OSError("private render failure")

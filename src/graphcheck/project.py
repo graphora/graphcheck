@@ -5,8 +5,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError, field_validator
 
-from graphcheck.errors import GraphCheckError, profile_invalid
+from graphcheck.errors import GraphCheckError
 from graphcheck.generation.config import GenerateConfig
+from graphcheck.yaml_loader import load_yaml_mapping
 
 PROJECT_FILE = "graphcheck.yml"
 PROFILES_FILE = "profiles.yml"
@@ -15,7 +16,7 @@ ARTIFACTS_DIR = ".graphcheck"
 
 
 class ProjectConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     project: str
     checks: str
@@ -57,10 +58,19 @@ def find_project_root(start: Path | None = None) -> Path:
 def load_project_config(root: Path) -> ProjectConfig:
     path = root / PROJECT_FILE
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = load_yaml_mapping(path.read_text(encoding="utf-8"), description="graphcheck.yml")
         return ProjectConfig.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
-        raise profile_invalid(f"Invalid graphcheck.yml: {exc}") from exc
+    except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, ValidationError)
+            else "Use valid UTF-8 YAML with unique mapping keys."
+        )
+        raise GraphCheckError(
+            "profile.invalid",
+            f"Invalid graphcheck.yml: {detail}",
+            "Fix graphcheck.yml, then run `graphcheck debug` again.",
+        ) from exc if isinstance(exc, ValidationError) else None
 
 
 def write_default_project(root: Path) -> None:

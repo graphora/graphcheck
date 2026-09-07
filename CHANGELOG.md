@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Escaped Unicode-encoded backticks in schema identifiers and shared the same escaping between
+  check compilation and profiling to prevent identifiers from changing the generated Cypher.
+- Configuration errors no longer echo input values or YAML source snippets, connection profile
+  representations hide passwords, and project/profile files reject duplicate mapping keys.
+- Missing requested suites now make a run partial with an actionable diagnostic, including when
+  the other requested suites pass.
+- Read preflights now reject missing-schema warnings before bounded queries can stop early;
+  permissive empty-graph preflights cannot satisfy a stricter cached read.
+- Competency assertions compare every field of ordinary result maps, including maps resembling
+  evidence pointers, and graph properties cannot override actual Neo4j element identities.
+- Reduced `contains` assertion work from repeated scans to hash-based membership in both streaming
+  and final evaluation while preserving typed value comparisons.
+- Report deletion and pruning now share the publication lock so history mutations cannot race
+  with publication or restoration of the `latest` report.
+- The local report explorer rejects malformed authentication without crashing, responds to
+  unauthorized requests without waiting for their bodies, and limits socket inactivity.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added

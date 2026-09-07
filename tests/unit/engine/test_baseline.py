@@ -320,8 +320,8 @@ def test_invalid_compact_scalar_references_are_not_treated_as_missing(invalid):
 
 def test_model_dump_compatible_c4_profile_is_supported():
     class Profile:
-        def model_dump(self, *, mode):
-            assert mode == "python"
+        def model_dump(self, *, mode, by_alias):
+            assert mode == "python" and by_alias is True
             return _c4_profile()
 
     provider = MappingBaselineProvider({"latest": Profile()})

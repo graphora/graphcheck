@@ -89,9 +89,11 @@ keys, unknown check types, or invalid check payloads are loud configuration fail
 later `--suite` filter would not select that file.
 
 `--suite` matches the resolved SPEC-02 suite id, not merely the filename. An explicit `suite:` field
-wins over the filename-stem fallback. A requested suite that matches nothing produces a complete
-run over an empty selected universe: `checks: []`, `score: null`, exit 2. The requested suite ids
-remain present in `run.selection.suites` so the empty scope is auditable.
+wins over the filename-stem fallback. Missing requested suites make the run partial and are named
+in `partial_reason`, even if every matched check passes. Matched suites still execute, with the
+existing exit-code precedence (exit 2 unless an executed check produces a hard failure). If no
+suite matches, the result has `checks: []`, `score: null`, and exit 2. The requested suite ids remain
+present in `run.selection.suites` so the missing scope is auditable.
 
 Non-matching checks are absent from `checks[]`; they are not `skipped`. The selected universe is
 recorded in `run.selection` as `{suites, tags, fail_fast}`.
@@ -261,7 +263,8 @@ non-sampled checks.
 Built-in templates compile validated labels, relationship types, and property names into native
 Cypher tokens so Neo4j's planner can see them. A shared helper rejects blank/control-containing
 identifiers and backtick-escapes each accepted identifier as one grammar token, including embedded
-backticks. Optional labels/types compile to distinct native-token and generic query variants.
+backticks and their `\u0060` spelling. The profiler uses the same escaping helper.
+Optional labels/types compile to distinct native-token and generic query variants.
 Schema names remain separately parameterized in required-schema lists for missing-schema
 diagnostics.
 
