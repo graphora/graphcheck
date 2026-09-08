@@ -574,7 +574,13 @@ class VerdictEvaluator:
             return Evaluation(True, measured)
         explicit = [*row.get("evidence", []), *baseline.evidence]
         total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
-        if spec.metric in {"node_count", "relationship_count"}:
+        # degree_distribution's p50/p95 targets describe an aggregate scope, same as
+        # node_count/relationship_count; only its max quantile names a real offending
+        # node, so it is excluded here (see #124).
+        is_aggregate_scope = spec.metric in {"node_count", "relationship_count"} or (
+            spec.metric == "degree_distribution" and spec.target.get("quantile") != "max"
+        )
+        if is_aggregate_scope:
             # Counts describe a measurement scope, not a set of currently offending elements.
             # Keep any baseline/current pointers as supplemental context, but put the honest scope
             # first so a small evidence cap can never replace it with an arbitrary survivor.
@@ -586,7 +592,7 @@ class VerdictEvaluator:
             compiled,
             explicit=explicit,
             total_count=total_count,
-            allow_aggregate=spec.metric in {"node_count", "relationship_count"},
+            allow_aggregate=is_aggregate_scope,
         )
         return Evaluation(False, measured, evidence=evidence)
 
