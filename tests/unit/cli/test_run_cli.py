@@ -86,6 +86,72 @@ def _payload(tmp_path: Path) -> dict:
     )
 
 
+def test_cli_prepares_suites_once_and_executes_original_bytes(tmp_path, monkeypatch):
+    from graphcheck.engine.runner import SuiteInput
+
+    text = """suite: prepared
+competency:
+  - id: selected
+    tags: [fast]
+    question: Selected?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+  - id: excluded
+    question: Excluded?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}}
+"""
+    _project(tmp_path, {"suite.yml": text})
+    monkeypatch.chdir(tmp_path)
+    parsed = []
+    original = SuiteInput.from_yaml
+
+    def parse(text, **kwargs):
+        parsed.append(text)
+        return original(text, **kwargs)
+
+    class Client(FakeClient):
+        def probe(self, **kwargs):
+            (tmp_path / "checks/suite.yml").write_text("invalid: [", encoding="utf-8")
+            return super().probe(**kwargs)
+
+    client = Client([QueryResult([{"value": 1}], ("value",), ())])
+    monkeypatch.setattr(SuiteInput, "from_yaml", parse)
+    monkeypatch.setattr(cli_module, "_new_neo4j_client", lambda *args: client)
+    result = runner.invoke(app, ["run", "--suite", "prepared", "--select", "tag:fast"])
+    assert result.exit_code == 0, result.output
+    assert parsed == [text]
+    assert [check["id"] for check in _payload(tmp_path)["checks"]] == ["selected"]
+    assert len(client.read_calls) == 1
+
+
+def test_preparation_is_visible_before_probe_and_writing(tmp_path, monkeypatch):
+    _project(tmp_path, {})
+    monkeypatch.chdir(tmp_path)
+    stages = []
+    monkeypatch.setattr(cli_module, "_interactive_stderr", lambda: True)
+    original_echo = typer.echo
+
+    def echo(message=None, **kwargs):
+        stages.append(message)
+        return original_echo(message, **kwargs)
+
+    class Client(FakeClient):
+        def probe(self, **kwargs):
+            assert "Loading checks" in stages and "Connecting" in stages
+            return super().probe(**kwargs)
+
+    monkeypatch.setattr(typer, "echo", echo)
+    monkeypatch.setattr(cli_module, "_new_neo4j_client", lambda *args: Client())
+    result = runner.invoke(app, ["run"])
+    assert result.exit_code == 2
+    assert (
+        stages.index("Connecting")
+        < stages.index("Running checks")
+        < stages.index("Writing reports")
+    )
+
+
 def _report(tmp_path: Path) -> str:
     return (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
         encoding="utf-8"
@@ -1477,7 +1543,7 @@ def test_run_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, 
     _project(tmp_path, _SMOKE_SUITE)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "graphcheck.project.load_project_config",
+        "graphcheck.application.run.load_project_config",
         lambda root: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
     )
 

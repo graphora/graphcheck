@@ -66,11 +66,9 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
     )
     candidate_unwind = (
         f"UNWIND {configured_rows} AS occurrence\n"
-        "          WITH population, n, occurrence.property AS property, occurrence.raw AS raw"
+        "          WITH occurrence.property AS property, occurrence.raw AS raw"
         if configured_rows
-        else (
-            "UNWIND keys(n) AS property\n          WITH population, n, property, n[property] AS raw"
-        )
+        else ("UNWIND keys(n) AS property\n          WITH property, n[property] AS raw")
     )
     string_predicate = "AND toStringOrNull(raw) = raw" if strings_only else ""
     value_projection = ", value: raw" if strings_only else ""
@@ -108,17 +106,17 @@ def _candidate_query(*, strings_only: bool, label: str | None, properties: list[
           WITH population
           WHERE population > 0
           MATCH {node}
-          {candidate_unwind}
-          WHERE raw IS NOT NULL
-            {string_predicate}
-          WITH population, n, property, raw ORDER BY elementId(n), property
-          WITH population, n,
-               collect({{property: property, raw: raw}}) AS _gc_node_properties
-          UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
-          WITH population, n, _gc_property_index,
-               _gc_node_properties[_gc_property_index] AS occurrence
-          WITH population, n, occurrence.property AS property, occurrence.raw AS raw,
-               _gc_property_index
+          CALL {{
+            WITH n
+            {candidate_unwind}
+            WHERE raw IS NOT NULL
+              {string_predicate}
+            WITH property, raw ORDER BY property
+            WITH collect({{property: property, raw: raw}}) AS _gc_node_properties
+            UNWIND range(0, size(_gc_node_properties) - 1) AS _gc_property_index
+            WITH _gc_property_index, _gc_node_properties[_gc_property_index] AS occurrence
+            RETURN occurrence.property AS property, occurrence.raw AS raw, _gc_property_index
+          }}
           WITH population, n, property, raw,
                (((id(n) % {CYPHER_SAMPLE_MODULUS}) * {_SAMPLE_NODE_MULTIPLIER}
                  + _gc_property_index) % {CYPHER_SAMPLE_MODULUS}) AS _gc_occurrence_key

@@ -67,32 +67,39 @@ def execute_run(
     client_factory: Callable[[object, int], Neo4jClient] | None = None,
     artifact_writer: Callable[..., tuple[Path, Path]] = write_run_artifacts,
     target_observer: Callable[[object], None] | None = None,
+    stage_observer: Callable[[str, int | None], None] | None = None,
 ) -> RunOutcome:
     """
     Execute a GraphCheck run independently of the CLI or MCP.
     """
+    if stage_observer is not None:
+        stage_observer("Loading checks", None)
     root = find_project_root()
     config = load_project_config(root)
     artifacts = project_path(root, config.artifacts)
     runs_dir = artifacts / "runs"
 
     checks_dir = project_path(root, config.checks)
-    profiles = load_profiles(root)
-    _, selected_profile = select_profile(
-        profiles,
-        request.profile,
-    )
-
     client: Neo4jClient | None = None
     setup_done_perf: float | None = None
     engine_started = False
 
     try:
+        profiles = load_profiles(root)
+        _, selected_profile = select_profile(profiles, request.profile)
         max_concurrency = request.concurrency or int(config.concurrency)
         engine_config = EngineConfig(
             max_concurrency=max_concurrency, result_row_limit=config.engine.result_row_limit
         )
         deadline = time.monotonic() + engine_config.time_budget_s
+        suite_inputs = load_suite_inputs(checks_dir, request.suite_ids)
+        check_count = sum(
+            not request.tags or any(tag in check.tags for tag in request.tags)
+            for item in suite_inputs
+            for check in item.suite.checks
+        )
+        if stage_observer is not None:
+            stage_observer("Connecting", check_count)
 
         factory = client_factory or _new_neo4j_client
         client = factory(
@@ -105,11 +112,9 @@ def execute_run(
             if target_observer is not None:
                 target_observer(target)
 
-        suite_inputs = load_suite_inputs(
-            checks_dir,
-            request.suite_ids,
-        )
         setup_done_perf = time.monotonic()
+        if stage_observer is not None:
+            stage_observer("Running checks", check_count)
         engine = Engine(
             client,
             baselines=DirectoryBaselineProvider(
@@ -175,6 +180,8 @@ def execute_run(
     # nor a re-labelled run.configuration result.
     artifact_started_perf = time.monotonic()
     try:
+        if stage_observer is not None:
+            stage_observer("Writing reports", None)
         results_path, report_path = artifact_writer(
             results,
             runs_dir,

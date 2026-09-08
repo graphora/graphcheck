@@ -14,6 +14,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Runs prepare suites once, prefer the C-backed safe YAML parser, and show loading, connecting,
+  running, and report-writing stages in interactive terminals.
+- Graph inventory uses one combined request, and built-in same-label completeness checks share
+  bounded scans while retaining individual verdicts, evidence, and executed-query provenance.
+- PII candidate selection orders eligible properties within each node while preserving its
+  deterministic sampling inputs and final sample ordering.
+- Optional telemetry delivery gets a 50 ms command-exit allowance and pending events may be dropped.
 - Report IDs include a unique component; redacted exports use independent random identifiers.
   Existing history names remain readable, and identical artifact publication can be retried.
 - Corrected read-consistency documentation: measurement and evidence share a transaction and

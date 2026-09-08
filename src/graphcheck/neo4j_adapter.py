@@ -627,14 +627,21 @@ class Neo4jClient:
         count_store = False
         if can_read:
             try:
-                counts = _call_with_timeout(self._counts, deadline)
+                counts, labels, relationship_types = _call_with_timeout(self._inventory, deadline)
             except GraphCheckError as exc:
                 if exc.error.code == "neo4j.permission_denied":
-                    can_read = False
+                    # Diagnose graph-read denial separately from schema enumeration denial.
+                    try:
+                        counts = _call_with_timeout(self._counts, deadline)
+                    except GraphCheckError as read_exc:
+                        if read_exc.error.code != "neo4j.permission_denied":
+                            raise
+                        can_read = False
+                    else:
+                        raise exc
                 else:
                     raise
             else:
-                labels, relationship_types = _call_with_timeout(self._schema_tokens, deadline)
                 count_store = _call_with_timeout(self._count_store_usable, deadline)
 
         target = ResultsTarget(
@@ -817,6 +824,43 @@ class Neo4jClient:
             names.update(str(alias).lower() for alias in aliases)
         names.discard("")
         return names
+
+    def _inventory(
+        self, *, timeout_s: float | None = None
+    ) -> tuple[Counts, tuple[str, ...], tuple[str, ...]]:
+        rows = _run_read_with_timeout(
+            self,
+            "CALL { MATCH (n) RETURN count(n) AS nodes } "
+            "CALL { MATCH ()-[r]->() RETURN count(r) AS relationships } "
+            "CALL { CALL db.labels() YIELD label RETURN collect(label) AS labels } "
+            "CALL { CALL db.relationshipTypes() YIELD relationshipType "
+            "RETURN collect(relationshipType) AS relationship_types } "
+            "RETURN nodes, relationships, labels, relationship_types",
+            timeout_s,
+        )
+        if (
+            len(rows) != 1
+            or any(
+                type(rows[0].get(key)) is not int or rows[0][key] < 0
+                for key in ("nodes", "relationships")
+            )
+            or any(
+                not isinstance(rows[0].get(key), list)
+                or any(not isinstance(value, str) for value in rows[0][key])
+                for key in ("labels", "relationship_types")
+            )
+        ):
+            raise GraphCheckError(
+                "neo4j.query_failed",
+                "Neo4j returned an invalid graph inventory for fingerprinting.",
+                "Run `graphcheck debug --json` and verify graph and schema procedure access.",
+            )
+        row = rows[0]
+        return (
+            Counts(nodes=row["nodes"], relationships=row["relationships"]),
+            tuple(sorted(set(row["labels"]))),
+            tuple(sorted(set(row["relationship_types"]))),
+        )
 
     def _counts(self, *, timeout_s: float | None = None) -> Counts:
         rows = _run_read_with_timeout(

@@ -1662,11 +1662,14 @@ def run_command(
     ),
 ) -> None:
     """Execute selected check suites and write machine and offline reports."""
+    if _interactive_stderr():
+        typer.echo("Loading checks", err=True)
+
     from graphcheck.application.run import RunRequest, execute_run
     from graphcheck.contracts.results import CheckError
     from graphcheck.engine import failed_results
     from graphcheck.errors import GraphCheckError
-    from graphcheck.project import ARTIFACTS_DIR, load_project_config
+    from graphcheck.project import ARTIFACTS_DIR
 
     requested_suites = list(dict.fromkeys(suite or []))
     root: Path | None = None
@@ -1710,15 +1713,22 @@ def run_command(
         )
 
     def show_run_target(target: object) -> None:
-        # The shared service calls this once the target is probed and the credential is
-        # verified, before any check runs. Print the target header first (unless redacted),
-        # then open the progress bar so the header always precedes progress output.
-        nonlocal run_progress_callback
+        # The application reports the verified target before opening per-check progress.
         if not redacted:
             _print_run_target(target)
-        run_progress_callback = progress_scope.enter_context(
-            _run_progress(check_count, redacted=redacted)
-        )
+
+    def show_stage(stage: str, total: int | None) -> None:
+        nonlocal check_count, run_progress_callback
+        if total is not None:
+            check_count = total
+        if stage == "Writing reports":
+            progress_scope.close()
+        if stage != "Loading checks" and _interactive_stderr():
+            typer.echo(stage, err=True)
+        if stage == "Running checks":
+            run_progress_callback = progress_scope.enter_context(
+                _run_progress(check_count, redacted=redacted)
+            )
 
     def forward_progress(completed: int, total: int, check_name: str) -> None:
         if run_progress_callback is not None:
@@ -1759,17 +1769,7 @@ def run_command(
         )
 
     try:
-        root = find_project_root()
-        runs_dir = root / ARTIFACTS_DIR / "runs"
-        config = load_project_config(root)
-        artifacts = _project_path(root, config.artifacts)
-        runs_dir = artifacts / "runs"
         tags = _selection_tags(select or [])
-        suite_inputs = _load_suite_inputs(
-            _project_path(root, config.checks),
-            requested_suites,
-        )
-        check_count = _selected_check_count(suite_inputs, tags)
 
         with progress_scope:
             outcome = execute_run(
@@ -1787,6 +1787,7 @@ def run_command(
                 client_factory=_new_neo4j_client,
                 artifact_writer=export_run_artifacts,
                 target_observer=show_run_target,
+                stage_observer=show_stage,
             )
 
         results = outcome.results
@@ -1820,6 +1821,14 @@ def run_command(
                 _cli_stage_for_error(exc.error.code),
                 exc.error.code,
             )
+        if runs_dir is None:
+            with suppress(Exception):
+                root = find_project_root()
+                runs_dir = root / ARTIFACTS_DIR / "runs"
+                if exc.error.code == "run.invalid_selector":
+                    from graphcheck.project import load_project_config
+
+                    runs_dir = _project_path(root, load_project_config(root).artifacts) / "runs"
         if runs_dir is None:
             _print_setup_error(display_error(exc.error))
             raise typer.Exit(3) from exc
@@ -1856,6 +1865,10 @@ def run_command(
             message=f"GraphCheck could not prepare the run: {type(exc).__name__}: {exc}",
             fix="Fix the project configuration, then run `graphcheck debug` and try again.",
         )
+        if runs_dir is None:
+            with suppress(Exception):
+                root = find_project_root()
+                runs_dir = root / ARTIFACTS_DIR / "runs"
         if runs_dir is None:
             _print_setup_error(display_error(error))
             raise typer.Exit(3) from exc
@@ -1963,15 +1976,6 @@ def _new_neo4j_client(profile, max_concurrency: int):
     return Neo4jClient(profile, max_concurrency=max_concurrency)
 
 
-def _selected_check_count(suites: Sequence["SuiteInput"], tags: Sequence[str]) -> int:
-    return sum(
-        1
-        for suite_input in suites
-        for check in suite_input.suite.checks
-        if not tags or any(tag in check.tags for tag in tags)
-    )
-
-
 def _interactive_stderr() -> bool:
     return bool(getattr(sys.stderr, "isatty", lambda: False)())
 
@@ -2000,6 +2004,8 @@ def _run_progress(
         return
 
     started = time.monotonic()
+    last_render = 0.0
+    reported = 0
     state = {"check": "Preparing redacted graph checks" if redacted else "Preparing graph checks"}
     lock = threading.Lock()
     stopped = threading.Event()
@@ -2033,12 +2039,16 @@ def _run_progress(
         ticker.start()
 
         def update(completed: int, total: int, check_name: str) -> None:
+            nonlocal last_render, reported
             display_name = "redacted check" if redacted else check_name
             with lock:
                 state["check"] = display_name
                 bar.label = _elapsed_clock(started)
                 bar.bar_template = _progress_template(display_name)
-                bar.update(1)
+                now = time.monotonic()
+                if completed == total or now - last_render >= 0.1:
+                    bar.update(completed - reported)
+                    last_render, reported = now, completed
 
         try:
             yield update
@@ -2066,41 +2076,9 @@ def _selection_tags(selectors: list[str]) -> list[str]:
 
 
 def _load_suite_inputs(checks_dir: Path, requested_suites: list[str]) -> list["SuiteInput"]:
-    from graphcheck.engine import SuiteInput
-    from graphcheck.errors import GraphCheckError
+    from graphcheck.application.suites import load_suite_inputs
 
-    if not checks_dir.is_dir():
-        raise GraphCheckError(
-            "run.checks_missing",
-            f"Configured checks directory was not found: {checks_dir}",
-            "Create the directory or fix `checks` in graphcheck.yml.",
-        )
-    try:
-        paths = sorted(
-            path
-            for path in checks_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".yml", ".yaml"}
-        )
-    except OSError as exc:
-        raise GraphCheckError(
-            "run.checks_unreadable",
-            f"Could not enumerate check suites in {checks_dir}: {exc}",
-            "Check the configured checks path and its filesystem permissions.",
-        ) from exc
-
-    requested = set(requested_suites)
-    loaded: list[SuiteInput] = []
-    for path in paths:
-        try:
-            loaded.append(SuiteInput.from_yaml(path.read_text(encoding="utf-8"), source=str(path)))
-        except Exception as exc:
-            raise GraphCheckError(
-                "run.suite_invalid",
-                f"Suite {path} is invalid: {type(exc).__name__}: {exc}",
-                "Fix the suite YAML and remove unknown keys, then run it again.",
-            ) from exc
-
-    return [item for item in loaded if not requested or item.suite.suite in requested]
+    return load_suite_inputs(checks_dir, requested_suites)
 
 
 def _project_path(root: Path, configured: str) -> Path:
