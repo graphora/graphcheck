@@ -23,6 +23,8 @@ from graphcheck.engine import (
     EngineConfig,
     failed_results,
 )
+from graphcheck.engine.executor import _accepts_parameter
+from graphcheck.engine.runner import _remaining
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 from graphcheck.project import (
@@ -87,6 +89,10 @@ def execute_run(
 
     try:
         max_concurrency = request.concurrency or int(config.concurrency)
+        engine_config = EngineConfig(
+            max_concurrency=max_concurrency, result_row_limit=config.engine.result_row_limit
+        )
+        deadline = time.monotonic() + engine_config.time_budget_s
 
         factory = client_factory or _new_neo4j_client
         client = factory(
@@ -95,7 +101,7 @@ def execute_run(
         )
 
         if request.verify_read_only_credential:
-            target = _verify_cli_audit_credential(client)
+            target = _verify_cli_audit_credential(client, deadline=deadline)
             if target_observer is not None:
                 target_observer(target)
 
@@ -109,16 +115,18 @@ def execute_run(
             baselines=DirectoryBaselineProvider(
                 artifacts / "baselines",
             ),
-            config=EngineConfig(max_concurrency=max_concurrency),
+            config=engine_config,
             progress_callback=progress_callback,
             event_sink=event_sink,
         )
+        _remaining(deadline, time.monotonic())
         engine_started = True
         results = engine.run(
             suite_inputs,
             tags=request.tags,
             fail_fast=request.fail_fast,
             selection_suites=request.suite_ids or None,
+            deadline=deadline,
         )
 
     except GraphCheckError as exc:
@@ -195,7 +203,7 @@ def _new_neo4j_client(profile, max_concurrency: int):
     return Neo4jClient(profile, max_concurrency=max_concurrency)
 
 
-def _verify_cli_audit_credential(client: object) -> object | None:
+def _verify_cli_audit_credential(client: object, *, deadline: float) -> object | None:
     """Probe the target, verify the read-only credential, and return the probed target.
 
     The returned target carries the live node/relationship counts so a caller can render a
@@ -203,9 +211,18 @@ def _verify_cli_audit_credential(client: object) -> object | None:
     """
     verify = getattr(client, "verify_read_only_credential", None)
     probe = getattr(client, "probe", None)
-    result = probe() if callable(probe) else None
-    if callable(verify):
-        verify()
+    result = None
+    for method in (probe, verify):
+        remaining = _remaining(deadline, time.monotonic())
+        if callable(method):
+            value = (
+                method(timeout_s=remaining)
+                if _accepts_parameter(method, "timeout_s", variadic=True)
+                else method()
+            )
+            if method is probe:
+                result = value
+    _remaining(deadline, time.monotonic())
     target = result[0] if isinstance(result, tuple) else result
     if isinstance(result, tuple) and len(result) > 2 and target is not None:
         counts = result[2]

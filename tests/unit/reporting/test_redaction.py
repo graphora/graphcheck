@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
     payload = json.loads(results_json(redacted))
 
     assert payload["run"]["redaction"] == {"policy": "mask", "applied": True}
-    assert payload["run"]["id"] == "redacted_20260706T090241000000Z"
+    assert re.fullmatch(r"redacted_[0-9a-f]{32}_20260706T090241000000Z", payload["run"]["id"])
     assert payload["totals"] == source_payload["totals"]
     assert payload["score"] == source_payload["score"]
     assert [suite["totals"] for suite in payload["suites"]] == [
@@ -87,8 +88,8 @@ def test_redaction_avoids_deterministic_run_id_collision_in_json_and_html():
     exported = results_json(redacted)
     html = render_html_report(redacted)
 
-    assert redacted.run.id == "redacted_collision1_20260706T090241000000Z"
-    assert redact_results(payload).run.id == redacted.run.id
+    assert re.fullmatch(r"redacted_[0-9a-f]{32}_20260706T090241000000Z", redacted.run.id)
+    assert redact_results(payload).run.id != redacted.run.id
     assert verify_redacted_results(redacted) == redacted
     assert sensitive not in exported
     assert sensitive not in html

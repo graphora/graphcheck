@@ -998,7 +998,9 @@ def report(
             return
 
         if compare is not None:
-            records = discover_report_runs(runs_dir)
+            records = discover_report_runs(
+                runs_dir, on_warning=lambda warning: typer.echo(f"Warning: {warning}", err=True)
+            )
             first = find_report_run(records, compare[0])
             second = find_report_run(records, compare[1])
             typer.echo(format_report_comparison(first, second))
@@ -1007,6 +1009,8 @@ def report(
         if prune:
             assert keep is not None
             removed = prune_report_runs(runs_dir, keep)
+            for warning in getattr(removed, "warnings", ()):
+                typer.echo(f"Warning: {warning}", err=True)
             if not removed:
                 typer.echo(f"No historical report runs needed pruning; keeping newest {keep}.")
                 return
@@ -1016,16 +1020,30 @@ def report(
             return
 
         if failures_only:
-            records = discover_report_runs(runs_dir)
+            import uuid
+
+            from graphcheck.application.artifacts import latest_publication_lock
+            from graphcheck.reporting.history import _discover_report_runs
+
+            records = discover_report_runs(
+                runs_dir, on_warning=lambda warning: typer.echo(f"Warning: {warning}", err=True)
+            )
             record = find_report_run(records, report_id) if report_id else _latest_run(records)
             output = record.directory / "report.failures.html"
             render_started = time.monotonic()
+            staging = runs_dir / f".report-{uuid.uuid4().hex}.html"
             try:
                 write_html_report(
                     record.results,
-                    output,
+                    staging,
                     verdicts={Verdict.FAIL, Verdict.WARN, Verdict.ERRORED},
                 )
+                with latest_publication_lock(runs_dir):
+                    current = find_report_run(_discover_report_runs(runs_dir), record.id)
+                    if current.summary != record.summary:
+                        raise ReportHistoryError("The selected report changed during rendering.")
+                    output = current.directory / "report.failures.html"
+                    staging.replace(output)
             except OSError as exc:
                 if telemetry is not None:
                     telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
@@ -1037,6 +1055,8 @@ def report(
                     )
                 typer.echo("report.error: failed to render the requested report", err=True)
                 raise typer.Exit(1) from exc
+            finally:
+                staging.unlink(missing_ok=True)
             if telemetry is not None:
                 telemetry.render_ms = max(0, round((time.monotonic() - render_started) * 1000))
                 telemetry.report_artifact = ArtifactOutcome.WRITTEN
@@ -1046,7 +1066,9 @@ def report(
             return
 
         if open_report:
-            records = discover_report_runs(runs_dir)
+            records = discover_report_runs(
+                runs_dir, on_warning=lambda warning: typer.echo(f"Warning: {warning}", err=True)
+            )
             if records:
                 record = (
                     find_report_run(records, report_id) if report_id is not None else records[0]
@@ -1675,12 +1697,17 @@ def run_command(
             else error
         )
 
+    exported_results = None
+
     def export_run_artifacts(run_results, target_runs_dir, *, render_observer=None):
+        nonlocal exported_results
         # Redact parameter, expected, query, and evidence literals in the written artifacts
         # when --redact is set. The in-memory results stay unredacted so telemetry and the
         # engine result are unaffected.
-        exported = redact_results(run_results) if redacted else run_results
-        return _write_run_artifacts(exported, target_runs_dir, render_observer=render_observer)
+        exported_results = redact_results(run_results) if redacted else run_results
+        return _write_run_artifacts(
+            exported_results, target_runs_dir, render_observer=render_observer
+        )
 
     def show_run_target(target: object) -> None:
         # The shared service calls this once the target is probed and the credential is
@@ -1888,12 +1915,12 @@ def run_command(
             exclude_ms=sum(render_times),
         )
 
-    exported_results = redact_results(results) if redacted else results
+    assert exported_results is not None
     _print_run_summary(
         exported_results,
         results_path,
         report_path,
-        display_run_id=results.run.id,
+        display_run_id=exported_results.run.id,
     )
     raise typer.Exit(results.run.exit_code)
 

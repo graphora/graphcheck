@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from graphcheck.application.artifacts import latest_publication_lock
 from graphcheck.application.paths import project_path
 from graphcheck.application.run import (
     RunRequest,
@@ -80,7 +81,13 @@ def get_results(run_id: str = "latest") -> Any:
     # A syntactically valid but missing, unreadable, malformed, or contract-invalid
     # artifact must never surface a filesystem path to the MCP client.
     try:
-        return load_results(results_path)
+        if not runs_dir.is_dir():
+            raise FileNotFoundError("No report history")
+        with latest_publication_lock(runs_dir):
+            results_path = (runs_dir / run_id / "results.json").resolve()
+            if results_path.parent.parent != runs_dir:
+                raise ValueError("Unsafe report path")
+            return load_results(results_path)
     except GraphCheckError:
         raise
     except FileNotFoundError as exc:

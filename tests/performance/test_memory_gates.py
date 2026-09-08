@@ -110,10 +110,47 @@ def test_failure_evidence_never_exceeds_cap():
 def test_full_result_assertion_stops_at_safety_ceiling():
     client = LazyGateClient(_rows(1_000_000))
 
-    check = _run(client, "equals: [n-0]", limit=2).checks[0]
+    check = _run(client, "unique: true", limit=2).checks[0]
 
     assert check.verdict is Verdict.ERRORED
     assert check.error is not None
     assert check.error.code == "engine.result_limit_exceeded"
     assert client.yielded == 3
     assert client.retained_peak == 2
+
+
+def test_equality_mismatch_on_large_stream_stops_before_the_row_ceiling():
+    client = LazyGateClient(_rows(1_000_000))
+    check, allocation = measure_allocations(
+        lambda: _run(client, "equals: [n-0]", limit=2).checks[0]
+    )
+    assert check.verdict is Verdict.FAIL
+    assert check.measured["equals"] is False
+    assert client.yielded == client.retained_peak == 2
+    assert len(check.evidence.elements) <= 2
+    assert allocation.peak_bytes < 4_000_000
+
+
+def test_pruning_allocations_follow_summaries_not_result_payloads(tmp_path):
+    from pathlib import Path
+
+    from graphcheck.reporting.history import prune_report_runs, report_summary_json
+    from graphcheck.reporting.writer import load_results
+
+    result = load_results(
+        Path(__file__).parents[1] / "unit/contracts/fixtures/results.complete.json"
+    )
+    # 30 MiB of valid JSON result data, compared with compact per-run summaries.
+    padding = " " * 1_000_000
+    for index in range(30):
+        directory = tmp_path / f"run-{index}"
+        directory.mkdir()
+        result.run.id = directory.name
+        (directory / "results.json").write_text(
+            result.model_dump_json(by_alias=True) + padding, encoding="utf-8"
+        )
+        (directory / "summary.json").write_text(report_summary_json(result), encoding="utf-8")
+    removed, allocation = measure_allocations(lambda: prune_report_runs(tmp_path, 1))
+    assert len(removed) == 29
+    assert all(record._results is None for record in removed)
+    assert allocation.peak_bytes < 4_000_000

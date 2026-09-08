@@ -106,8 +106,9 @@ Reaching `max_rows` while completeness is required raises `engine.result_limit_e
 caller-supplied `stop_when` may end an already-decisive read earlier.
 
 `read_transaction` yields the same planner-verified result interface over one explicit read
-transaction. Conditional measurement/evidence plans use it so both queries observe one graph
-snapshot and share the original monotonic deadline.
+transaction. Conditional measurement/evidence plans share that transaction and the original
+monotonic deadline. Neo4j read-committed isolation permits non-repeatable reads; measurement
+and evidence may observe different committed states.
 
 Successful read classifications are cached only on the owning `Neo4jClient`, keyed by exact query
 text, database, and the missing-schema allowance. Preflight summaries reject missing labels,
@@ -211,7 +212,8 @@ CALL { MATCH ()-[r]->() RETURN count(r) AS relationships }
 RETURN nodes, relationships
 ```
 
-The two compatible count-store reads execute as one request and one snapshot. Server metadata,
+The two compatible count-store reads execute as one request; this does not guarantee snapshot
+isolation. Server metadata,
 schema tokens, current-user roles, effective graph privileges, APOC, and count-store planning
 remain independently distinguishable requests because their permission and fallback behavior
 differs. Capability checks are deferred until connectivity is established; count-store planning is
@@ -332,3 +334,15 @@ Failure:
   }
 }
 ```
+
+
+### Concurrent writes and audit consistency
+
+Neo4j permits non-repeatable reads under read-committed isolation, even within a transaction
+or query ([concurrent data access](https://neo4j.com/docs/operations-manual/current/database-internals/concurrent-data-access/)).
+A writer can repair a violation after measurement but before evidence collection. If no graph
+pointer remains, the engine returns `engine.evidence_missing`, an errored check, rather than
+reporting a clean pass. Other concurrent changes can produce evidence from a newer state.
+Use a quiescent database or an externally created, stable database copy for a reproducible audit.
+GraphCheck's reader does not acquire write locks or change graph data. Stronger consistency
+requires separate design work; combining scans in one statement alone does not establish it.

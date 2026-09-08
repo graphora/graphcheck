@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from graphcheck import __version__
 from graphcheck.cli import app
-from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Counts, DebugTrace, SupportVersions, Visibility
@@ -590,6 +590,7 @@ def test_profile_summary_handles_empty_labels(tmp_path, monkeypatch):
     baseline = baseline.model_copy(
         update={"graph_schema": baseline.graph_schema.model_copy(update={"labels": []})}
     )
+    baseline.fingerprint = profile_fingerprint(baseline.graph_schema, baseline.statistics)
     _configure_profile_command(tmp_path, monkeypatch, baseline)
 
     result = runner.invoke(app, ["profile"])
@@ -603,6 +604,7 @@ def test_profile_summary_handles_empty_relationship_types(tmp_path, monkeypatch)
     baseline = baseline.model_copy(
         update={"graph_schema": baseline.graph_schema.model_copy(update={"relationship_types": []})}
     )
+    baseline.fingerprint = profile_fingerprint(baseline.graph_schema, baseline.statistics)
     _configure_profile_command(tmp_path, monkeypatch, baseline)
 
     result = runner.invoke(app, ["profile"])

@@ -34,6 +34,7 @@ from graphcheck.contracts.results import (
 from graphcheck.engine.baseline import (
     BaselineProvider,
     BaselineValue,
+    DirectoryBaselineProvider,
     MappingBaselineProvider,
     require_baseline,
 )
@@ -307,10 +308,13 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         """Run checks and contain all event-sink failures at the engine boundary."""
 
         self._reset_telemetry_state()
+        if isinstance(self.baselines, DirectoryBaselineProvider):
+            self.baselines = self.baselines.fresh()
         try:
             return self._run_with_events(
                 suites,
@@ -319,6 +323,7 @@ class Engine:
                 fail_fast=fail_fast,
                 selection_suites=selection_suites,
                 _initial_partial_reasons=_initial_partial_reasons,
+                deadline=deadline,
             )
         except Exception as exc:
             if (
@@ -350,6 +355,7 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         requested_tags = list(dict.fromkeys(tags))
         inputs = [
@@ -374,7 +380,11 @@ class Engine:
             ]
         started_at = _timestamp(self._clock())
         started_perf = self._monotonic()
-        deadline = started_perf + self.config.time_budget_s
+        deadline = (
+            min(deadline, started_perf + self.config.time_budget_s)
+            if deadline is not None
+            else started_perf + self.config.time_budget_s
+        )
         self._telemetry_deadline = deadline
         run_id = str(self._id_factory())
         selected_checks = [check for item in inputs for check in item.suite.checks]
@@ -731,6 +741,11 @@ class Engine:
                     check.spec.metric,
                     check.spec.target,
                 )
+                if baseline.partial:
+                    partial_reason = (
+                        f"check {suite_id}/{check.id} used partial baseline {check.spec.baseline!r}"
+                    )
+                    self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
                 timings.baseline_resolution_ms = self._timing_finish(stage_started)
             self._telemetry_stage = EngineStage.QUERY
             consumption = (
@@ -777,7 +792,7 @@ class Engine:
                     "engine.result_limit_exceeded",
                     "The competency query reached the configured result-row safety ceiling "
                     "before its assertions became decisive.",
-                    "Narrow the query or increase result_row_limit after reviewing "
+                    "Narrow the query or increase engine.result_row_limit after reviewing "
                     "its memory cost.",
                 )
             timings.read_guard_ms = execution.read_guard_ms
@@ -1723,7 +1738,7 @@ def _remaining(deadline: float, now: float) -> float:
     if remaining <= 0:
         raise GraphCheckTimeoutError(
             "engine.timeout",
-            "The run time budget was exhausted while executing a check.",
+            "The run execution time budget was exhausted.",
             "Narrow the selection, enable sampling, or increase the external job budget.",
         )
     return remaining

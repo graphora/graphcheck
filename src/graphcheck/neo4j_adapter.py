@@ -318,7 +318,11 @@ class Neo4jClient:
     def read_transaction(
         self, *, timeout_s: float | None = None, allow_missing_schema: bool = False
     ):
-        """Yield a planner-verified reader whose queries share one read snapshot."""
+        """Yield planner-verified reads sharing a transaction and monotonic deadline.
+
+        Neo4j read-committed isolation permits non-repeatable reads, including between
+        measurement and evidence. This context does not provide snapshot isolation.
+        """
 
         deadline = _timeout_deadline(timeout_s)
         try:
