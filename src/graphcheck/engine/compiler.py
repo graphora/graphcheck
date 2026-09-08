@@ -17,6 +17,9 @@ from graphcheck.engine.identifiers import node_pattern, property_access, relatio
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 
+_VALID_QUANTILES = {"p50", "p95", "max"}
+_VALID_DIRECTIONS = {"in", "out", "both"}
+
 
 @dataclass(frozen=True)
 class EvidenceCondition:
@@ -485,6 +488,26 @@ class CypherCompiler:
             "required_labels": [],
             "required_relationship_types": required_types,
         }
+
+    def _compile_degree_distribution(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target) - {"label", "type", "quantile", "direction"}
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        label = spec.target.get("label")
+        rel_type = spec.target.get("type")
+        quantile = spec.target.get("quantile")
+        direction = spec.target.get("direction", "both")
+        if (label is None) == (rel_type is None):
+            raise _bad_target(spec.metric, "target requires exactly one of label or type")
+        if label is not None and (not isinstance(label, str) or not label.strip()):
+            raise _bad_target(spec.metric, "target.label must be a non-blank string")
+        if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
+            raise _bad_target(spec.metric, "target.type must be a non-blank string")
+        if quantile not in _VALID_QUANTILES:
+            raise _bad_target(spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}")
+        if direction not in _VALID_DIRECTIONS:
+            raise _bad_target(spec.metric, f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}")
+        raise NotImplementedError("query construction pending - brick 2")
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
         unknown = set(spec.target) - {"label", "type", "property"}
