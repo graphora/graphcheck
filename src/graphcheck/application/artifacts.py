@@ -83,6 +83,7 @@ def write_run_artifacts(
     refresh.
     """
     from graphcheck.reporting.history import report_name
+    from graphcheck.reporting.writer import load_results
 
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
@@ -94,11 +95,16 @@ def write_run_artifacts(
     ):
         raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
 
-    artifacts = render_run_artifacts(results, render_observer=render_observer)
-    publish_run_directory(artifacts, historical_dir)
-
     latest_dir = runs_dir / "latest"
     with latest_publication_lock(runs_dir):
+        previous_path = latest_dir / "results.json"
+        if previous_path.is_file() and not results.run.redaction.applied:
+            previous = load_results(previous_path).run
+            results.run.previous_run_id = (
+                previous.previous_run_id if previous.id == results.run.id else previous.id
+            )
+        artifacts = render_run_artifacts(results, render_observer=render_observer)
+        publish_run_directory(artifacts, historical_dir)
         publish_run_directory(artifacts, latest_dir)
     return latest_dir / "results.json", latest_dir / "report.html"
 

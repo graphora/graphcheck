@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Runs now include `previous_run_id`, `baseline_ref`, and `config_hash` in results schema 2.0,
+  with compatibility for older artifacts and a new lineage fixture. Profile references identify
+  the latest existing timestamped snapshot; running checks does not trigger profiling. History
+  summaries and `graphcheck report --history` show the previous-run links, assigned under the
+  publication lock for concurrent CLI and MCP runs. Redacted exports clear lineage metadata.
+- Added `graphcheck changes [--since <run-id|previous>] [--json]` to combine check outcome,
+  coverage, suite-score, and profile deltas through the existing report comparison and profile
+  diff implementations. JSON is deterministic; exit codes distinguish no regressions (`0`),
+  regressions or new failures (`1`), and invalid or unavailable comparison inputs (`2`).
+- Changes output includes appeared and disappeared evidence element IDs per check, sharing the
+  smaller input evidence cap across both directions, counting dropped deltas, and identifying
+  truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
+
 ### Fixed
 
 - Escaped Unicode-encoded backticks in schema identifiers and shared the same escaping between

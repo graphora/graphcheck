@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 
 from graphcheck import __version__
@@ -54,6 +54,7 @@ from graphcheck.engine.sampling import SamplingPolicy
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.packs import PACK_VERSION
 from graphcheck.packs.catalog import builtin_pack_catalog
+from graphcheck.provenance import config_hash
 from graphcheck.scoring import calculate_score, calculate_suite_scores
 from graphcheck.telemetry.events import (
     CheckProcessed,
@@ -1465,6 +1466,15 @@ class Engine:
             schema_version=SCHEMA_VERSION,
             run={
                 "id": run_id,
+                "config_hash": config_hash(
+                    {
+                        "engine": asdict(self.config),
+                        "suites": sorted(suite_ids),
+                        "tags": sorted(tags),
+                        "fail_fast": fail_fast,
+                        "sources": sorted((suite["id"], suite["source_sha"]) for suite in suites),
+                    }
+                ),
                 "started_at": started_at,
                 "finished_at": finished_at,
                 "graphcheck_version": __version__,
@@ -1510,6 +1520,14 @@ class Engine:
             schema_version=SCHEMA_VERSION,
             run={
                 "id": run_id,
+                "config_hash": config_hash(
+                    {
+                        "engine": asdict(self.config),
+                        "suites": sorted(suite_ids),
+                        "tags": sorted(tags),
+                        "fail_fast": fail_fast,
+                    }
+                ),
                 "started_at": started_at,
                 "finished_at": _timestamp(self._clock()),
                 "graphcheck_version": __version__,

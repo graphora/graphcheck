@@ -186,6 +186,12 @@ def test_concurrent_latest_publication_is_serialized(tmp_path):
     assert latest_report.is_file()
     assert load_results(latest_results).run.id in set(run_ids.values())
     assert {record.id for record in discover_report_runs(runs_dir)} == set(run_ids.values())
+    chain = {
+        record.id: record.results.run.previous_run_id for record in discover_report_runs(runs_dir)
+    }
+    latest = load_results(latest_results).run.id
+    assert chain[latest] == next(run_id for run_id in chain if run_id != latest)
+    assert chain[chain[latest]] is None
 
 
 def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):

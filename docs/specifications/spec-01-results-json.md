@@ -6,6 +6,9 @@ current `schema_version` is `"2.0"`, versioned independently of `graphcheck_vers
 
 Version history:
 
+- **2.0 additive lineage** adds nullable `run.previous_run_id`, `run.baseline_ref`, and
+  `run.config_hash`. Producers include all three fields; readers default missing fields to null
+  so historical 2.0 artifacts continue to load. The JSON Schema remains 2.0.
 - **2.0** renames the execution field from `run.status` to `run.run_status`, distinguishing it
   from the derived `coverage_status` used by report summaries and presentation surfaces.
 - **1.2** adds canonical target `labels` and `relationship_types` inventory.
@@ -76,6 +79,29 @@ The compatibility loader upgrades 1.0 and 1.1 artifacts in memory by adding
 `labels:null` and `relationship_types:null` to a non-null historical target before validating
 against the current model. It does not rewrite the source artifact. A re-exposed historical result,
 including through MCP, preserves null as `not recorded by that schema version`.
+
+## Run lineage and configuration identity
+
+`previous_run_id` identifies the last published run in the configured artifacts directory, or null
+for the first run. Publication serializes link assignment with updating `latest` so concurrent runs
+form a chain. History summaries include the link without loading every full results file.
+
+`baseline_ref` is the immutable filename of the latest existing timestamped profile when the run
+was prepared, or null when no profile exists. It describes the snapshot used by `changes` and does
+not replace individual drift checks' baseline references. It never points at a mutable `latest`
+alias, and runs do not automatically profile the graph.
+
+`config_hash` is `sha256:<hex>` over canonical JSON of effective engine settings, sorted suite/tag
+selection, fail-fast, and selected suite source hashes. The application additionally includes
+project settings that affect runs, effective concurrency, the selected connection profile name,
+URI and database, and credential-verification mode. Generation settings and credentials are
+excluded. Failed runs include the configuration available before failure. Historical artifacts
+may have a null hash.
+Mask-redacted exports clear all three fields to avoid revealing source lineage or configuration.
+
+Historical 2.0 inputs remain in `tests/unit/contracts/fixtures/results.*.json` unchanged; the
+`results.lineage.json` fixture exercises the additive fields alongside them. The rendered golden
+fixture represents current producer output. Pre-2.0 exports retain their historical shape.
 
 ## Shape by run status
 

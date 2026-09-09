@@ -206,6 +206,8 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
     sensitive = _sensitive_source_literals(payload)
     payload["run"]["redaction"] = {"policy": RedactionPolicy.MASK, "applied": True}
     payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"], sensitive)
+    for key in ("previous_run_id", "baseline_ref", "config_hash"):
+        payload["run"][key] = None
     _alias_identifiers(payload, sensitive)
     if payload["run"]["partial_reason"] is not None:
         payload["run"]["partial_reason"] = REDACTION_MASK
@@ -267,6 +269,11 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
         raise ValueError("redaction verification failed: run.redaction is not applied mask mode")
     if not _is_redacted_run_id(results.run.id, results.run.finished_at):
         raise ValueError("redaction verification failed: run.id is not target-neutral")
+    if any(
+        getattr(results.run, key) is not None
+        for key in ("previous_run_id", "baseline_ref", "config_hash")
+    ):
+        raise ValueError("redaction verification failed: run lineage must be cleared")
     if results.run.partial_reason is not None:
         _verify_masked(results.run.partial_reason, "run.partial_reason")
     if results.run.error is not None:

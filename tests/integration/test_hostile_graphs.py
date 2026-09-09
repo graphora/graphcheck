@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -365,6 +366,50 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
         profile = json.loads(results["profile"].stdout)
         assert profile["statistics"]["node_count"] == case["nodes"]
         assert profile["statistics"]["relationship_count"] == case["relationships"]
+        suite_path = tmp_path / "checks" / str(case["suite"])
+        suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
+        suite["conformance"] = [
+            {
+                "id": "bounded-evidence",
+                "check": "completeness",
+                "severity": "error",
+                "with": {
+                    "label": "HostileEmailAddress",
+                    "property": "graphcheck_changes_probe",
+                    "threshold": 1.0,
+                },
+            }
+        ]
+        suite_path.write_text(yaml.safe_dump(suite), encoding="utf-8")
+        with (
+            GraphDatabase.driver(
+                neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
+            ) as driver,
+            driver.session(database=neo4j_profile.database) as session,
+        ):
+            session.run(
+                "MATCH (n:HostileEmailAddress) WITH n ORDER BY elementId(n) DESC LIMIT 1 "
+                "SET n.graphcheck_changes_probe = true"
+            ).consume()
+            assert _cli(tmp_path, "run", timeout=240).returncode == 1
+            session.run(
+                "MATCH (n:HostileEmailAddress) WITH n ORDER BY elementId(n) LIMIT 100 "
+                "SET n.graphcheck_changes_probe = true"
+            ).consume()
+        assert _cli(tmp_path, "run", timeout=240).returncode == 1
+        changes = _cli(tmp_path, "changes", "--json")
+        repeated = _cli(tmp_path, "changes", "--json")
+        assert changes.returncode == repeated.returncode == 0
+        assert changes.stdout == repeated.stdout
+        assert len(changes.stdout.encode("utf-8")) < 100_000
+        delta = next(
+            item
+            for item in json.loads(changes.stdout)["evidence"]
+            if item["check_id"] == "bounded-evidence"
+        )
+        assert len(delta["appeared"]) + len(delta["disappeared"]) <= delta["cap"] == 100
+        assert delta["dropped"] == 100
+        assert delta["before_truncated"] and delta["after_truncated"]
     finally:
         with (
             GraphDatabase.driver(
@@ -374,3 +419,63 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
         ):
             session.run("MATCH (n) DETACH DELETE n").consume()
             session.run("DROP CONSTRAINT hostile_email_id IF EXISTS").consume()
+
+
+def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile, tmp_path):
+    root = Path(__file__).parents[2]
+    fixture = root / "tests/fixtures/external/fraud-ring"
+    split = runpy.run_path(str(fixture / "tests/cypher_utils.py"))["split_statements"]
+    _project(tmp_path, neo4j_profile, "empty.yml")
+    (tmp_path / "checks/empty.yml").unlink()
+    suite = yaml.safe_load(
+        (root / "examples/fraud-ring/checks/fraud-ring-conformance.yml").read_text(encoding="utf-8")
+    )
+    suite["competency"] = [
+        {
+            "id": "customer-tax-id-fixed",
+            "question": "Is the tax ID present?",
+            "query": "MATCH (c:Customer {id: 'CUST-1'}) WHERE c.tax_id IS NULL "
+            "RETURN elementId(c) AS node_id",
+            "expect": {"rows": {"exactly": 0}},
+        }
+    ]
+    (tmp_path / "checks/fraud-ring.yml").write_text(yaml.safe_dump(suite), encoding="utf-8")
+    with (
+        _seeded_graph(neo4j_profile),
+        GraphDatabase.driver(
+            neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        for statement in split(
+            (fixture / "fixtures/fraud-ring/seed-clean.cypher").read_text(encoding="utf-8")
+        ):
+            session.run(statement).consume()
+        session.run("MATCH (c:Customer {id: 'CUST-1'}) REMOVE c.tax_id").consume()
+        assert _cli(tmp_path, "profile", "--json", timeout=240).returncode == 0
+        assert _cli(tmp_path, "run").returncode == 1
+        before = _run_payload(tmp_path)
+        orphan_id = session.run(
+            "MATCH (c:Customer {id: 'CUST-1'}) SET c.tax_id = '100000001' "
+            "CREATE (n:Account {id: 'ACC-NEW-ORPHAN'}) "
+            "RETURN elementId(n) AS id"
+        ).single(strict=True)["id"]
+        assert _cli(tmp_path, "profile", "--json", timeout=240).returncode == 0
+        assert _cli(tmp_path, "run").returncode == 1
+        after = _run_payload(tmp_path)
+        assert after["run"]["previous_run_id"] == before["run"]["id"]
+        assert after["run"]["baseline_ref"] != before["run"]["baseline_ref"]
+        text = _cli(tmp_path, "changes")
+        first, second = _cli(tmp_path, "changes", "--json"), _cli(tmp_path, "changes", "--json")
+        assert text.returncode == first.returncode == second.returncode == 1
+        assert first.stdout == second.stdout
+        assert "account-no-orphans: pass -> fail" in text.stdout
+        assert "customer-tax-id-fixed: fail -> pass" in text.stdout
+        assert "(+1," in text.stdout and orphan_id in text.stdout
+        payload = json.loads(first.stdout)
+        assert payload["profile"]["statistics"]["node_count"]["delta"] == 1
+        delta = next(
+            item for item in payload["evidence"] if item["check_id"] == "account-no-orphans"
+        )
+        assert delta["appeared"] == [{"kind": "node", "id": orphan_id}]
+        assert delta["disappeared"] == [] and delta["dropped"] == 0
