@@ -37,12 +37,20 @@ def property_graph(neo4j_profile, request):
             for node in reversed(range(request.param))
         ]
         try:
+            if rows:
+                # Neo4j drops null values, so register the intended keys outside the measured label.
+                session.run(
+                    "CREATE (n:SharedQuerySchemaFixture) SET n = $properties",
+                    properties={f"p{prop}": True for prop in range(32)},
+                ).consume()
             session.run(
                 "UNWIND $rows AS row CREATE (n:SharedQueryFixture) SET n = row", rows=rows
             ).consume()
             yield neo4j_profile, session, request.param
         finally:
-            session.run("MATCH (n:SharedQueryFixture) DETACH DELETE n").consume()
+            session.run(
+                "MATCH (n) WHERE n:SharedQueryFixture OR n:SharedQuerySchemaFixture DETACH DELETE n"
+            ).consume()
 
 
 @pytest.mark.parametrize("size", [2, 8, 32])
