@@ -106,10 +106,19 @@ class PropertyCoverage(_Strict):
     coverage: float = Field(ge=0, le=100)
 
 
+class DegreeDistributionCoverage(_Strict):
+    label: str | None = None
+    type: str | None = None
+    quantile: Literal["p50", "p95", "max"]
+    direction: Literal["in", "out", "both"]
+    value: float = Field(ge=0)
+
+
 class ProfileStatistics(_Strict):
     node_count: int = Field(ge=0)
     relationship_count: int = Field(ge=0)
     property_coverage: list[PropertyCoverage]
+    degree_distribution: list[DegreeDistributionCoverage] = []
 
 
 class BaselineProfile(_Strict):
