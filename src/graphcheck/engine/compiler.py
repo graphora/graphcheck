@@ -497,8 +497,8 @@ class CypherCompiler:
         rel_type = spec.target.get("type")
         quantile = spec.target.get("quantile")
         direction = spec.target.get("direction", "both")
-        if (label is None) == (rel_type is None):
-            raise _bad_target(spec.metric, "target requires exactly one of label or type")
+        if label is None and rel_type is None:
+            raise _bad_target(spec.metric, "target requires at least one of label or type")
         if label is not None and (not isinstance(label, str) or not label.strip()):
             raise _bad_target(spec.metric, "target.label must be a non-blank string")
         if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
@@ -507,6 +507,11 @@ class CypherCompiler:
             raise _bad_target(spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}")
         if direction not in _VALID_DIRECTIONS:
             raise _bad_target(spec.metric, f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}")
+        if label is None and rel_type is not None and direction == "both":
+            raise _bad_target(
+                spec.metric,
+                "target.direction must be 'in' or 'out' when target.type is given without target.label",
+            )
         raise NotImplementedError("query construction pending - brick 2")
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
