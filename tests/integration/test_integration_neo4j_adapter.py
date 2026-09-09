@@ -307,3 +307,35 @@ def test_apoc_present_when_plugin_enabled(neo4j_apoc_profile):
         assert target.capabilities.apoc is True
     finally:
         client.close()
+
+
+def test_show_indexes_preserves_declared_range_property_order(neo4j_profile):
+    from neo4j import GraphDatabase
+
+    from graphcheck.profiler import collect_indexes
+
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
+        ) as writer,
+        writer.session(database=neo4j_profile.database) as session,
+    ):
+        client = Neo4jClient(neo4j_profile)
+        names = ["graphcheck_order_a", "graphcheck_order_b"]
+        try:
+            session.run(
+                "CREATE RANGE INDEX graphcheck_order_a FOR (n:GraphCheckIndexOrder) "
+                "ON (n.tenant, n.id)"
+            ).consume()
+            session.run(
+                "CREATE RANGE INDEX graphcheck_order_b FOR (n:GraphCheckIndexOrder) "
+                "ON (n.id, n.tenant)"
+            ).consume()
+            indexes = {index.name: index for index in collect_indexes(client)}
+            assert indexes[names[0]].properties == indexes[names[1]].properties == ["id", "tenant"]
+            assert indexes[names[0]].declared_order == ["tenant", "id"]
+            assert indexes[names[1]].declared_order == ["id", "tenant"]
+        finally:
+            client.close()
+            for name in names:
+                session.run(f"DROP INDEX {name} IF EXISTS").consume()

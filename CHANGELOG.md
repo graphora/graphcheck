@@ -18,9 +18,39 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Changes output includes appeared and disappeared evidence element IDs per check, sharing the
   smaller input evidence cap across both directions, counting dropped deltas, and identifying
   truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
+- Added `engine.result_row_limit` project configuration, shared by CLI and MCP, with a default
+  ceiling of 100,000 competency rows and strict positive-integer validation.
+- Baseline schema 1.1 preserves declared RANGE index property order while reading legacy 1.0
+  profiles with unknown order. Diff format 1.1 explains property inventory/type changes and
+  distinguishes newly available index-order metadata from known definition changes.
+
+### Changed
+
+- Runs prepare suites once, prefer the C-backed safe YAML parser, and show loading, connecting,
+  running, and report-writing stages in interactive terminals.
+- Graph inventory uses one combined request, and built-in same-label completeness checks share
+  bounded scans while retaining individual verdicts, evidence, and executed-query provenance.
+- PII candidate selection orders eligible properties within each node while preserving its
+  deterministic sampling inputs and final sample ordering.
+- Optional telemetry delivery gets a 50 ms command-exit allowance and pending events may be dropped.
+- Report IDs include a unique component; redacted exports use independent random identifiers.
+  Existing history names remain readable, and identical artifact publication can be retried.
+- Corrected read-consistency documentation: measurement and evidence share a transaction and
+  deadline, but Neo4j read-committed isolation permits concurrent writes to change observations.
 
 ### Fixed
 
+- Drift checks retain partial run status when using present measurements from incomplete
+  baselines, without changing their measured verdict or exit-code precedence.
+- Connection and credential preflight now share the run deadline with check execution.
+- Baseline references and parsed snapshots are pinned per run, and snapshots/selection metadata
+  are published atomically so interrupted writes cannot become selectable partial files.
+- Distinct runs cannot overwrite history on timestamp collisions. Managed report readers now
+  coordinate with publication/deletion and retain access to healthy records beside corrupt ones.
+- Pruning uses compact summaries instead of retaining full historical results, and partial
+  profiles preserve successfully collected relationship counts and property coverage.
+- Equality checks stop on decisive unexpected values or excess duplicates while preserving bag
+  semantics, honest partial-stream measurements, and graph-evidence requirements.
 - Escaped Unicode-encoded backticks in schema identifiers and shared the same escaping between
   check compilation and profiling to prevent identifiers from changing the generated Cypher.
 - Configuration errors no longer echo input values or YAML source snippets, connection profile

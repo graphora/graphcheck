@@ -34,10 +34,12 @@ from graphcheck.contracts.results import (
 from graphcheck.engine.baseline import (
     BaselineProvider,
     BaselineValue,
+    DirectoryBaselineProvider,
     MappingBaselineProvider,
     require_baseline,
 )
 from graphcheck.engine.compiler import (
+    COMPLETENESS_BATCH_SIZE,
     CompiledCheck,
     CypherCompiler,
     expected_for,
@@ -308,10 +310,13 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         """Run checks and contain all event-sink failures at the engine boundary."""
 
         self._reset_telemetry_state()
+        if isinstance(self.baselines, DirectoryBaselineProvider):
+            self.baselines = self.baselines.fresh()
         try:
             return self._run_with_events(
                 suites,
@@ -320,6 +325,7 @@ class Engine:
                 fail_fast=fail_fast,
                 selection_suites=selection_suites,
                 _initial_partial_reasons=_initial_partial_reasons,
+                deadline=deadline,
             )
         except Exception as exc:
             if (
@@ -351,6 +357,7 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         requested_tags = list(dict.fromkeys(tags))
         inputs = [
@@ -375,7 +382,11 @@ class Engine:
             ]
         started_at = _timestamp(self._clock())
         started_perf = self._monotonic()
-        deadline = started_perf + self.config.time_budget_s
+        deadline = (
+            min(deadline, started_perf + self.config.time_budget_s)
+            if deadline is not None
+            else started_perf + self.config.time_budget_s
+        )
         self._telemetry_deadline = deadline
         run_id = str(self._id_factory())
         selected_checks = [check for item in inputs for check in item.suite.checks]
@@ -603,46 +614,44 @@ class Engine:
                 if prepare(index, suite_input, check, check_deadline=False)
             ]
             outcomes: dict[int, str | None] = {}
-            if self.config.max_concurrency == 1:
-                for index, suite_input, check in runnable:
-                    result, reason, timings = self._run_check_if_time(
-                        check,
-                        check_sequence=index + 1,
-                        suite_id=suite_input.suite.suite,
-                        suite_sha=suite_input.source_sha,
-                        target=resolved_target,
-                        deadline=deadline,
-                    )
+            groups: list[list[tuple]] = []
+            batches: dict[tuple[str, str], list[tuple]] = {}
+            for task in runnable:
+                _, suite_input, check = task
+                label = (
+                    self.compiler.completeness_label(check)
+                    if type(self.compiler) is CypherCompiler
+                    else None
+                )
+                key = (suite_input.suite.suite, label)
+                if label is None:
+                    groups.append([task])
+                else:
+                    if key not in batches or len(batches[key]) == COMPLETENESS_BATCH_SIZE:
+                        batches[key] = []
+                        groups.append(batches[key])
+                    batches[key].append(task)
+
+            def record_group(group_results):
+                for index, suite_input, check, outcome in group_results:
+                    result, reason, timings = outcome
                     outcomes[index] = reason
-                    record_result(
-                        index,
-                        result,
-                        suite_input.suite.suite,
-                        check.id,
-                        timings=timings,
-                    )
-            elif runnable:
+                    record_result(index, result, suite_input.suite.suite, check.id, timings=timings)
+
+            if self.config.max_concurrency == 1:
+                for group in groups:
+                    record_group(self._run_task_group(group, resolved_target, deadline))
+            elif groups:
                 with ThreadPoolExecutor(
-                    max_workers=min(self.config.max_concurrency, len(runnable)),
+                    max_workers=min(self.config.max_concurrency, len(groups)),
                     thread_name_prefix="graphcheck",
                 ) as pool:
-                    futures = {
-                        pool.submit(
-                            self._run_check_if_time,
-                            check,
-                            check_sequence=index + 1,
-                            suite_id=suite_input.suite.suite,
-                            suite_sha=suite_input.source_sha,
-                            target=resolved_target,
-                            deadline=deadline,
-                        ): (index, suite_input.suite.suite, check.id)
-                        for index, suite_input, check in runnable
-                    }
+                    futures = [
+                        pool.submit(self._run_task_group, group, resolved_target, deadline)
+                        for group in groups
+                    ]
                     for future in as_completed(futures):
-                        index, suite_id, check_id = futures[future]
-                        result, reason, timings = future.result()
-                        outcomes[index] = reason
-                        record_result(index, result, suite_id, check_id, timings=timings)
+                        record_group(future.result())
             for index in sorted(outcomes):
                 if outcomes[index] is not None:
                     _append_once(partial_reasons, outcomes[index])
@@ -673,6 +682,100 @@ class Engine:
         self._emit_run_finished(results, started_perf)
         return results
 
+    def _run_task_group(self, group, target, deadline):
+        def run_member(task, prepared=None):
+            index, suite_input, check = task
+            return (
+                *task,
+                self._run_check_if_time(
+                    check,
+                    check_sequence=index + 1,
+                    suite_id=suite_input.suite.suite,
+                    suite_sha=suite_input.source_sha,
+                    target=target,
+                    deadline=deadline,
+                    prepared=prepared,
+                ),
+            )
+
+        if len(group) == 1 or self._monotonic() >= deadline:
+            return [run_member(task) for task in group]
+        batch = None
+        started = (_timestamp(self._clock()), self._monotonic())
+        allow_missing_schema = (
+            getattr(target, "nodes", None) == 0 and getattr(target, "relationships", None) == 0
+        )
+        try:
+            batch = self.compiler.compile_completeness_batch([task[2] for task in group])
+            with self.executor.transaction(
+                timeout_s=_remaining(deadline, self._monotonic()),
+                allow_missing_schema=allow_missing_schema,
+            ) as transaction:
+                # Charge the physical measurement once, to the first member. Later members
+                # carry only their own evidence-query costs in the existing event contract.
+                token = self._active_check_context.set((group[0][0] + 1, group[0][2]))
+                try:
+                    execution = self._execute_query_with_event(
+                        batch.query,
+                        batch.params,
+                        role=QueryRole.CHECK_MEASUREMENT,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                        allow_missing_schema=allow_missing_schema,
+                    )
+                finally:
+                    self._active_check_context.reset(token)
+                if len(execution.rows) != 1:
+                    raise GraphCheckError(
+                        "engine.invalid_query_result",
+                        "A completeness batch must return one aggregate row.",
+                        "Check the shared completeness measurement query.",
+                    )
+                row = execution.rows[0]
+                population = row.get("population")
+                if (
+                    type(population) is not int
+                    or population < 0
+                    or any(
+                        type(row.get(column)) is not int or not 0 <= row[column] <= population
+                        for _, column in batch.members
+                    )
+                ):
+                    raise GraphCheckError(
+                        "engine.invalid_query_result",
+                        "A completeness batch returned invalid counters.",
+                        "Check the shared completeness measurement query.",
+                    )
+                outcomes = []
+                for task, (compiled, column) in zip(group, batch.members, strict=True):
+                    conforming = row[column]
+                    member_row = {
+                        **row,
+                        "conforming_count": conforming,
+                        "violation_count": population - conforming,
+                        "coverage": conforming / population if population else 1.0,
+                        "evidence": [],
+                    }
+                    member_execution = replace(
+                        execution,
+                        rows=[member_row],
+                        columns=tuple(member_row),
+                        read_guard_ms=execution.read_guard_ms if task is group[0] else None,
+                    )
+                    outcomes.append(
+                        run_member(task, (compiled, member_execution, transaction, *started))
+                    )
+                return outcomes
+        except Exception as exc:
+            return [
+                run_member(task, (compiled, exc, None, *started))
+                for task, (compiled, _) in zip(
+                    group,
+                    batch.members if batch is not None else [(None, "")] * len(group),
+                    strict=True,
+                )
+            ]
+
     def _run_check(
         self,
         check,
@@ -681,9 +784,10 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
+        prepared: tuple | None = None,
     ) -> tuple[CheckResult, str | None, _CheckTimings]:
-        check_started_at = _timestamp(self._clock())
-        check_started_perf = self._monotonic()
+        check_started_at = prepared[3] if prepared is not None else _timestamp(self._clock())
+        check_started_perf = prepared[4] if prepared is not None else self._monotonic()
         timings = _CheckTimings()
         compiled: CompiledCheck | None = None
         resolved_params: dict[str, object] | None = None
@@ -701,7 +805,13 @@ class Engine:
                 suite_sha=suite_sha,
                 check_id=check.id,
             )
-            compiled = self.compiler.compile(check, sample_seed=sample_seed)
+            compiled = (
+                prepared[0]
+                if prepared is not None
+                else self.compiler.compile(check, sample_seed=sample_seed)
+            )
+            if compiled is None and prepared is not None:
+                raise prepared[1]
             timings.compile_ms = self._timing_finish(stage_started)
             if isinstance(check.spec, CompetencyCheck):
                 self._telemetry_stage = EngineStage.RESOLVE_PARAMS
@@ -732,6 +842,11 @@ class Engine:
                     check.spec.metric,
                     check.spec.target,
                 )
+                if baseline.partial:
+                    partial_reason = (
+                        f"check {suite_id}/{check.id} used partial baseline {check.spec.baseline!r}"
+                    )
+                    self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
                 timings.baseline_resolution_ms = self._timing_finish(stage_started)
             self._telemetry_stage = EngineStage.QUERY
             consumption = (
@@ -740,7 +855,21 @@ class Engine:
                 and not self.config.eager_competency_evaluation
                 else None
             )
-            if compiled.evidence_query is None:
+            if prepared is not None:
+                _, execution, transaction, *_ = prepared
+                if isinstance(execution, Exception):
+                    raise execution
+                if _evidence_required(compiled, execution.rows):
+                    evidence_execution = self._execute_query_with_event(
+                        compiled.evidence_query,
+                        compiled.evidence_params or resolved_params,
+                        role=QueryRole.EVIDENCE_COLLECTION,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                        allow_missing_schema=allow_missing_schema,
+                    )
+                    execution = _merge_evidence(compiled, execution, evidence_execution)
+            elif compiled.evidence_query is None:
                 execution = self._execute_query_with_event(
                     compiled.query,
                     resolved_params,
@@ -778,7 +907,7 @@ class Engine:
                     "engine.result_limit_exceeded",
                     "The competency query reached the configured result-row safety ceiling "
                     "before its assertions became decisive.",
-                    "Narrow the query or increase result_row_limit after reviewing "
+                    "Narrow the query or increase engine.result_row_limit after reviewing "
                     "its memory cost.",
                 )
             timings.read_guard_ms = execution.read_guard_ms
@@ -888,10 +1017,11 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
+        prepared: tuple | None = None,
     ) -> tuple[CheckResult, str | None, _CheckTimings]:
         token = self._active_check_context.set((check_sequence, check))
         try:
-            if self._monotonic() >= deadline:
+            if prepared is None and self._monotonic() >= deadline:
                 return (
                     _skipped_result(check, suite_id, SkipReason.NOT_RUN),
                     _deadline_reason(self.config.time_budget_s),
@@ -903,6 +1033,7 @@ class Engine:
                 suite_sha=suite_sha,
                 target=target,
                 deadline=deadline,
+                prepared=prepared,
             )
         finally:
             self._active_check_context.reset(token)
@@ -1741,7 +1872,7 @@ def _remaining(deadline: float, now: float) -> float:
     if remaining <= 0:
         raise GraphCheckTimeoutError(
             "engine.timeout",
-            "The run time budget was exhausted while executing a check.",
+            "The run execution time budget was exhausted.",
             "Narrow the selection, enable sampling, or increase the external job budget.",
         )
     return remaining

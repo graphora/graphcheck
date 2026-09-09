@@ -515,3 +515,127 @@ def test_history_mutation_waits_for_publication_before_inspecting_latest(tmp_pat
             shutil.copytree(new, runs_dir / "latest")
         assert [record.id for record in deletion.result(timeout=5)] == ["run-old"]
     assert load_results(runs_dir / "latest" / "results.json").run.id == "run-new"
+
+
+@pytest.mark.parametrize("corruption", ["json", "contract", "summary", "unreadable"])
+def test_discovery_isolates_damaged_records_and_pruning_preserves_them(
+    tmp_path, monkeypatch, corruption
+):
+    healthy = _write_run(tmp_path, "healthy", "2026-07-02T10:00:00Z")
+    broken = _write_run(tmp_path, "broken", "2026-07-01T10:00:00Z")
+    if corruption in {"json", "contract"}:
+        (broken / "results.json").write_text(
+            "{" if corruption == "json" else "{}", encoding="utf-8"
+        )
+    elif corruption == "summary":
+        (broken / "summary.json").write_text("{", encoding="utf-8")
+    else:
+        original = history_module.load_results
+
+        def unreadable(path):
+            if path.parent == broken:
+                raise PermissionError("not readable")
+            return original(path)
+
+        monkeypatch.setattr(history_module, "load_results", unreadable)
+    records = discover_report_runs(healthy.parent)
+    assert find_report_run(records, "healthy").results.run.id == "healthy"
+    if corruption == "summary":
+        assert find_report_run(records, "broken").results.run.id == "broken"
+        assert "invalid summary" in records.warnings[0]
+    else:
+        assert len(records) == 1
+        assert "broken" in format_report_history(records)
+        with pytest.raises(history_module.ReportHistoryError):
+            find_report_run(records, "broken")
+        removed = history_module.prune_report_runs(healthy.parent, 1)
+        assert removed.warnings
+        assert broken.exists()
+
+
+def test_pruning_valid_summaries_does_not_load_full_results(tmp_path, monkeypatch):
+    for index in range(8):
+        path = _write_run(tmp_path, f"run-{index}", f"2026-07-0{index + 1}T10:00:00Z")
+        (path / "summary.json").write_text(
+            report_summary_json(load_results(path / "results.json")), encoding="utf-8"
+        )
+
+    def no_full_results(*args):
+        raise AssertionError("pruning loaded full results despite a valid summary")
+
+    monkeypatch.setattr(history_module, "load_results", no_full_results)
+    removed = history_module.prune_report_runs(path.parent, 1)
+    assert len(removed) == 7
+    assert all(record._results is None for record in removed)
+    assert (path.parent / "run-7").is_dir()
+
+
+def test_lazy_selected_report_deleted_before_load_is_controlled(tmp_path):
+    directory = _write_run(tmp_path, "gone", "2026-07-01T10:00:00Z")
+    record = discover_report_runs(directory.parent)[0]
+    assert record._results is None
+    history_module.delete_report_runs(directory.parent, [record.id])
+    with pytest.raises(history_module.ReportHistoryError, match="removed"):
+        _ = record.results
+
+
+def _publish_paused_between_latest_renames(runs_dir, paused, resume):
+    from unittest.mock import patch
+
+    from graphcheck.application.artifacts import write_run_artifacts
+
+    result = load_results(FIXTURES / "results.complete.json")
+    result.run.id = "second-process"
+    original = Path.replace
+
+    def replace(path, target):
+        outcome = original(path, target)
+        if path.name == "latest" and ".backup-" in target.name:
+            paused.set()
+            if not resume.wait(15):
+                raise TimeoutError("test publisher was not resumed")
+        return outcome
+
+    with patch.object(Path, "replace", replace):
+        write_run_artifacts(result, runs_dir)
+
+
+def test_cross_process_latest_reader_waits_through_publication_gap(tmp_path, monkeypatch):
+    import multiprocessing
+    from concurrent.futures import ThreadPoolExecutor
+
+    from filelock import FileLock, Timeout
+
+    from graphcheck.application.artifacts import write_run_artifacts
+    from graphcheck.mcp import adapter
+
+    write_default_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    runs_dir = tmp_path / ".graphcheck" / "runs"
+    first = load_results(FIXTURES / "results.complete.json")
+    write_run_artifacts(first, runs_dir)
+    context = multiprocessing.get_context("spawn")
+    paused, resume = context.Event(), context.Event()
+    publisher = context.Process(
+        target=_publish_paused_between_latest_renames, args=(runs_dir, paused, resume)
+    )
+    publisher.start()
+    try:
+        assert paused.wait(15)
+        assert not (runs_dir / "latest").exists()
+        with pytest.raises(Timeout), FileLock(str(runs_dir / ".latest.lock"), timeout=0):
+            pass
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(adapter.get_results)
+            history = pool.submit(discover_report_runs, runs_dir)
+            resume.set()
+            loaded = reader.result(timeout=15)
+            assert loaded.run.id != first.run.id
+            assert loaded.run.id in {record.id for record in history.result(timeout=15)}
+    finally:
+        resume.set()
+        publisher.join(timeout=20)
+        if publisher.is_alive():
+            publisher.terminate()
+            publisher.join(timeout=5)
+    assert publisher.exitcode == 0

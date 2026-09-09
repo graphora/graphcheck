@@ -151,8 +151,8 @@ fixture represents current producer output. Pre-2.0 exports retain their histori
    and `measured` leaves, evidence messages and element IDs/labels/types, check names and
    provenance, partial reasons, error messages/fixes, source hashes, and target identifiers with
    `[REDACTED]`. Suite, check, and selected-tag identifiers use consistent ordered aliases that
-   preserve cross-field relationships. Redacted run IDs are target-neutral and derived only from
-   the finish timestamp. Keys, containers, error codes, verdicts, scores, and run-level counts are
+   preserve cross-field relationships. Redacted run IDs are target-neutral and formed from an independent random component and
+   the finish timestamp (legacy timestamp-only IDs remain readable). Keys, containers, error codes, verdicts, scores, and run-level counts are
    preserved. Redaction collects the original strings from every masked or aliased surface and
    rejects a final artifact that repeats one outside the explicit structural allowlist of schema
    and version metadata, timestamps, enums, server metadata, and error codes. The canonical JSON

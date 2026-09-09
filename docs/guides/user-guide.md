@@ -286,7 +286,7 @@ verdicts, scores, run-level counts, keys, and container structure while replacin
 parameter, expected, and measured literals; check names and provenance; partial reasons; diagnostic
 messages and fixes; source hashes and target identifiers; and evidence messages/element values with
 `[REDACTED]`. Suite, check, and tag identifiers receive consistent ordered aliases so their
-relationships remain intact. Redacted artifacts use a target-neutral `redacted_<timestamp>` run ID.
+relationships remain intact. Redacted artifacts use a target-neutral `redacted_<random-id>_<timestamp>` run ID.
 Redaction also compares the final artifact with its collected source literals, allowing collisions
 only in explicitly safe structural fields such as timestamps, versions, enums, and error codes.
 Every mask-mode JSON and HTML write verifies the mask, alias, and neutral-ID policy before export.
@@ -548,3 +548,37 @@ rights.
 ## License
 
 Apache-2.0. See [LICENSE](../../LICENSE).
+
+
+### Result row ceiling and audit consistency
+
+Set the competency row ceiling in `graphcheck.yml`:
+
+```yaml
+engine:
+  result_row_limit: 200000
+```
+
+The default is 100000; only positive integers are accepted. CLI and MCP apply the same setting.
+Raising it increases memory use and does not bound the size of an individual row. Narrowing
+queries is usually preferable. Decisive equality failures stop early; equality success needs the
+complete result stream.
+
+Connection/credential preflight and checks share a 295-second execution allowance, with a
+nominal five-second reporting margin. Timeouts are cooperative and do not forcibly terminate
+connector, cleanup, or filesystem work. Measurement and evidence share a read transaction,
+but Neo4j's read-committed isolation allows concurrent writes to change observations between
+reads, even within one transaction/query. Disappearing failure evidence produces an explicit
+`engine.evidence_missing` error. Use a quiescent database or externally created stable copy when
+you need a reproducible audit.
+
+History IDs include a unique suffix so coincident completion timestamps preserve both runs.
+Use `graphcheck report --list` to find IDs, including older report names. Managed readers
+coordinate with publication and deletion. External filesystem readers should use immutable
+history paths, or retry if `latest` is being replaced. Corrupt history records are skipped with
+warnings; healthy neighbors remain accessible and pruning preserves unknown records.
+
+New baseline profiles use schema 1.1 to retain declared RANGE index property order. Legacy 1.0
+baselines remain readable with unknown order. Diffs now explain stored property additions,
+removals, and sampled type changes as well as known index reorders. A sampled property type
+is an observation, not proof that all values have that type.

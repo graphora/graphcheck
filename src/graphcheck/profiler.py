@@ -37,6 +37,7 @@ ProfileResultTelemetryObserver = Callable[[str, str | None, bool], None]
 class _CoverageInventory:
     nodes: list[PropertyCoverage] = field(default_factory=list)
     relationships: list[PropertyCoverage] = field(default_factory=list)
+    relationship_profiles: list[RelationshipTypeProfile] = field(default_factory=list)
     nodes_complete: bool = False
     relationships_complete: bool = False
 
@@ -337,7 +338,7 @@ def _profile(
         property_coverage=property_coverage,
     )
     baseline = BaselineProfile(
-        schema_version="1.0",
+        schema_version="1.1",
         status=ProfileStatus.COMPLETE,
         partial_reason=None,
         target=target,
@@ -372,6 +373,14 @@ def _partial_profile(
     deadline: float,
     telemetry_result_observer: ProfileResultTelemetryObserver | None,
 ) -> BaselineProfile:
+    inventory = _ACTIVE_INVENTORY.get()
+    if inventory is not None:
+        relationship_types = relationship_types or inventory.relationship_profiles
+        retained = {
+            (row.owner, row.owner_name, row.property): row
+            for row in [*inventory.nodes, *inventory.relationships, *property_coverage]
+        }
+        property_coverage = [retained[key] for key in sorted(retained)]
     graph_schema = GraphSchema(
         labels=labels,
         relationship_types=relationship_types,
@@ -386,7 +395,7 @@ def _partial_profile(
     )
 
     baseline = BaselineProfile(
-        schema_version="1.0",
+        schema_version="1.1",
         status=ProfileStatus.PARTIAL,
         partial_reason=reason,
         target=target,
@@ -476,6 +485,9 @@ def collect_labels(
     collected: list[LabelProfile] = []
     failure: GraphCheckError | None = None
     coverage: list[PropertyCoverage] = []
+    inventory = _ACTIVE_INVENTORY.get()
+    if inventory is not None:
+        inventory.nodes = coverage
     for label in labels:
         try:
             profile, label_coverage = _collect_label_inventory(client, label, deadline)
@@ -483,6 +495,8 @@ def collect_labels(
             coverage.extend(label_coverage)
         except GraphCheckError as exc:
             failure = failure or exc
+            if deadline is not None and _budget_exceeded(deadline):
+                break
     if failure is not None:
         raise _LabelCollectionError(failure, collected) from failure
     inventory = _ACTIVE_INVENTORY.get()
@@ -509,6 +523,10 @@ def collect_relationship_types(
     )
     collected: list[RelationshipTypeProfile] = []
     coverage: list[PropertyCoverage] = []
+    inventory = _ACTIVE_INVENTORY.get()
+    if inventory is not None:
+        inventory.relationships = coverage
+        inventory.relationship_profiles = collected
     for relationship_type in relationship_types:
         profile, relationship_coverage = _collect_relationship_inventory(
             client, relationship_type, deadline
@@ -561,6 +579,9 @@ def _collect_index(row: dict[str, Any]) -> IndexProfile:
         type=str(row["type"]),
         labels_or_types=sorted(str(value) for value in row["labelsOrTypes"] or []),
         properties=sorted(str(value) for value in row["properties"] or []),
+        declared_order=[str(value) for value in row["properties"] or []]
+        if row["type"] == "RANGE"
+        else None,
     )
 
 

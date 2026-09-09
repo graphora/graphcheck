@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
 from graphcheck.contracts.results import EvidenceElement
@@ -75,28 +76,40 @@ class DirectoryBaselineProvider:
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
+        self._lock = Lock()
+        self._paths: dict[str, Path | None] = {}
+        self._sources: dict[Path, Mapping[str, object] | GraphCheckError] = {}
+
+    def fresh(self) -> DirectoryBaselineProvider:
+        """Return an independent view for a new engine run."""
+        return DirectoryBaselineProvider(self.directory)
 
     def resolve(
         self, reference: str, metric: str, target: Mapping[str, object]
     ) -> BaselineValue | None:
-        path = self._path_for(reference)
-        if path is None:
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise GraphCheckError(
-                "engine.baseline_invalid",
-                f"Baseline {path.name!r} could not be loaded: {exc}",
-                "Regenerate the baseline with `graphcheck profile` or select another snapshot.",
-            ) from exc
-        if not isinstance(raw, Mapping):
-            raise GraphCheckError(
-                "engine.baseline_invalid",
-                f"Baseline {path.name!r} must contain a JSON object.",
-                "Regenerate the baseline with a compatible C4 profiler.",
-            )
-        return MappingBaselineProvider({reference: raw}).resolve(reference, metric, target)
+        with self._lock:
+            if reference not in self._paths:
+                self._paths[reference] = self._path_for(reference)
+            path = self._paths[reference]
+            if path is None:
+                return None
+            if path not in self._sources:
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(raw, Mapping):
+                        raise ValueError("snapshot must contain a JSON object")
+                    self._sources[path] = raw
+                except (OSError, ValueError) as exc:
+                    self._sources[path] = GraphCheckError(
+                        "engine.baseline_invalid",
+                        f"Baseline {path.name!r} could not be loaded: {exc}",
+                        "Regenerate the baseline with `graphcheck profile` "
+                        "or select another snapshot.",
+                    )
+            source = self._sources[path]
+            if isinstance(source, GraphCheckError):
+                raise source
+            return MappingBaselineProvider({reference: source}).resolve(reference, metric, target)
 
     def _path_for(self, reference: str) -> Path | None:
         if not self.directory.is_dir():

@@ -86,6 +86,72 @@ def _payload(tmp_path: Path) -> dict:
     )
 
 
+def test_cli_prepares_suites_once_and_executes_original_bytes(tmp_path, monkeypatch):
+    from graphcheck.engine.runner import SuiteInput
+
+    text = """suite: prepared
+competency:
+  - id: selected
+    tags: [fast]
+    question: Selected?
+    query: RETURN 1 AS value
+    expect: {rows: {exactly: 1}}
+  - id: excluded
+    question: Excluded?
+    query: RETURN 2 AS value
+    expect: {rows: {exactly: 1}}
+"""
+    _project(tmp_path, {"suite.yml": text})
+    monkeypatch.chdir(tmp_path)
+    parsed = []
+    original = SuiteInput.from_yaml
+
+    def parse(text, **kwargs):
+        parsed.append(text)
+        return original(text, **kwargs)
+
+    class Client(FakeClient):
+        def probe(self, **kwargs):
+            (tmp_path / "checks/suite.yml").write_text("invalid: [", encoding="utf-8")
+            return super().probe(**kwargs)
+
+    client = Client([QueryResult([{"value": 1}], ("value",), ())])
+    monkeypatch.setattr(SuiteInput, "from_yaml", parse)
+    monkeypatch.setattr(cli_module, "_new_neo4j_client", lambda *args: client)
+    result = runner.invoke(app, ["run", "--suite", "prepared", "--select", "tag:fast"])
+    assert result.exit_code == 0, result.output
+    assert parsed == [text]
+    assert [check["id"] for check in _payload(tmp_path)["checks"]] == ["selected"]
+    assert len(client.read_calls) == 1
+
+
+def test_preparation_is_visible_before_probe_and_writing(tmp_path, monkeypatch):
+    _project(tmp_path, {})
+    monkeypatch.chdir(tmp_path)
+    stages = []
+    monkeypatch.setattr(cli_module, "_interactive_stderr", lambda: True)
+    original_echo = typer.echo
+
+    def echo(message=None, **kwargs):
+        stages.append(message)
+        return original_echo(message, **kwargs)
+
+    class Client(FakeClient):
+        def probe(self, **kwargs):
+            assert "Loading checks" in stages and "Connecting" in stages
+            return super().probe(**kwargs)
+
+    monkeypatch.setattr(typer, "echo", echo)
+    monkeypatch.setattr(cli_module, "_new_neo4j_client", lambda *args: Client())
+    result = runner.invoke(app, ["run"])
+    assert result.exit_code == 2
+    assert (
+        stages.index("Connecting")
+        < stages.index("Running checks")
+        < stages.index("Writing reports")
+    )
+
+
 def _report(tmp_path: Path) -> str:
     return (tmp_path / ".graphcheck" / "runs" / "latest" / "report.html").read_text(
         encoding="utf-8"
@@ -111,8 +177,10 @@ def test_artifact_writer_preserves_versioned_runs_and_refreshes_latest(tmp_path)
     _write_run_artifacts(first, runs_dir)
     latest_results, latest_report = _write_run_artifacts(second, runs_dir)
 
-    first_name = "neo4j_20260706T090241000000Z"
-    second_name = "neo4j_20260706T090341000000Z"
+    first_name = first.run.id
+    assert first_name.startswith("neo4j_20260706T090241000000Z_")
+    second_name = second.run.id
+    assert second_name.startswith("neo4j_20260706T090341000000Z_")
     assert (runs_dir / first_name / "results.json").is_file()
     assert (runs_dir / first_name / "report.html").is_file()
     assert (runs_dir / second_name / "results.json").is_file()
@@ -136,8 +204,8 @@ def test_artifact_writer_preserves_runs_completed_within_the_same_second(tmp_pat
     _write_run_artifacts(second, runs_dir)
 
     assert {record.id for record in discover_report_runs(runs_dir)} == {
-        "neo4j_20260706T090341100000Z",
-        "neo4j_20260706T090341900000Z",
+        first.run.id,
+        second.run.id,
     }
 
 
@@ -159,6 +227,9 @@ def test_concurrent_latest_publication_is_serialized(tmp_path):
         "2026-07-06T09:03:41.900000Z": "neo4j_20260706T090341900000Z",
     }
     payloads = [make(finished_at) for finished_at in run_ids]
+    from graphcheck.reporting.history import report_name
+
+    run_ids = {result.run.finished_at: report_name(result) for result in payloads}
 
     barrier = threading.Barrier(len(payloads))
     errors: list[Exception] = []
@@ -203,7 +274,8 @@ def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):
 
     latest_results, latest_report = _write_run_artifacts(redacted, runs_dir)
 
-    run_id = "redacted_collision1_20260706T090241000000Z"
+    run_id = redacted.run.id
+    assert re.fullmatch(r"redacted_[0-9a-f]{32}_20260706T090241000000Z", run_id)
     exported = latest_results.read_text(encoding="utf-8")
     html = latest_report.read_text(encoding="utf-8")
     assert (runs_dir / run_id / "results.json").is_file()
@@ -238,7 +310,7 @@ def test_artifact_writer_keeps_previous_latest_pair_when_refresh_fails(tmp_path,
 
     assert latest_results.read_bytes() == previous_results
     assert latest_report.read_bytes() == previous_report
-    assert (runs_dir / "neo4j_20260706T090341000000Z" / "results.json").is_file()
+    assert (runs_dir / second.run.id / "results.json").is_file()
     assert not list(runs_dir.glob(".*.staging-*"))
     assert not list(runs_dir.glob(".*.backup-*"))
 
@@ -468,6 +540,7 @@ competency:
         encoding="utf-8"
     )
     payload = json.loads(exported)
+    assert payload["run"]["id"] in result.stdout
     assert "CUST-SECRET-901" not in exported
     assert payload["run"]["redaction"] == {"applied": True, "policy": "mask"}
     assert payload["checks"][0]["params"] == {"customer_id": "[REDACTED]"}
@@ -1476,7 +1549,7 @@ def test_run_unexpected_setup_failure_is_actionable_without_traceback(tmp_path, 
     _project(tmp_path, _SMOKE_SUITE)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "graphcheck.project.load_project_config",
+        "graphcheck.application.run.load_project_config",
         lambda root: (_ for _ in ()).throw(RuntimeError("unexpected fault")),
     )
 
@@ -1730,3 +1803,205 @@ conformance:
     assert "load data if this was unexpected" in result.stdout
     assert "Empty graph" in _report(tmp_path)
     _assert_no_traceback(result)
+
+
+@pytest.mark.parametrize("exhaust_at", [None, "probe", "verify"])
+def test_preflight_uses_one_decreasing_deadline(monkeypatch, exhaust_at):
+    import graphcheck.application.run as module
+    from graphcheck.application.run import _verify_cli_audit_credential
+
+    now = [0.0]
+    calls = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+
+    class Client:
+        def probe(self, *, timeout_s):
+            calls.append(("probe", timeout_s))
+            now[0] += 11 if exhaust_at == "probe" else 3
+            return TARGET
+
+        def verify_read_only_credential(self, *, timeout_s):
+            calls.append(("verify", timeout_s))
+            now[0] += 11 if exhaust_at == "verify" else 2
+
+    if exhaust_at:
+        with pytest.raises(GraphCheckTimeoutError):
+            _verify_cli_audit_credential(Client(), deadline=10)
+    else:
+        assert _verify_cli_audit_credential(Client(), deadline=10) == TARGET
+    assert calls == ([("probe", 10)] if exhaust_at == "probe" else [("probe", 10), ("verify", 7)])
+
+
+@pytest.mark.parametrize("surface", ["cli", "mcp"])
+@pytest.mark.parametrize(
+    "expectation, consumed, verdict",
+    [("unique: true", 3, "errored"), ("rows: {min: 1}", 1, "pass")],
+)
+def test_project_row_limit_reaches_cli_and_mcp(
+    tmp_path, monkeypatch, surface, expectation, consumed, verdict
+):
+    import graphcheck.application.run as application
+    from graphcheck.mcp import adapter
+    from tests.performance.test_memory_gates import LazyGateClient, _rows
+
+    _project(
+        tmp_path,
+        {
+            "limit.yml": f"""
+suite: limits
+competency:
+  - id: bounded
+    question: Is the configured limit applied?
+    query: MATCH (n) RETURN elementId(n) AS node_element_id
+    expect: {{{expectation}}}
+"""
+        },
+    )
+    path = tmp_path / "graphcheck.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("result_row_limit: 100000", "result_row_limit: 2"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    client = LazyGateClient(_rows(100))
+    client.probe = lambda **kwargs: TARGET
+    client.close = lambda: None
+    client.verify_read_only_credential = lambda **kwargs: None
+    monkeypatch.setattr(application, "_new_neo4j_client", lambda *args: client)
+    monkeypatch.setattr(cli_module, "Neo4jClient", lambda *args, **kwargs: client)
+    if surface == "cli":
+        response = runner.invoke(app, ["run"])
+        assert response.exit_code == (1 if verdict == "errored" else 0), response.output
+    else:
+        adapter.run_suite("limits")
+    assert _payload(tmp_path)["checks"][0]["verdict"] == verdict
+    assert client.yielded == consumed
+
+
+@pytest.mark.parametrize("redacted", [False, True])
+def test_equal_timestamps_keep_distinct_history_and_same_result_retry_is_idempotent(
+    tmp_path, redacted
+):
+    from graphcheck.reporting.redaction import redact_results
+
+    first = load_results(FIXTURES / "results.complete.json")
+    second = first.model_copy(deep=True)
+    first.run.id, second.run.id = "run-one", "run-two"
+    first.run.target.database, second.run.target.database = "a/b", "a b"
+    if redacted:
+        first, second = redact_results(first), redact_results(second)
+    _write_run_artifacts(first, tmp_path)
+    _write_run_artifacts(second, tmp_path)
+    _write_run_artifacts(second, tmp_path)
+    assert first.run.id != second.run.id
+    assert {record.id for record in discover_report_runs(tmp_path)} == {first.run.id, second.run.id}
+    assert load_results(tmp_path / first.run.id / "results.json").run.id == first.run.id
+
+
+def test_forced_history_collision_never_overwrites_prior_run(tmp_path, monkeypatch):
+    first = load_results(FIXTURES / "results.complete.json")
+    second = first.model_copy(deep=True)
+    second.run.finished_at = "2026-07-06T09:03:41Z"
+    monkeypatch.setattr("graphcheck.reporting.history.report_name", lambda result: "collision")
+    _write_run_artifacts(first, tmp_path)
+    previous = (tmp_path / "collision" / "results.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        _write_run_artifacts(second, tmp_path)
+    assert (tmp_path / "collision" / "results.json").read_bytes() == previous
+
+
+def test_publication_rechecks_lineage_after_rendering_without_holding_the_lock(
+    tmp_path, monkeypatch
+):
+    from filelock import FileLock
+
+    from graphcheck.application import artifacts as artifacts_module
+
+    first = load_results(FIXTURES / "results.complete.json")
+    second, third = first.model_copy(deep=True), first.model_copy(deep=True)
+    first.run.id, second.run.id, third.run.id = "first", "second", "third"
+    _write_run_artifacts(first, tmp_path)
+    real_render = artifacts_module.render_run_artifacts
+    interleaved = False
+
+    def render(results, **kwargs):
+        nonlocal interleaved
+        with FileLock(str(tmp_path / ".latest.lock"), timeout=0):
+            pass  # Rendering must allow report readers and other publishers to acquire the lock.
+        rendered = real_render(results, **kwargs)
+        if results is second and not interleaved:
+            interleaved = True
+            _write_run_artifacts(third, tmp_path)
+        return rendered
+
+    monkeypatch.setattr(artifacts_module, "render_run_artifacts", render)
+    _write_run_artifacts(second, tmp_path)
+    assert interleaved
+    assert third.run.previous_run_id == first.run.id
+    assert second.run.previous_run_id == third.run.id
+    assert load_results(tmp_path / "latest/results.json").run.previous_run_id == third.run.id
+    original = (tmp_path / third.run.id / "results.json").read_bytes()
+    _write_run_artifacts(third, tmp_path)
+    assert (tmp_path / third.run.id / "results.json").read_bytes() == original
+
+
+def test_corrupt_latest_does_not_prevent_publishing_a_new_run(tmp_path):
+    latest = tmp_path / "latest"
+    latest.mkdir()
+    (latest / "results.json").write_text("{", encoding="utf-8")
+    result = load_results(FIXTURES / "results.complete.json")
+    _write_run_artifacts(result, tmp_path)
+    assert load_results(latest / "results.json").run.id == result.run.id
+
+
+@pytest.mark.parametrize("exhaust", [False, True])
+def test_application_deadline_survives_preflight_handoff_and_failure_publishes_once(
+    tmp_path, monkeypatch, exhaust
+):
+    import graphcheck.application.run as application
+
+    _project(tmp_path, _SMOKE_SUITE)
+    monkeypatch.chdir(tmp_path)
+    now, calls, published = [0.0], [], []
+    monkeypatch.setattr(application.time, "monotonic", lambda: now[0])
+
+    class Client(FakeClient):
+        def probe(self, *, timeout_s):
+            calls.append(("probe", timeout_s))
+            if len(calls) == 1:
+                now[0] += 20
+            return TARGET
+
+        def verify_read_only_credential(self, *, timeout_s):
+            calls.append(("verify", timeout_s))
+            now[0] += 300 if exhaust else 30
+
+        def run_read_result(self, query, params, *, timeout_s):
+            calls.append(("check", timeout_s))
+            now[0] += 40
+            return QueryResult([{"value": 1}], ("value",), ())
+
+    def write(result, path, **kwargs):
+        published.append(result)
+        return path / "results.json", path / "report.html"
+
+    outcome = application.execute_run(
+        application.RunRequest(
+            profile=None,
+            suite_ids=["smoke"],
+            tags=[],
+            fail_fast=False,
+            verify_read_only_credential=True,
+        ),
+        client_factory=lambda *args: Client(),
+        artifact_writer=write,
+    )
+    assert len(published) == 1
+    assert calls[:2] == [("probe", 295), ("verify", 275)]
+    if exhaust:
+        assert len(calls) == 2
+        assert outcome.results.run.exit_code == 3
+        assert outcome.results.run.error.code == "engine.timeout"
+    else:
+        assert calls[2:] == [("probe", 245), ("check", 245)]
+        assert outcome.results.run.exit_code == 0

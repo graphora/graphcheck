@@ -291,3 +291,32 @@ def test_empty_history_reports_error_and_new_link_does_not_fall_back_after_prune
     _run(project, "last", 2, [_check("c")], previous="pruned")
     assert runner.invoke(app, ["changes", "--json"]).exit_code == 2
     assert runner.invoke(app, ["changes", "--since", "first", "--json"]).exit_code == 0
+
+
+def test_changes_materializes_summary_records_without_reentering_history_lock(project, monkeypatch):
+    from contextlib import contextmanager
+
+    from graphcheck.application import artifacts
+
+    for record in (
+        _run(project, "first", 1, [_check("c")]),
+        _run(project, "last", 2, [_check("c")], previous="first"),
+    ):
+        (record.directory / "summary.json").write_text(
+            report_summary_json(record.results), encoding="utf-8"
+        )
+    original_lock, locked = artifacts.latest_publication_lock, False
+
+    @contextmanager
+    def lock(directory):
+        nonlocal locked
+        assert not locked, "changes reentered the non-reentrant publication lock"
+        with original_lock(directory):
+            locked = True
+            try:
+                yield
+            finally:
+                locked = False
+
+    monkeypatch.setattr(artifacts, "latest_publication_lock", lock)
+    assert load_changes(project / ".graphcheck/runs").first.id == "first"

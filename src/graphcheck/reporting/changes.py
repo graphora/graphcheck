@@ -14,8 +14,8 @@ from graphcheck.reporting.history import (
     ReportComparison,
     ReportHistoryError,
     ReportRun,
+    _discover_report_runs,
     compare_reports,
-    discover_report_runs,
     find_report_run,
     format_report_comparison,
 )
@@ -165,13 +165,27 @@ def _profile(record: ReportRun, directory: Path) -> BaselineProfile | None:
     return profile
 
 
+def _materialize(record: ReportRun) -> ReportRun:
+    """Load a selected record under the caller's publication lock."""
+    loaded = ReportRun(
+        record.directory,
+        record.results_path,
+        record.report_path,
+        results=load_results(record.results_path),
+        modified_ns=record.modified_ns,
+    )
+    if loaded.summary != record.summary:
+        raise ReportHistoryError("results.json does not match the selected summary")
+    return loaded
+
+
 def load_changes(runs_dir: Path, since: str = "previous") -> ChangesReport:
     from graphcheck.application.artifacts import latest_publication_lock
 
     if not runs_dir.is_dir():
         raise ReportHistoryError("At least two runs are required. Run `graphcheck run` twice.")
     with latest_publication_lock(runs_dir):
-        records = discover_report_runs(runs_dir)
+        records = _discover_report_runs(runs_dir)
         if not records:
             raise ReportHistoryError("No report history found. Run `graphcheck run` twice.")
         latest_path = runs_dir / "latest" / "results.json"
@@ -183,14 +197,14 @@ def load_changes(runs_dir: Path, since: str = "previous") -> ChangesReport:
             and (latest_path.resolve().parent == (runs_dir.resolve() / "latest"))
         ):
             latest = find_report_run(records, load_results(latest_path).run.id)
-        second = latest or records[0]
+        second = _materialize(latest or records[0])
         if since == "previous":
             since = second.results.run.previous_run_id
             if since is None and "previous_run_id" not in second.results.run.model_fields_set:
                 since = next((record.id for record in records if record.id != second.id), None)
             if since is None:
                 raise ReportHistoryError(f"Run {second.id!r} has no previous run.")
-        first = find_report_run(records, since)
+        first = _materialize(find_report_run(records, since))
         if first.id == second.id:
             raise ReportHistoryError("--since must identify a run other than the latest run.")
         # Materialize under the publication lock before pruning/deletion can intervene.

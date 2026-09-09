@@ -131,6 +131,21 @@
     "IndexProfile": {
       "additionalProperties": false,
       "properties": {
+        "declared_order": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Declared Order"
+        },
         "labels_or_types": {
           "items": {
             "type": "string"
@@ -390,7 +405,10 @@
       "$ref": "#/$defs/GraphSchema"
     },
     "schema_version": {
-      "const": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

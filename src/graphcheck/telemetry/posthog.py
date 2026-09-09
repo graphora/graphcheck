@@ -178,11 +178,18 @@ class PostHogAdapter:
             time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
         return self._queue.unfinished_tasks == 0
 
-    def close(self, timeout_s: float = DEFAULT_FLUSH_TIMEOUT_S) -> bool:
+    def close(self, timeout_s: float = 0.05) -> bool:
         if self._stopped:
             return self._queue.unfinished_tasks == 0
         flushed = self.flush(timeout_s)
         self._stopped = True
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._queue.task_done()
         with suppress(queue.Full):
             self._queue.put_nowait(_STOP)
         return flushed
@@ -191,7 +198,7 @@ class PostHogAdapter:
         while True:
             item = self._queue.get()
             try:
-                if item is _STOP:
+                if item is _STOP or self._stopped:
                     return
                 assert isinstance(item, _QueuedPostHogEvent)
                 with suppress(Exception):

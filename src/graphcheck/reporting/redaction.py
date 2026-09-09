@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -176,19 +177,18 @@ def redacted_run_id(finished_at: str, sensitive: set[str] | None = None) -> str:
 
     sensitive = sensitive or set()
     timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    candidate = f"redacted_{timestamp}"
-    if candidate not in sensitive:
-        return candidate
-    collision = 1
-    while f"redacted_collision{collision}_{timestamp}" in sensitive:
-        collision += 1
-    return f"redacted_collision{collision}_{timestamp}"
+    candidate = f"redacted_{uuid.uuid4().hex}_{timestamp}"
+    while candidate in sensitive:
+        candidate = f"redacted_{uuid.uuid4().hex}_{timestamp}"
+    return candidate
 
 
 def _is_redacted_run_id(value: str, finished_at: str) -> bool:
     timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    return value == f"redacted_{timestamp}" or bool(
-        re.fullmatch(rf"redacted_collision[1-9][0-9]*_{timestamp}", value)
+    return (
+        bool(re.fullmatch(rf"redacted_[0-9a-f]{{32}}_{timestamp}", value))
+        or value == f"redacted_{timestamp}"
+        or bool(re.fullmatch(rf"redacted_collision[1-9][0-9]*_{timestamp}", value))
     )
 
 

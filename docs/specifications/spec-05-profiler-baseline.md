@@ -2,7 +2,7 @@
 
 The Profiler inspects a Neo4j graph and produces a canonical baseline snapshot. A baseline captures graph identity, schema, structural statistics, and a deterministic fingerprint. It serves as the source artifact for drift detection, `graphcheck generate`, reports, and future cloud features.
 
-The baseline format version is identified by `schema_version`, which is frozen to `"1.0"` for v0 and versioned independently of `graphcheck_version`.
+The baseline format version is identified by `schema_version`, which is `"1.1"` for new profiles and versioned independently of `graphcheck_version`. Readers also accept legacy `"1.0"` profiles.
 
 ---
 
@@ -96,7 +96,7 @@ Every model forbids unknown keys (`extra="forbid"`).
 
 Identifies the baseline format version.
 
-- Fixed to `"1.0"` for v0.
+- New profiles use `"1.1"`; `"1.0"` remains readable with unknown index order.
 - Versioned independently of `graphcheck_version`.
 - Incremented only when the baseline contract changes.
 
@@ -213,7 +213,7 @@ Each property contains
 where
 
 - **name** — property key
-- **type** — observed property type
+- **type** — type of a representative sampled value, not an exhaustive type guarantee
 
 ---
 
@@ -243,7 +243,18 @@ Canonical representation of Neo4j constraints.
 
 ## Indexes
 
-Canonical representation of Neo4j indexes.
+Index definitions remain sorted by name, with sorted unique `labels_or_types` and `properties`.
+Version 1.1 adds optional `declared_order` for RANGE indexes, preserving `SHOW INDEXES` order
+for both single-property and composite definitions. When known, it must contain exactly the
+same unique properties. LOOKUP, FULLTEXT, and other index types omit it. Version 1.0 cannot
+carry known declared order; historical sorted properties must never be interpreted as order.
+The v0 fingerprint input stays frozen and continues to exclude indexes in both versions.
+
+Composite RANGE property order can affect query plans
+([Neo4j index documentation](https://neo4j.com/docs/cypher-manual/current/indexes/search-performance-indexes/using-indexes/)).
+Diff reports show known reorders as changed definitions; unknown-to-known order is reported
+as newly available metadata, without asserting an index rebuild. Generation's provider payload
+keeps its existing allowlist and does not transmit declared order.
 
 ---
 
@@ -395,3 +406,30 @@ tests/unit/contracts/test_profile.py
 ```
 
 Validation and invariant tests.
+
+
+## Snapshot publication and run-local selection
+
+Snapshots are serialized before publication, staged under an undiscoverable same-directory
+name, flushed and fsynced, then published with an exclusive hard link. Timestamp collisions
+retry without replacement. Selection metadata uses a staged atomic replacement. Failures
+remove only the owned staging file; cleanup failures surface to the caller. These operations
+provide atomic visibility on supported local filesystems, not a universal power-loss guarantee.
+
+Each engine run pins baseline references (including missing references) on first use and caches
+one parsed snapshot per concrete path across worker threads. `latest` remains lexicographic
+filename selection, independent of the current-baseline pointer. Reusing an engine creates a
+fresh directory-provider view for the next run; direct provider users can call `fresh()`.
+Successful drift measurements from a partial baseline retain their verdict but mark the run
+partial. Missing partial-baseline measurements remain a separate error condition.
+
+## Diff format 1.1
+
+Diff JSON uses version `1.1`, independently of either input baseline version, and accepts
+compatible 1.0/1.1 pairs. The additive `properties` section has `changed`, `added`, `removed`,
+and `unchanged` entries, keyed by label/property identity. Changes carry `from` and `to` types;
+additions/removals carry the available type. Summary counts use the same three change keys.
+Properties below added/removed labels are represented by the label change only. Coverage
+remains separate. Stored type observations are sampled and may not describe every value.
+The `indexes.metadata_changed` array records newly available or unavailable declared order
+without counting it as graph drift. Partial baselines remain ineligible for comparison.

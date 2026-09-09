@@ -487,6 +487,67 @@ def test_schema_tokens_are_canonicalized_for_fingerprinting():
     )
 
 
+@pytest.mark.parametrize("nodes,relationships", [(0, 0), (3, 4)])
+def test_inventory_combines_counts_and_tokens_in_one_bounded_request(nodes, relationships):
+    client = object.__new__(Neo4jClient)
+    calls = []
+
+    def run(query, *, timeout_s):
+        calls.append((query, timeout_s))
+        return [
+            {
+                "nodes": nodes,
+                "relationships": relationships,
+                "labels": ["B", "A", "A"],
+                "relationship_types": ["Z", "Y"],
+            }
+        ]
+
+    client.run_read = run
+    assert client._inventory(timeout_s=0.75) == (
+        Counts(nodes, relationships),
+        ("A", "B"),
+        ("Y", "Z"),
+    )
+    assert len(calls) == 1 and calls[0][1] == 0.75
+    assert "db.labels()" in calls[0][0] and "count(n)" in calls[0][0]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("nodes", True),
+        ("nodes", -1),
+        ("relationships", "2"),
+        ("labels", None),
+        ("relationship_types", [1]),
+    ],
+)
+def test_inventory_rejects_invalid_typed_responses(field, value):
+    client = object.__new__(Neo4jClient)
+    row = {"nodes": 0, "relationships": 0, "labels": [], "relationship_types": []}
+    row[field] = value
+    client.run_read = lambda query: [row]
+    with pytest.raises(GraphCheckError, match="invalid graph inventory"):
+        client._inventory()
+
+
+def test_inventory_schema_denial_is_not_misreported_as_graph_read_denial():
+    client = object.__new__(Neo4jClient)
+    client._profile = ConnectionProfile(
+        uri="bolt://localhost:7687", user="neo4j", password="pw", database="neo4j"
+    )
+    client._server_info = lambda: ("5.26.0", "community")
+    client._apoc_usable = lambda: False
+    client._can_read = lambda edition: True
+    error = GraphCheckError("neo4j.permission_denied", "schema denied", "grant enumeration")
+    client._inventory = lambda: (_ for _ in ()).throw(error)
+    client._counts = lambda: Counts(1, 0)
+    with pytest.raises(GraphCheckError) as caught:
+        client.probe()
+    assert caught.value is error
+
+
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [
@@ -777,8 +838,7 @@ def test_probe_handles_permission_denied_apoc_probe():
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
     client._can_read = lambda edition: True
-    client._counts = lambda: Counts(nodes=1, relationships=2)
-    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
+    client._inventory = lambda: (Counts(nodes=1, relationships=2), ("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
 
     def apoc_denied():
@@ -804,8 +864,7 @@ def test_probe_treats_missing_apoc_as_absent_capability():
     client.verify = lambda: None
     client._server_info = lambda: ("5.18.0", "enterprise")
     client._can_read = lambda edition: True
-    client._counts = lambda: Counts(nodes=1, relationships=2)
-    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
+    client._inventory = lambda: (Counts(nodes=1, relationships=2), ("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
 
     def missing_apoc():
@@ -861,6 +920,7 @@ def test_probe_handles_permission_denied_while_loading_counts():
     def counts_denied():
         raise GraphCheckError("neo4j.permission_denied", "denied", "fix")
 
+    client._inventory = counts_denied
     client._counts = counts_denied
 
     target, visibility, counts = client.probe()
@@ -898,8 +958,9 @@ def test_completed_probe_is_cached_for_one_client():
     client._server_info = lambda: calls.append("server") or ("5.26.0", "community")
     client._apoc_usable = lambda: calls.append("apoc") is None
     client._can_read = lambda edition: calls.append("read") is None
-    client._counts = lambda: calls.append("counts") or Counts(1, 2)
-    client._schema_tokens = lambda: calls.append("tokens") or (("Customer",), ("OWNS",))
+    client._inventory = lambda: (
+        calls.append("inventory") or (Counts(1, 2), ("Customer",), ("OWNS",))
+    )
     client._count_store_usable = lambda: calls.append("count-store") is None
 
     first = client.probe()
@@ -910,8 +971,7 @@ def test_completed_probe_is_cached_for_one_client():
         "server",
         "apoc",
         "read",
-        "counts",
-        "tokens",
+        "inventory",
         "count-store",
     ]
     assert client.last_probe_metrics == ProbeMetrics(0, 0, True)
@@ -936,8 +996,7 @@ def test_concurrent_probe_callers_share_one_live_probe():
     client._server_info = server_info
     client._apoc_usable = lambda: False
     client._can_read = lambda edition: True
-    client._counts = lambda: Counts(1, 2)
-    client._schema_tokens = lambda: (("Customer",), ("OWNS",))
+    client._inventory = lambda: (Counts(1, 2), ("Customer",), ("OWNS",))
     client._count_store_usable = lambda: True
     results = []
     threads = [threading.Thread(target=lambda: results.append(client.probe())) for _ in range(2)]
@@ -965,8 +1024,7 @@ def test_separate_clients_observe_changed_graph_counts():
         client._server_info = lambda: ("5.26.0", "community")
         client._apoc_usable = lambda: False
         client._can_read = lambda edition: True
-        client._counts = lambda: Counts(graph["nodes"], 0)
-        client._schema_tokens = lambda: (("Customer",), ())
+        client._inventory = lambda: (Counts(graph["nodes"], 0), ("Customer",), ())
         client._count_store_usable = lambda: True
         return client
 
@@ -991,7 +1049,14 @@ def test_probe_metrics_measure_each_live_request():
         if query.startswith("CALL apoc.version"):
             return [{"version": "5.26.0"}]
         if query.startswith("CALL { MATCH (n)"):
-            return [{"nodes": 3, "relationships": 4}]
+            return [
+                {
+                    "nodes": 3,
+                    "relationships": 4,
+                    "labels": ["Customer"],
+                    "relationship_types": ["OWNS"],
+                }
+            ]
         if query.startswith("CALL { CALL db.labels"):
             return [{"labels": ["Customer"], "relationship_types": ["OWNS"]}]
         pytest.fail(f"unexpected query: {query}")
@@ -1003,7 +1068,7 @@ def test_probe_metrics_measure_each_live_request():
 
     metrics = client.last_probe_metrics
     assert metrics is not None
-    assert metrics.round_trips == 5
+    assert metrics.round_trips == 4
     assert metrics.elapsed_ms >= 0
     assert metrics.cache_hit is False
     assert len(metrics.request_durations_ms) == metrics.round_trips

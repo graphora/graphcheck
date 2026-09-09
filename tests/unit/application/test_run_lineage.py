@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from graphcheck.application.run import RunRequest, execute_run
@@ -84,3 +85,17 @@ def test_engine_config_hash_changes_with_selected_suite_contents():
     changed = engine.run_yaml(source.replace("RETURN 1", "RETURN 2"), target=target)
     assert first.run.config_hash == second.run.config_hash
     assert first.run.config_hash != changed.run.config_hash
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_profile_loading_failure_still_publishes_lineage(tmp_path, monkeypatch, invalid):
+    write_default_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    if invalid:
+        (tmp_path / "profiles.yml").write_text("profiles: [", encoding="utf-8")
+    outcome = execute_run(RunRequest(None, [], [], False))
+    assert outcome.artifact_error is None
+    results = load_results(outcome.results_path)
+    assert results.run.run_status is RunStatus.FAILED
+    assert results.run.previous_run_id is results.run.baseline_ref is None
+    assert results.run.config_hash.startswith("sha256:")

@@ -48,6 +48,9 @@ class CompetencyConsumption:
         self._columns: list[str] | None = None
         self._seen_rows: set[object] | None = set() if self.expected.unique is not None else None
         self._duplicate_found = False
+        self._equals_remaining = (
+            _bag(self.expected.equals) if self.expected.equals is not None else None
+        )
         self._contains_remaining = (
             {_freeze(value) for value in self.expected.contains}
             if self.expected.contains is not None
@@ -69,6 +72,11 @@ class CompetencyConsumption:
         if self._contains_remaining is not None:
             actual = _freeze(_regression_value(row, self._columns))
             self._contains_remaining.discard(actual)
+        if self._equals_remaining is not None:
+            actual = _freeze(_regression_value(row, self._columns))
+            if self._equals_remaining[actual] <= 0:
+                failed = True
+            self._equals_remaining[actual] -= 1
         self.decisive = failed or self._all_assertions_pass_early()
         return self.decisive
 
@@ -379,7 +387,7 @@ class VerdictEvaluator:
 
         actual_values = (
             _regression_values(rows, actual_columns)
-            if expected.contains is not None or (expected.equals is not None and complete)
+            if expected.contains is not None or expected.equals is not None
             else []
         )
         if expected.contains is not None:
@@ -389,13 +397,16 @@ class VerdictEvaluator:
                 measured["contains"] = contains_ok
             if complete and not contains_ok:
                 failures.append("result does not contain every pinned value")
-        if expected.equals is not None and complete:
+        if expected.equals is not None:
             # Neo4j does not guarantee row order without ORDER BY. `equals` therefore compares
             # the complete result as a duplicate-preserving bag, avoiding graph-stable verdicts
             # that change only because the server returned rows in another order.
-            equals_ok = _bag(actual_values) == _bag(expected.equals)
-            measured["equals"] = equals_ok
-            if not equals_ok:
+            actual_bag, expected_bag = _bag(actual_values), _bag(expected.equals)
+            equals_failed = any(count > expected_bag[value] for value, count in actual_bag.items())
+            equals_ok = actual_bag == expected_bag
+            if complete or equals_failed:
+                measured["equals"] = equals_ok
+            if equals_failed or (complete and not equals_ok):
                 failures.append("result does not equal the pinned values")
 
         if not failures:

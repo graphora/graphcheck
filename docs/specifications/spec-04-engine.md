@@ -325,8 +325,8 @@ checks have executable Cypher callbacks; `dangling_rels` is a declared capabilit
 All observable conformance templates return exactly one measurement row with a non-negative
 `violation_count`, a population, and scalar measurements where applicable. Core predicate,
 degree, completeness, and uniqueness plans carry a separate bounded evidence query. It executes
-only when a typed exact aggregate indicates a finding, within the same read transaction and graph
-snapshot as measurement. Passing checks never execute that path.
+only when a typed exact aggregate indicates a finding, within the same read
+transaction as measurement, subject to read-committed isolation. Passing checks never execute that path.
 `completeness` additionally returns `conforming_count` and a ratio `coverage`. Internally inconsistent
 summary arithmetic is `engine.invalid_query_result`, never a finding or pass.
 
@@ -338,8 +338,8 @@ Directly invoking the compiler callback fails closed with `engine.check_unobserv
 returning a misleading zero violations.
 
 PII checks return a population, sample size, and candidate rows with node pointers. The main query
-computes its eligible population in the same Neo4j snapshot as selection. Value matching admits only string
-properties through null-safe conversion predicates, so arrays and other supported Neo4j property
+computes its eligible population in the same Neo4j query as selection (without snapshot
+isolation). Value matching admits only string properties through null-safe conversion predicates, so arrays and other supported Neo4j property
 types cannot crash the query. The evaluator groups findings by installed pattern, node labels, and
 property key. It never serializes raw matched values. Empty/malformed samples, missing pointers,
 population disagreement, or invalid pattern metadata are query-result errors, not passes.
@@ -510,8 +510,8 @@ conformance or competency findings; those remain `engine.evidence_missing`.
 Sampling applies only to compiler plans explicitly marked sampled: `hub_outlier`,
 `pii_name_match`, and `pii_value_match`. The plan must agree with the installed manifest declaration.
 Plans may execute a population preflight or compute the exact population inside the sampled query.
-Hub and PII plans use the latter so population, selection, and estimate metadata share one snapshot
-and avoid a duplicate runner round trip.
+Hub and PII plans use the latter so population, selection, and estimate metadata share one query,
+subject to concurrent-write visibility, and avoid a duplicate runner round trip.
 
 The per-check seed is SHA-256 over domain-separated, length-prefixed components:
 
@@ -664,8 +664,11 @@ competency, drift, core conformance, hub sampling, and PII sampling checks; it r
 skips and a complete result. It records overall, per-check-family, and per-query timings with
 concurrency and environment metadata, but does not enforce a cross-machine timing threshold.
 Findings are allowed because the target is a customer-scale graph, not a synthetic all-pass fixture.
-The default 295-second engine budget reserves the remaining wall time for artifact
-serialization/reporting.
+The default 295-second database execution budget starts before connection and credential
+preflight on CLI/MCP runs and continues through engine execution without restarting. It leaves
+a nominal five-second reporting margin in a five-minute job. Connector/query timeouts are
+cooperative: connection acquisition, result consumption, cleanup, and filesystem work can
+outlast the allowance. This is not a hard process-termination guarantee.
 
 ## Deferred v0 integration
 
@@ -689,3 +692,22 @@ both preflight paths without a CLI-maintained requirement table.
   10M-node/30-check measurement baselines.
 - `tests/unit/cli/test_run_cli.py` — selection, artifacts, summary, connection/configuration, and exit-code
   coverage.
+
+
+### Run configuration and publication
+
+`graphcheck.yml` supports `engine.result_row_limit`, a strict positive integer defaulting to
+100000. CLI and MCP share this ceiling. Raising it increases retained-data costs and does not
+bound an individual row's size. Equality failures stop at the first value or excess duplicate
+that cannot fit the expected bag. Equality success still requires stream exhaustion, and a
+partial stream never reports an exact final row count or invents missing graph evidence.
+
+Historical report IDs use `<safe-database>_<finished-timestamp>_<unique-component>`. The unique
+component is derived from the original engine run ID. Publication rejects conflicting history
+and accepts byte-identical retries. Redacted exports use an independent random ID component.
+Old report directory names remain readable. Cooperating report discovery, lazy loads, MCP
+reads, publication, pruning, and deletion share a per-directory thread/process lock. Raw
+filesystem readers of `latest` must retry across swaps or use immutable historical IDs.
+Lists isolate corrupt records and report bounded warnings; explicitly selecting an unreadable
+record fails. Pruning uses compact summaries, preserves latest and hidden/unknown records,
+and discards full legacy result models after deriving summaries.
