@@ -162,6 +162,8 @@ def _resolve_candidate(
         candidate = statistics[metric]
         if metric == "property_coverage" and isinstance(candidate, list):
             return _property_coverage(candidate, target)
+        if metric == "degree_distribution" and isinstance(candidate, list):
+            return _degree_distribution(candidate, target)
         if metric == "node_count" and target.get("label") is not None:
             label_count = _label_count(raw, str(target["label"]))
             if label_count is not None:
@@ -220,6 +222,24 @@ def _relationship_count(raw: Mapping[str, object], rel_type: str) -> object | No
     for item in relationships:
         if isinstance(item, Mapping) and item.get("name") == rel_type:
             return item.get("count")
+    return None
+
+
+def _degree_distribution(values: list[object], target: Mapping[str, object]) -> object | None:
+    label = target.get("label")
+    rel_type = target.get("type")
+    quantile = target.get("quantile")
+    direction = target.get("direction", "both")
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        if (
+            item.get("label") == label
+            and item.get("type") == rel_type
+            and item.get("quantile") == quantile
+            and item.get("direction", "both") == direction
+        ):
+            return item.get("value")
     return None
 
 
