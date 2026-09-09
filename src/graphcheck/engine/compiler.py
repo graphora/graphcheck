@@ -127,6 +127,15 @@ def _rel_pointer(variable: str) -> str:
     return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
 
 
+def _degree_edge_pattern(direction: str, relationship_type: str | None) -> str:
+    relationship = relationship_pattern("", relationship_type)
+    if direction == "out":
+        return f"(n)-{relationship}->()"
+    if direction == "in":
+        return f"(n)<-{relationship}-()"
+    return f"(n)-{relationship}-()"
+
+
 @register_conformance_compiler("completeness")
 def _compile_completeness(
     config: dict[str, object], evidence_cap: int, sample_seed: int
@@ -423,12 +432,14 @@ class CypherCompiler:
             "node_count": self._compile_node_count,
             "relationship_count": self._compile_relationship_count,
             "property_coverage": self._compile_property_coverage,
+            "degree_distribution": self._compile_degree_distribution,
         }.get(spec.metric)
         if compiler is None:
             raise GraphCheckError(
                 "engine.metric_unsupported",
                 f"Drift metric {spec.metric!r} has no C1 query compiler.",
-                "Use node_count, relationship_count, or property_coverage, "
+                "Use node_count, relationship_count, property_coverage, "
+                "or degree_distribution, "
                 "or install its provider.",
             )
         query, params = compiler(spec)
@@ -512,7 +523,52 @@ class CypherCompiler:
                 spec.metric,
                 "target.direction must be 'in' or 'out' when target.type is given without target.label",
             )
-        raise NotImplementedError("query construction pending - brick 2")
+        required_labels = [label] if label is not None else []
+        required_types = [rel_type] if rel_type is not None else []
+        edge = _degree_edge_pattern(direction, rel_type)
+        if label is not None:
+            match_clause = f"MATCH {node_pattern('n', label)}"
+            with_clause = f"WITH n, COUNT {{ {edge} }} AS degree"
+        else:
+            match_clause = f"MATCH {edge}"
+            with_clause = f"WITH DISTINCT n, COUNT {{ {edge} }} AS degree"
+        if quantile == "max":
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN max(degree) AS current, count(n) AS population
+                }}
+                CALL (current) {{
+                  {match_clause}
+                  {with_clause}
+                  WHERE degree = current
+                  WITH n ORDER BY elementId(n) ASC LIMIT $evidence_cap
+                  RETURN collect({_node_pointer('n')}) AS evidence
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, evidence
+                """
+            ).strip()
+        else:
+            percentile = 0.5 if quantile == "p50" else 0.95
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN percentileDisc(degree, {percentile}) AS current, count(n) AS population
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, [] AS evidence
+                """
+            ).strip()
+        return query, {
+            "evidence_cap": self.evidence_cap,
+            "required_labels": required_labels,
+            "required_relationship_types": required_types,
+        }
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
         unknown = set(spec.target) - {"label", "type", "property"}
