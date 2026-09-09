@@ -435,7 +435,7 @@ def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile
             "id": "customer-tax-id-fixed",
             "question": "Is the tax ID present?",
             "query": "MATCH (c:Customer {id: 'CUST-1'}) WHERE c.tax_id IS NULL "
-            "RETURN elementId(c) AS node_id",
+            "RETURN elementId(c) AS node_element_id",
             "expect": {"rows": {"exactly": 0}},
         }
     ]
@@ -455,6 +455,12 @@ def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile
         assert _cli(tmp_path, "profile", "--json", timeout=240).returncode == 0
         assert _cli(tmp_path, "run").returncode == 1
         before = _run_payload(tmp_path)
+        assert before["run"]["run_status"] == "complete", before
+        assert {check["id"]: check["verdict"] for check in before["checks"]} == {
+            "account-no-orphans": "pass",
+            "account-owner-cardinality": "pass",
+            "customer-tax-id-fixed": "fail",
+        }, before["checks"]
         orphan_id = session.run(
             "MATCH (c:Customer {id: 'CUST-1'}) SET c.tax_id = '100000001' "
             "CREATE (n:Account {id: 'ACC-NEW-ORPHAN'}) "
@@ -463,6 +469,12 @@ def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile
         assert _cli(tmp_path, "profile", "--json", timeout=240).returncode == 0
         assert _cli(tmp_path, "run").returncode == 1
         after = _run_payload(tmp_path)
+        assert after["run"]["run_status"] == "complete", after
+        assert {check["id"]: check["verdict"] for check in after["checks"]} == {
+            "account-no-orphans": "fail",
+            "account-owner-cardinality": "fail",
+            "customer-tax-id-fixed": "pass",
+        }, after["checks"]
         assert after["run"]["previous_run_id"] == before["run"]["id"]
         assert after["run"]["baseline_ref"] != before["run"]["baseline_ref"]
         text = _cli(tmp_path, "changes")

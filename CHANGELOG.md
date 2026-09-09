@@ -42,6 +42,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,
   so the changes acceptance test can load its Cypher parser and seed data.
+- The fraud-ring changes acceptance test uses the explicit `node_element_id` evidence alias,
+  so its planted tax-ID finding fails with evidence and then passes after the repair.
 - Drift checks retain partial run status when using present measurements from incomplete
   baselines, without changing their measured verdict or exit-code precedence.
 - Connection and credential preflight now share the run deadline with check execution.
