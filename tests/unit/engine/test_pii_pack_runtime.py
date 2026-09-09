@@ -141,7 +141,12 @@ def test_pii_query_sampling_order_is_seeded_and_deterministic(check):
         changed.params[name] for name in hash_names
     )
     assert first.query.startswith("CYPHER 5\n")
-    assert "WITH population, n, property, raw ORDER BY elementId(n), property" in first.query
+    assert "WITH property, raw ORDER BY property" in first.query
+    assert "ORDER BY elementId(n), property" not in first.query
+    assert (
+        "RETURN occurrence.property AS property, occurrence.raw AS raw, _gc_property_index"
+        in first.query
+    )
     assert "_gc_node_properties[_gc_property_index] AS occurrence" in first.query
     assert "+ _gc_property_index) % 2147483647" in first.query
     assert "$sample_hash_a * (_gc_occurrence_key)" in first.query

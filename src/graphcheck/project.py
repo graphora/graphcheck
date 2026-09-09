@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
 from graphcheck.errors import GraphCheckError
 from graphcheck.generation.config import GenerateConfig
@@ -15,6 +24,12 @@ CHECKS_DIR = "checks"
 ARTIFACTS_DIR = ".graphcheck"
 
 
+class ProjectEngineConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    result_row_limit: Annotated[StrictInt, Field(gt=0)] = 100_000
+
+
 class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -22,6 +37,7 @@ class ProjectConfig(BaseModel):
     checks: str
     artifacts: str
     concurrency: PositiveInt = 2
+    engine: ProjectEngineConfig = Field(default_factory=ProjectEngineConfig)
     generate: GenerateConfig | None = None
 
     @field_validator("concurrency", mode="before")

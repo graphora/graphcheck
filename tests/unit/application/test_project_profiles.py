@@ -305,3 +305,24 @@ def test_connection_profile_repr_hides_password():
     profile = ConnectionProfile(uri="bolt://localhost", user="u", password="secret", database="d")
 
     assert "secret" not in repr(profile)
+
+
+@pytest.mark.parametrize("value", [True, False, 1.0, "2", 0, -1])
+def test_project_row_limit_requires_a_strict_positive_integer(value):
+    from pydantic import ValidationError
+
+    from graphcheck.project import ProjectEngineConfig
+
+    with pytest.raises(ValidationError):
+        ProjectEngineConfig(result_row_limit=value)
+
+
+def test_project_row_limit_defaults_and_rejects_unknown_engine_settings():
+    from pydantic import ValidationError
+
+    from graphcheck.project import ProjectEngineConfig, default_project_config
+
+    assert default_project_config().engine.result_row_limit == 100_000
+    assert ProjectEngineConfig(result_row_limit=2).result_row_limit == 2
+    with pytest.raises(ValidationError):
+        ProjectEngineConfig(time_budget_s=2)

@@ -360,3 +360,39 @@ def test_c4_property_coverage_list_resolves_node_and_relationship_targets(target
     )
 
     assert value == BaselineValue(value=expected)
+
+
+def test_directory_view_pins_aliases_missing_and_failed_reads(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+
+    path = tmp_path / "a.json"
+    path.write_text('{"node_count": 10}', encoding="utf-8")
+    provider = DirectoryBaselineProvider(tmp_path)
+    reads = []
+    original = Path.read_text
+
+    def read(self, *args, **kwargs):
+        reads.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        values = list(
+            pool.map(lambda ref: provider.resolve(ref, "node_count", {}), ["latest", "a"] * 20)
+        )
+    assert all(value.value == 10 for value in values)
+    assert reads == [path]
+    assert provider.resolve("missing", "node_count", {}) is None
+    (tmp_path / "missing.json").write_text('{"node_count": 20}', encoding="utf-8")
+    assert provider.resolve("latest", "node_count", {}).value == 10
+    assert provider.resolve("missing", "node_count", {}) is None
+    assert provider.fresh().resolve("latest", "node_count", {}).value == 20
+    broken = tmp_path / "broken.json"
+    broken.write_text("{", encoding="utf-8")
+    with pytest.raises(GraphCheckError):
+        provider.resolve("broken", "node_count", {})
+    broken.write_text('{"node_count": 30}', encoding="utf-8")
+    with pytest.raises(GraphCheckError):
+        provider.resolve("broken", "node_count", {})
+    assert provider.fresh().resolve("broken", "node_count", {}).value == 30

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from textwrap import dedent
 from typing import Literal
 
@@ -63,6 +64,16 @@ class ConformancePlan:
     evidence_query: str | None = None
     evidence_params: dict[str, object] | None = None
     evidence_condition: EvidenceCondition | None = None
+
+
+COMPLETENESS_BATCH_SIZE = 32
+
+
+@dataclass(frozen=True)
+class CompiledCompletenessBatch:
+    query: str
+    params: dict[str, object]
+    members: tuple[tuple[CompiledCheck, str], ...]
 
 
 ConformanceCompiler = Callable[[dict[str, object], int, int], ConformancePlan]
@@ -230,6 +241,59 @@ class CypherCompiler:
             raise ValueError("evidence_cap must be a positive integer")
         self.evidence_cap = evidence_cap
         self.pack_catalog = pack_catalog or builtin_pack_catalog()
+
+    def completeness_label(self, check: LoadedCheck) -> str | None:
+        definition = self.pack_catalog.checks.get("completeness")
+        if (
+            type(self) is CypherCompiler
+            and self.pack_catalog is builtin_pack_catalog()
+            and definition is not None
+            and (definition.pack, definition.template, definition.sampled)
+            == ("core", "completeness", False)
+            and _CONFORMANCE_COMPILERS.get("completeness") is _compile_completeness
+            and isinstance(check.spec, ConformanceCheck)
+            and check.spec.check == "completeness"
+            and not check.generated
+        ):
+            return str(check.spec.with_["label"]).strip()
+        return None
+
+    def compile_completeness_batch(self, checks: list[LoadedCheck]) -> CompiledCompletenessBatch:
+        labels = {self.completeness_label(check) for check in checks}
+        if not 2 <= len(checks) <= COMPLETENESS_BATCH_SIZE or None in labels or len(labels) != 1:
+            raise ValueError("a completeness batch requires 2–32 built-in checks on one label")
+        members = [self.compile(check) for check in checks]
+        properties = list(
+            dict.fromkeys(str(check.spec.with_["property"]).strip() for check in checks)
+        )
+        columns = {name: f"conforming_{index}" for index, name in enumerate(properties)}
+        mapping = {check.id: columns[str(check.spec.with_["property"]).strip()] for check in checks}
+        counters = ", ".join(
+            f"count({property_access('n', name)}) AS {column}" for name, column in columns.items()
+        )
+        query = (
+            "// completeness outputs: "
+            + json.dumps(mapping, ensure_ascii=True)
+            + "\n"
+            + _SCHEMA_CATALOG
+            + "\nCALL { MATCH "
+            + node_pattern("n", next(iter(labels)))
+            + " RETURN count(n) AS population, "
+            + counters
+            + " }\nRETURN "
+            + _SCHEMA_PROJECTION
+            + ", population, "
+            + ", ".join(columns.values())
+        )
+        params = dict(members[0].params)
+        return CompiledCompletenessBatch(
+            query,
+            params,
+            tuple(
+                (replace(member, query=query, params=params), mapping[member.check.id])
+                for member in members
+            ),
+        )
 
     def compile(self, check: LoadedCheck, *, sample_seed: int = 0) -> CompiledCheck:
         if check.pattern is Pattern.CONFORMANCE:

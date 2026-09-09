@@ -277,3 +277,57 @@ conformance:
     assert all(check.evidence and check.evidence.elements for check in results.checks)
     assert "4111 1111 1111 1111" not in repr(results)
     assert sampled_properties == {"email", "notes", "tags"}
+
+
+def test_concurrent_repair_between_measurement_and_evidence_is_an_explicit_error(neo4j_profile):
+    from contextlib import contextmanager
+
+    from graphcheck.contracts.results import Results
+
+    observed = []
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
+        ) as writer,
+        writer.session(database=neo4j_profile.database) as session,
+    ):
+        session.run(
+            "CREATE (:GraphCheckConcurrentAudit {required: 1}), (:GraphCheckConcurrentAudit)"
+        ).consume()
+
+        class Client(Neo4jClient):
+            @contextmanager
+            def read_transaction(self, **kwargs):
+                with super().read_transaction(**kwargs) as reader:
+
+                    class BarrierReader:
+                        def run_read_result(self, query, params, **options):
+                            result = reader.run_read_result(query, params, **options)
+                            observed.append(result.rows)
+                            if len(observed) == 1:
+                                assert result.rows[0]["violation_count"] == 1
+                                # A separate writer commits before the second read begins.
+                                session.run(
+                                    "MATCH (n:GraphCheckConcurrentAudit) SET n.required = 1"
+                                ).consume()
+                            return result
+
+                    yield BarrierReader()
+
+        client = Client(neo4j_profile)
+        try:
+            result = Engine(client).run_yaml("""
+suite: concurrent-audit
+conformance:
+  - id: required
+    check: completeness
+    with: {label: GraphCheckConcurrentAudit, property: required, threshold: 1.0}
+""")
+            assert len(observed) == 2
+            assert result.checks[0].verdict is Verdict.ERRORED
+            assert result.checks[0].error.code == "engine.evidence_missing"
+            assert result.run.exit_code == 1
+            Results.model_validate_json(result.model_dump_json(by_alias=True))
+        finally:
+            client.close()
+            session.run("MATCH (n:GraphCheckConcurrentAudit) DETACH DELETE n").consume()

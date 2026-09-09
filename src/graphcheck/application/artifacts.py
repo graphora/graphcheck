@@ -15,23 +15,24 @@ from graphcheck.contracts.results import Results
 RenderObserver = Callable[[int, bool], None]
 RenderedArtifacts = tuple[bytes, bytes, bytes]
 
-# The `latest` alias is the only artifact target multiple runs contend for (historical run
-# directories are unique per run id). MCP 2.0 dispatches synchronous tools through worker
-# threads, so two run_suite calls can publish concurrently within one process; separate CLI
-# processes can also publish at once. This in-process thread lock is shared by every code
-# path that publishes `latest`.
+# Readers, publishers, and retention operations share a non-reentrant lock per runs
+# directory. The file lock extends that protocol to separate CLI/MCP processes.
 _LATEST_PUBLISH_LOCK = threading.Lock()
+_DIRECTORY_LOCKS: dict[Path, threading.Lock] = {}
 
 
 @contextmanager
 def latest_publication_lock(runs_dir: Path) -> Iterator[None]:
-    """Serialize publication of the shared `latest` alias across threads and processes.
+    """Coordinate managed report reads and mutations across threads and processes.
 
-    Every writer that swaps `<runs_dir>/latest` must hold this lock so the exists/move/swap
-    sequence in publish_run_directory can never interleave with another publisher.
+    Callers already holding this lock must use unlocked history helpers. Rendering and
+    HTTP response transmission stay outside this critical section.
     """
+    runs_dir = runs_dir.resolve()
+    with _LATEST_PUBLISH_LOCK:
+        thread_lock = _DIRECTORY_LOCKS.setdefault(runs_dir, threading.Lock())
     file_lock = FileLock(str(runs_dir / ".latest.lock"))
-    with _LATEST_PUBLISH_LOCK, file_lock:
+    with thread_lock, file_lock:
         yield
 
 
@@ -95,10 +96,9 @@ def write_run_artifacts(
         raise ValueError(f"run id cannot be used as an artifact directory: {results.run.id!r}")
 
     artifacts = render_run_artifacts(results, render_observer=render_observer)
-    publish_run_directory(artifacts, historical_dir)
-
     latest_dir = runs_dir / "latest"
     with latest_publication_lock(runs_dir):
+        publish_run_directory(artifacts, historical_dir)
         publish_run_directory(artifacts, latest_dir)
     return latest_dir / "results.json", latest_dir / "report.html"
 
@@ -123,6 +123,17 @@ def publish_run_directory(artifacts: RenderedArtifacts, directory: Path) -> None
         if directory.exists():
             if not directory.is_dir() or directory.is_symlink() or directory.is_junction():
                 raise OSError(f"refusing to replace linked or non-directory artifact: {directory}")
+            if directory.name.casefold() != "latest":
+                if all(
+                    (directory / name).is_file()
+                    and not (directory / name).is_symlink()
+                    and (directory / name).read_bytes() == content
+                    for name, content in zip(
+                        ("results.json", "report.html", "summary.json"), artifacts, strict=True
+                    )
+                ):
+                    return
+                raise FileExistsError(f"Historical report already exists: {directory.name}")
             directory.replace(backup)
             previous_moved = True
 

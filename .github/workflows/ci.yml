@@ -128,6 +128,7 @@ jobs:
           tests/integration/test_hostile_graphs.py
           tests/integration/test_mcp_neo4j_workflow.py
           tests/integration/test_performance_plans.py
+          tests/integration/test_shared_query_equivalence.py
           -v
 
   installed-wheel:

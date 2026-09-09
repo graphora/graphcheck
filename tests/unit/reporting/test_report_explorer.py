@@ -324,3 +324,37 @@ def test_report_explorer_launch_serves_in_the_invoking_process(tmp_path, monkeyp
     assert "&token=" in opened_urls[0]
     assert announced_urls == [clean_url]
     assert "&token=" not in clean_url
+
+
+def test_explorer_keeps_healthy_reports_and_surfaces_corruption_warnings(tmp_path):
+    _write_run(tmp_path, "healthy", "2026-07-01T10:00:00Z")
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "results.json").write_text("{", encoding="utf-8")
+    with _server(tmp_path) as (server, token):
+        headers = _authorized_headers(server, token, f"graphcheck_report_explorer={token}")
+        assert _request(server, "GET", "/", headers=headers)[0] == 303
+        status, _, content = _request(server, "GET", "/api/reports", headers=headers)
+        assert status == 200
+        assert "broken" in json.loads(content)["warnings"][0]
+        assert _request(server, "GET", "/api/report?id=healthy", headers=headers)[0] == 200
+        assert _request(server, "GET", "/api/report?id=broken", headers=headers)[0] == 404
+        assert (
+            _request(
+                server, "POST", "/api/compare", body={"ids": ["healthy", "broken"]}, headers=headers
+            )[0]
+            == 400
+        )
+
+
+@pytest.mark.parametrize("route", ["/", "/api/reports", "/api/report?id=healthy"])
+def test_explorer_discovery_failure_returns_json(tmp_path, monkeypatch, route):
+    def fail(*args):
+        raise explorer_module.ReportHistoryError("history unavailable")
+
+    monkeypatch.setattr(explorer_module, "discover_report_runs", fail)
+    with _server(tmp_path) as (server, token):
+        headers = _authorized_headers(server, token, f"graphcheck_report_explorer={token}")
+        status, _, body = _request(server, "GET", route, headers=headers)
+        assert status in {404, 500}
+        assert json.loads(body)["error"] == "history unavailable"

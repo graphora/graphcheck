@@ -303,3 +303,31 @@ def test_scalar_types_are_strict():
 
     with pytest.raises(ValidationError):
         _validate(raw)
+
+
+@pytest.mark.parametrize("order", [["id", "id"], ["tenant"], ["id", "other"]])
+def test_declared_index_order_must_match_unique_properties(order):
+    from graphcheck.contracts.profile import IndexProfile
+
+    with pytest.raises(ValueError):
+        IndexProfile(
+            name="ordered",
+            type="RANGE",
+            labels_or_types=["Account"],
+            properties=["id", "tenant"],
+            declared_order=order,
+        )
+
+
+def test_profile_order_metadata_is_versioned_and_does_not_expand_provider_egress():
+    from graphcheck.generation.transmission import build_profile_context
+
+    raw = _baseline()
+    raw["schema"]["indexes"][0]["declared_order"] = raw["schema"]["indexes"][0]["properties"]
+    with pytest.raises(ValueError, match="requires baseline schema_version 1.1"):
+        _validate(raw)
+    raw["schema_version"] = "1.1"
+    model = _validate(raw)
+    jsonschema.validate(raw, profile_schema())
+    assert model.fingerprint == _baseline()["fingerprint"]
+    assert "declared_order" not in build_profile_context(model).model_dump_json()

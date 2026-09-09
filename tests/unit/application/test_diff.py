@@ -77,6 +77,7 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
         "fingerprint_changed",
         "drift_detected",
         "labels",
+        "properties",
         "relationship_types",
         "constraints",
         "indexes",
@@ -84,6 +85,7 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
         "summary",
     ]
     assert payload["summary"] == {
+        "properties": {"changed": 0, "added": 0, "removed": 0},
         "labels": {"changed": 1, "added": 1, "removed": 1},
         "relationship_types": {"changed": 0, "added": 0, "removed": 0},
         "constraints": {"added": 0, "removed": 0},
@@ -135,7 +137,7 @@ def test_json_uses_finalized_schema_and_nested_summary() -> None:
     assert "name" not in payload["statistics"]["node_count"]
     assert "name" not in payload["statistics"]["relationship_count"]
     assert set(payload["constraints"]) == {"added", "removed"}
-    assert set(payload["indexes"]) == {"added", "removed"}
+    assert set(payload["indexes"]) == {"added", "removed", "metadata_changed"}
 
 
 def test_degree_distribution_json_uses_model_shape_and_not_a_list() -> None:
@@ -301,3 +303,72 @@ def test_coverage_only_change_detects_drift_with_matching_fingerprint() -> None:
     assert report.drift_detected is True
     assert "No drift detected." not in render_human(report)
     assert "Account.id cover    100.0% → 92.0% (-8.0 pp)" in render_human(report)
+
+
+def _validate_profile(baseline):
+    from graphcheck.contracts.profile import profile_fingerprint
+
+    baseline.fingerprint = profile_fingerprint(baseline.graph_schema, baseline.statistics)
+    return BaselineProfile.model_validate_json(baseline.model_dump_json(by_alias=True))
+
+
+def test_property_types_and_inventory_have_actionable_deterministic_diff():
+    from graphcheck.contracts.profile import ProfileProperty
+
+    before = _profile()
+    after = _profile()
+    label = after.graph_schema.labels[0]
+    old = label.properties[0]
+    label.properties = [
+        old.model_copy(update={"type": "INTEGER"}),
+        ProfileProperty(name="z_added", type="STRING"),
+    ]
+    after = _validate_profile(after)
+    report = compare(before, after)
+    assert report.properties["changed"] == [
+        {"label": label.name, "property": old.name, "from": old.type, "to": "INTEGER"}
+    ]
+    assert report.properties["added"] == [
+        {"label": label.name, "property": "z_added", "to": "STRING"}
+    ]
+    assert f"{label.name}.{old.name} type: {old.type} -> INTEGER" in render_human(report)
+    assert json.loads(render_json(report))["properties"] == report.properties
+    reverse = compare(after, before)
+    assert reverse.properties["removed"] == [
+        {"label": label.name, "property": "z_added", "from": "STRING"}
+    ]
+    assert compare(before, before).summary["properties"] == {"changed": 0, "added": 0, "removed": 0}
+
+
+def test_known_index_reorder_is_drift_but_new_order_metadata_is_not():
+    from graphcheck.contracts.profile import IndexProfile
+
+    before = _profile()
+    before.schema_version = "1.1"
+    before.graph_schema.indexes = [
+        IndexProfile(
+            name="composite",
+            type="RANGE",
+            labels_or_types=["Account"],
+            properties=["id", "tenant"],
+            declared_order=["tenant", "id"],
+        )
+    ]
+    before = _validate_profile(before)
+    after = before.model_copy(deep=True)
+    after.graph_schema.indexes[0].declared_order = ["id", "tenant"]
+    after = _validate_profile(after)
+    report = compare(before, after)
+    assert report.drift_detected
+    assert "Account(tenant, id)" in render_human(report)
+    assert "Account(id, tenant)" in render_human(report)
+    legacy = before.model_copy(deep=True)
+    legacy.schema_version = "1.0"
+    legacy.graph_schema.indexes[0].declared_order = None
+    legacy = _validate_profile(legacy)
+    report = compare(legacy, before)
+    assert not report.drift_detected
+    assert report.indexes["metadata_changed"] == [
+        {"name": "composite", "from": None, "to": ["tenant", "id"]}
+    ]
+    assert "declared order metadata" in render_human(report)

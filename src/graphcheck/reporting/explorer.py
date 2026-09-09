@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import html
 import http.cookies
 import json
 import secrets
@@ -50,6 +51,12 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         super().setup()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        try:
+            self._get()
+        except (ReportHistoryError, OSError) as exc:
+            self._json_error(500, str(exc))
+
+    def _get(self) -> None:
         self.server.last_activity = time.monotonic()
         parsed = urllib.parse.urlsplit(self.path)
         if not self._valid_host():
@@ -136,14 +143,16 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
                 self._delete(payload)
             else:
                 self._json_error(404, "Unknown report explorer route.")
-        except (ReportHistoryError, TypeError, ValueError) as exc:
+        except (ReportHistoryError, OSError, TypeError, ValueError) as exc:
             self._json_error(400, str(exc))
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
     def _records(self) -> list[ReportRun]:
-        return discover_report_runs(self.server.runs_dir)
+        records = discover_report_runs(self.server.runs_dir)
+        self._history_warnings = getattr(records, "warnings", [])
+        return records
 
     def _compare(self, payload: dict[str, Any]) -> None:
         ids = _selected_ids(payload, exactly=2)
@@ -227,9 +236,16 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         self._json(status, {"error": message})
 
     def _json(self, status: int, payload: object) -> None:
+        if isinstance(payload, dict) and getattr(self, "_history_warnings", []):
+            payload = {**payload, "warnings": self._history_warnings}
         self._send(status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
 
     def _html(self, status: int, document: str) -> None:
+        if warnings := getattr(self, "_history_warnings", []):
+            banner = (
+                '<aside role="status">' + "<br>".join(html.escape(w) for w in warnings) + "</aside>"
+            )
+            document = document.replace("<body>", "<body>" + banner, 1)
         self._send(status, document.encode("utf-8"), "text/html; charset=utf-8")
 
     def _send(self, status: int, content: bytes, content_type: str) -> None:

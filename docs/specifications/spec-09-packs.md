@@ -315,7 +315,7 @@ evidence, console output, JSON, or HTML artifacts.
 
 The value matcher filters to actual string properties with null-safe conversion predicates before
 population counting and sampling. Lists and other valid Neo4j property types are excluded rather
-than causing a conversion error. Population and selection share one graph snapshot, so the sample
+than causing a conversion error. Population and selection share one query, subject to read-committed isolation, so the sample
 size and confidence interval describe the algorithm that actually ran.
 
 Every failing PII result contains node evidence pointers. Missing/malformed candidates, a broken

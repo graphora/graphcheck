@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -60,14 +62,22 @@ def write_baseline(
         by_alias=True,
         indent=2,
     )
-    while True:
-        path = baselines_dir / f"{timestamp:%Y%m%dT%H%M%S.%f}.json"
-        try:
-            with path.open("x", encoding="utf-8") as snapshot:
-                snapshot.write(content)
-            return path
-        except FileExistsError:
-            timestamp += timedelta(microseconds=1)
+    BaselineProfile.model_validate_json(content)
+    staging = baselines_dir / f".baseline-{uuid.uuid4().hex}.tmp"
+    try:
+        with staging.open("x", encoding="utf-8") as snapshot:
+            snapshot.write(content)
+            snapshot.flush()
+            os.fsync(snapshot.fileno())
+        while True:
+            path = baselines_dir / f"{timestamp:%Y%m%dT%H%M%S.%f}.json"
+            try:
+                os.link(staging, path)
+                return path
+            except FileExistsError:
+                timestamp += timedelta(microseconds=1)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def list_baselines(
@@ -123,10 +133,15 @@ def set_current_baseline(
 
     selected_file = current_baseline_file(project_root, artifacts)
     selected_file.parent.mkdir(parents=True, exist_ok=True)
-    selected_file.write_text(
-        json.dumps({"baseline": selected.name}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    staging = selected_file.with_name(f".current-baseline-{uuid.uuid4().hex}.tmp")
+    try:
+        with staging.open("x", encoding="utf-8") as pointer:
+            pointer.write(json.dumps({"baseline": selected.name}, indent=2) + "\n")
+            pointer.flush()
+            os.fsync(pointer.fileno())
+        staging.replace(selected_file)
+    finally:
+        staging.unlink(missing_ok=True)
 
     return selected
 

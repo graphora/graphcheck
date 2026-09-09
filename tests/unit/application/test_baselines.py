@@ -213,3 +213,69 @@ def test_resolve_diff_baselines_requires_two_snapshots(tmp_path, monkeypatch) ->
         resolve_diff_baselines()
 
     assert caught.value.error.code == "baseline.missing"
+
+
+def test_failed_snapshot_publication_never_becomes_discoverable(tmp_path, monkeypatch):
+    import graphcheck.baselines as module
+
+    previous = write_baseline(_profile(), tmp_path)
+
+    def fail(source, destination):
+        assert list_baselines(tmp_path) == [previous]
+        assert json.loads(Path(source).read_text(encoding="utf-8"))["schema"]
+        raise OSError("publication interrupted")
+
+    monkeypatch.setattr(module.os, "link", fail)
+    with pytest.raises(OSError, match="interrupted"):
+        write_baseline(_profile(), tmp_path)
+    assert list_baselines(tmp_path) == [previous]
+    assert list(previous.parent.iterdir()) == [previous]
+
+
+def test_failed_pointer_update_keeps_previous_selection(tmp_path, monkeypatch):
+    first = write_baseline(_profile(), tmp_path)
+    second = write_baseline(_profile(), tmp_path)
+    set_current_baseline(first.name, tmp_path)
+
+    def fail(self, target):
+        assert get_current_baseline(tmp_path) == first
+        raise OSError("replace interrupted")
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="interrupted"):
+        set_current_baseline(second.name, tmp_path)
+    assert get_current_baseline(tmp_path) == first
+
+
+def test_failed_staging_flush_leaves_no_discoverable_snapshot(tmp_path, monkeypatch):
+    import graphcheck.baselines as module
+
+    def fail(fd):
+        assert list_baselines(tmp_path) == []
+        raise OSError("flush interrupted")
+
+    monkeypatch.setattr(module.os, "fsync", fail)
+    with pytest.raises(OSError, match="interrupted"):
+        write_baseline(_profile(), tmp_path)
+    assert list_baselines(tmp_path) == []
+    assert not list((tmp_path / ".graphcheck/baselines").iterdir())
+
+
+def test_concurrent_baseline_publishers_preserve_all_snapshots(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        paths = list(pool.map(lambda _: write_baseline(_profile(), tmp_path), range(12)))
+    assert len(set(paths)) == 12
+    assert sorted(paths) == list_baselines(tmp_path)
+    for path in paths:
+        BaselineProfile.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def test_invalid_snapshot_is_rejected_before_publication(tmp_path):
+    profile = _profile()
+    profile.graph_schema.labels = []
+    with pytest.raises(ValueError, match="fingerprint"):
+        write_baseline(profile, tmp_path)
+    assert list_baselines(tmp_path) == []
+    assert not list((tmp_path / ".graphcheck/baselines").iterdir())

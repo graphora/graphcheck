@@ -940,3 +940,48 @@ def test_evaluation_is_deterministic_and_does_not_mutate_rows(values):
 
     assert first == repeated
     assert rows == original
+
+
+@pytest.mark.parametrize(
+    "expected,values,stop",
+    [
+        ([1], [2, 1], 1),
+        ([1, 2], [1, 1, 2], 2),
+        ([1], [1, 2], 2),
+        ([], [1], 1),
+        ([1, 2], [2, 1], None),
+        ([1, 2], [1], None),
+        ([True], [1], 1),
+        ([{"a": [1, True]}], [{"a": [1, False]}], 1),
+        ([date(2026, 1, 1)], [Neo4jDate(2026, 1, 1)], None),
+    ],
+)
+def test_streaming_equality_matches_eager_bag_verdict_without_premature_success(
+    expected, values, stop
+):
+    from graphcheck.engine.evaluator import CompetencyConsumption
+
+    compiled = _competency({"equals": expected})
+    consumption = CompetencyConsumption(compiled, 100)
+    retained = []
+    stopped = None
+    for index, value in enumerate(values, 1):
+        row = {"value": value}
+        retained.append(row)
+        if consumption.stop_when(row):
+            stopped = index
+            break
+    assert stopped == stop
+    eager = evaluate_check(compiled, [{"value": value} for value in values], columns=["value"])
+    streamed = evaluate_check(compiled, retained, columns=["value"], complete=stopped is None)
+    assert streamed.passed == eager.passed
+    if stopped is not None:
+        assert streamed.measured["equals"] is False
+        assert "rows" not in streamed.measured
+
+
+def test_early_equality_mismatch_still_requires_real_graph_evidence():
+    compiled = replace(_competency({"equals": [1]}), params={})
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(compiled, [{"value": 2}], columns=["value"], complete=False)
+    assert caught.value.error.code == "engine.evidence_missing"
