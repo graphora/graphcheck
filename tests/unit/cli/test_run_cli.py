@@ -1940,6 +1940,10 @@ def test_publication_rechecks_lineage_after_rendering_without_holding_the_lock(
     assert third.run.previous_run_id == first.run.id
     assert second.run.previous_run_id == third.run.id
     assert load_results(tmp_path / "latest/results.json").run.previous_run_id == third.run.id
+    assert (
+        json.loads((tmp_path / "latest/summary.json").read_text())["changes"]["previous_run_id"]
+        == third.run.id
+    )
     original = (tmp_path / third.run.id / "results.json").read_bytes()
     _write_run_artifacts(third, tmp_path)
     assert (tmp_path / third.run.id / "results.json").read_bytes() == original

@@ -17,7 +17,12 @@ from graphcheck.contracts.results import (
 )
 from graphcheck.project import write_default_project
 from graphcheck.reporting.changes import compare_evidence, load_changes
-from graphcheck.reporting.history import ReportRun, report_summary_json
+from graphcheck.reporting.history import (
+    ReportRun,
+    prune_report_runs,
+    report_changes_summary,
+    report_summary_json,
+)
 from graphcheck.reporting.redaction import redact_results
 from graphcheck.reporting.writer import load_results, results_json
 
@@ -44,6 +49,10 @@ def _check(check_id, verdict="pass", elements=(), *, cap=100, total=None):
             "total_count": total if total is not None else max(1, len(elements)),
             "truncated": total is not None and total > len(elements),
         }
+    if verdict == "errored":
+        check.update(
+            measured=None, error={"code": "query.failed", "message": "failed", "fix": "retry"}
+        )
     return CheckResult.model_validate(check)
 
 
@@ -232,6 +241,158 @@ def test_publication_chain_and_compact_summary_are_consistent(project):
     for name in ("results.json", "summary.json", "report.html"):
         assert (runs / "latest" / name).read_bytes() == (runs / second.run.id / name).read_bytes()
     assert load_changes(runs).first.id == first.run.id
+
+
+@pytest.fixture
+def summary_pair(tmp_path):
+    first = _run(
+        tmp_path / "inputs",
+        "before",
+        1,
+        [
+            _check("orphan"),
+            _check("fixed", "fail"),
+            _check("existing", "fail"),
+            _check("removed", "fail"),
+        ],
+    ).results
+    second = _run(
+        tmp_path / "inputs",
+        "after",
+        2,
+        [
+            _check("orphan", "fail"),
+            _check("fixed"),
+            _check("existing", "fail"),
+            _check("added", "fail"),
+        ],
+    ).results
+    second.run.target.nodes += 1
+    second.run.target.relationships -= 2
+    return first, second
+
+
+def test_published_summary_joins_new_fixed_and_count_deltas_without_profiles(
+    tmp_path, summary_pair
+):
+    first, second = summary_pair
+    runs = tmp_path / "runs"
+    write_run_artifacts(first, runs)
+    assert "changes" not in json.loads((runs / "latest/summary.json").read_text())
+    write_run_artifacts(second, runs)
+    payload = json.loads((runs / "latest/summary.json").read_text())
+    assert payload["schema_version"] == "2.0"
+    assert payload["changes"] == {
+        "previous_run_id": first.run.id,
+        "new_failures": [
+            {"suite_id": "customer-360", "check_id": "added", "before": None, "after": "fail"},
+            {"suite_id": "customer-360", "check_id": "orphan", "before": "pass", "after": "fail"},
+        ],
+        "fixed_checks": [
+            {"suite_id": "customer-360", "check_id": "fixed", "before": "fail", "after": "pass"},
+        ],
+        "count_deltas": {
+            "nodes": {"before": 1250, "after": 1251, "delta": 1},
+            "relationships": {"before": 3480, "after": 3478, "delta": -2},
+        },
+        "dropped": {"new_failures": 0, "fixed_checks": 0},
+    }
+    original = (runs / "latest/summary.json").read_bytes()
+    assert (runs / second.run.id / "summary.json").read_bytes() == original
+    prune_report_runs(runs, 1)
+    assert not (runs / first.run.id).exists()
+    write_run_artifacts(second, runs)
+    assert (runs / "latest/summary.json").read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "old,new,group",
+    [
+        ("pass", "fail", "new_failures"),
+        ("warn", "fail", "new_failures"),
+        ("pass", "errored", "new_failures"),
+        ("fail", "errored", None),
+        ("errored", "fail", None),
+        ("fail", "pass", "fixed_checks"),
+        ("warn", "pass", "fixed_checks"),
+        ("errored", "pass", "fixed_checks"),
+        ("pass", "warn", None),
+        ("fail", "fail", None),
+    ],
+)
+def test_summary_changes_classifies_only_new_failures_and_actual_fixes(tmp_path, old, new, group):
+    first = _run(tmp_path, "before", 1, [_check("check", old)]).results
+    second = _run(tmp_path, "after", 2, [_check("check", new)], previous=first.run.id).results
+    summary = report_changes_summary(first, second)
+    assert [key for key in ("new_failures", "fixed_checks") if summary[key]] == (
+        [group] if group else []
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ["redacted-before", "redacted-after", "other-database", "no-latest", "corrupt-latest"]
+)
+def test_summary_changes_omits_unavailable_or_incomparable_previous_run(
+    tmp_path, summary_pair, mode
+):
+    first, second = summary_pair
+    runs = tmp_path / "runs"
+    if mode == "redacted-before":
+        first = redact_results(first)
+    if mode == "redacted-after":
+        second = redact_results(second)
+    if mode == "other-database":
+        second.run.target.database = "different"
+    if mode != "no-latest":
+        write_run_artifacts(first, runs)
+    if mode == "corrupt-latest":
+        (runs / "latest/results.json").write_text("{", encoding="utf-8")
+    write_run_artifacts(second, runs)
+    assert "changes" not in json.loads((runs / "latest/summary.json").read_text())
+
+
+def test_summary_changes_keeps_zero_counts_and_omits_unknown_counts(tmp_path, summary_pair):
+    first, second = summary_pair
+    first.run.target.nodes = second.run.target.nodes = 0
+    first.run.target.relationships = None
+    second.run.previous_run_id = first.run.id
+    assert report_changes_summary(first, second)["count_deltas"] == {
+        "nodes": {"before": 0, "after": 0, "delta": 0},
+    }
+
+
+def test_summary_changes_are_bounded_sorted_and_deterministic(tmp_path):
+    first = _run(
+        tmp_path, "before", 1, [_check(f"fixed-{i:03}", "fail") for i in range(50)]
+    ).results
+    second = _run(
+        tmp_path,
+        "after",
+        2,
+        [
+            *[_check(f"fixed-{i:03}") for i in reversed(range(50))],
+            *[_check(f"new-{i:03}", "fail") for i in reversed(range(50))],
+        ],
+        previous=first.run.id,
+    ).results
+    changes = report_changes_summary(first, second)
+    assert len(changes["new_failures"]) == len(changes["fixed_checks"]) == 20
+    assert changes["new_failures"][0]["check_id"] == "new-000"
+    assert changes["dropped"] == {"new_failures": 30, "fixed_checks": 30}
+    encoded = report_summary_json(second, changes=changes)
+    assert len(encoded.encode("utf-8")) < 10_000
+    second.checks.reverse()
+    assert report_summary_json(second, changes=report_changes_summary(first, second)) == encoded
+
+
+def test_summary_retry_preserves_absent_block_in_older_artifact(tmp_path, summary_pair):
+    first, second = summary_pair
+    write_run_artifacts(first, tmp_path / "runs")
+    write_run_artifacts(second, tmp_path / "runs")
+    original = report_summary_json(second).encode("utf-8")
+    (tmp_path / "runs" / second.run.id / "summary.json").write_bytes(original)
+    write_run_artifacts(second, tmp_path / "runs")
+    assert (tmp_path / "runs/latest/summary.json").read_bytes() == original
 
 
 @pytest.mark.parametrize("reference", ["../outside.json", "missing.json", "invalid.json"])

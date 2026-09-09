@@ -455,6 +455,9 @@ def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile
         assert _cli(tmp_path, "profile", "--json", timeout=240).returncode == 0
         assert _cli(tmp_path, "run").returncode == 1
         before = _run_payload(tmp_path)
+        assert "changes" not in json.loads(
+            (tmp_path / ".graphcheck/runs/latest/summary.json").read_text()
+        )
         assert before["run"]["run_status"] == "complete", before
         assert {check["id"]: check["verdict"] for check in before["checks"]} == {
             "account-no-orphans": "pass",
@@ -477,6 +480,16 @@ def test_fraud_ring_changes_join_new_fixed_count_and_orphan_deltas(neo4j_profile
         }, after["checks"]
         assert after["run"]["previous_run_id"] == before["run"]["id"]
         assert after["run"]["baseline_ref"] != before["run"]["baseline_ref"]
+        summary = json.loads((tmp_path / ".graphcheck/runs/latest/summary.json").read_text())[
+            "changes"
+        ]
+        assert summary["previous_run_id"] == before["run"]["id"]
+        assert {item["check_id"] for item in summary["new_failures"]} == {
+            "account-no-orphans",
+            "account-owner-cardinality",
+        }
+        assert [item["check_id"] for item in summary["fixed_checks"]] == ["customer-tax-id-fixed"]
+        assert summary["count_deltas"]["nodes"]["delta"] == 1
         text = _cli(tmp_path, "changes")
         first, second = _cli(tmp_path, "changes", "--json"), _cli(tmp_path, "changes", "--json")
         assert text.returncode == first.returncode == second.returncode == 1

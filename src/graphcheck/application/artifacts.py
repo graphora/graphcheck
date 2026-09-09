@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 import time
@@ -40,6 +41,7 @@ def render_run_artifacts(
     results: Results,
     *,
     render_observer: RenderObserver | None = None,
+    changes: dict[str, object] | None = None,
 ) -> RenderedArtifacts:
     """Render the results.json, report.html, and summary.json bytes exactly once.
 
@@ -62,7 +64,7 @@ def render_run_artifacts(
     if render_observer is not None:
         render_observer(max(0, round((time.monotonic() - render_started) * 1000)), True)
 
-    rendered_summary = report_summary_json(model)
+    rendered_summary = report_summary_json(model, changes=changes)
     return (
         rendered_json.encode("utf-8"),
         rendered_html.encode("utf-8"),
@@ -99,7 +101,8 @@ def write_run_artifacts(
     while True:
         with latest_publication_lock(runs_dir):
             results.run.previous_run_id = _previous_run_id(results, runs_dir)
-        artifacts = render_run_artifacts(results, render_observer=render_observer)
+            changes = _run_changes(results, runs_dir)
+        artifacts = render_run_artifacts(results, render_observer=render_observer, changes=changes)
         with latest_publication_lock(runs_dir):
             # Another publisher may have finished during rendering; bind to its run before
             # publishing. Existing history keeps its original link for idempotent retries.
@@ -125,6 +128,42 @@ def _previous_run_id(results: Results, runs_dir: Path) -> str | None:
     except (OSError, ValueError):
         return None  # A missing/corrupt latest alias must not prevent publishing a healthy run.
     return previous.previous_run_id if previous.id == results.run.id else previous.id
+
+
+def _run_changes(results: Results, runs_dir: Path) -> dict[str, object] | None:
+    """Bind the optional summary to the same predecessor under the publication lock."""
+    from graphcheck.reporting.history import (
+        _safe_artifact_file,
+        _safe_report_directory,
+        report_changes_summary,
+    )
+    from graphcheck.reporting.writer import load_results
+
+    previous_id = results.run.previous_run_id
+    if results.run.redaction.applied or previous_id is None:
+        return None
+    existing = runs_dir / results.run.id
+    if existing.is_dir():
+        # Keep retries byte-identical even if the predecessor has since been pruned.
+        try:
+            saved = json.loads((existing / "summary.json").read_text(encoding="utf-8"))
+            changes = saved.get("changes") if isinstance(saved, dict) else None
+            return changes if isinstance(changes, dict) else None
+        except (OSError, ValueError):
+            return None
+    for directory in (runs_dir / previous_id, runs_dir / "latest"):
+        path = directory / "results.json"
+        if not _safe_report_directory(runs_dir.resolve(), directory) or not _safe_artifact_file(
+            directory, path
+        ):
+            continue
+        try:
+            previous = load_results(path)
+        except (OSError, ValueError):
+            continue
+        if previous.run.id == previous_id:
+            return report_changes_summary(previous, results)
+    return None
 
 
 def publish_run_directory(artifacts: RenderedArtifacts, directory: Path) -> None:

@@ -22,6 +22,7 @@ from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.writer import load_results
 
 SUMMARY_FILENAME = "summary.json"
+SUMMARY_CHANGES_LIMIT = 20
 
 
 class ReportHistoryError(ValueError):
@@ -226,8 +227,12 @@ class ReportComparison:
 
 def compare_reports(first: ReportRun, second: ReportRun) -> ReportComparison:
     """Compare outcomes once for both the report and changes commands."""
-    first_checks = {_identity(check): check for check in first.results.checks}
-    second_checks = {_identity(check): check for check in second.results.checks}
+    return _compare_results(first.results, second.results)
+
+
+def _compare_results(first: Results, second: Results) -> ReportComparison:
+    first_checks = {_identity(check): check for check in first.checks}
+    second_checks = {_identity(check): check for check in second.checks}
     shared = sorted(first_checks.keys() & second_checks.keys())
 
     regressions: list[CheckDelta] = []
@@ -261,16 +266,16 @@ def compare_reports(first: ReportRun, second: ReportRun) -> ReportComparison:
         for identity in sorted(first_checks.keys() - second_checks.keys())
     ]
 
-    before_scores = {suite.id: suite.score for suite in first.results.suites}
-    after_scores = {suite.id: suite.score for suite in second.results.suites}
+    before_scores = {suite.id: suite.score for suite in first.suites}
+    after_scores = {suite.id: suite.score for suite in second.suites}
     return ReportComparison(
         regressions,
         improvements,
         other_changes,
         added,
         removed,
-        calculate_coverage_status(first.results).value,
-        calculate_coverage_status(second.results).value,
+        calculate_coverage_status(first).value,
+        calculate_coverage_status(second).value,
         [
             {"suite_id": key, "before": before_scores.get(key), "after": after_scores.get(key)}
             for key in sorted(before_scores.keys() | after_scores.keys())
@@ -522,7 +527,67 @@ def report_summary(results: Results) -> ReportSummary:
     )
 
 
-def report_summary_json(results: Results) -> str:
+def report_changes_summary(first: Results, second: Results) -> dict[str, object] | None:
+    """Summarize outcome changes and live run counts without retaining evidence or profiles."""
+    before, after = first.run.target, second.run.target
+    if (
+        first.run.redaction.applied
+        or second.run.redaction.applied
+        or first.run.id != second.run.previous_run_id
+        or first.run.id == second.run.id
+        or (before is not None and after is not None and before.database != after.database)
+    ):
+        return None
+    comparison = _compare_results(first, second)
+    changes = sorted(
+        [
+            *comparison.regressions,
+            *comparison.improvements,
+            *comparison.other_changes,
+            *comparison.added,
+        ],
+        key=lambda change: (change.suite_id, change.check_id),
+    )
+    groups = {
+        "new_failures": [
+            change
+            for change in changes
+            if change.after in {"fail", "errored"} and change.before not in {"fail", "errored"}
+        ],
+        "fixed_checks": [
+            change
+            for change in changes
+            if change.before in {"fail", "warn", "errored"} and change.after == "pass"
+        ],
+    }
+    counts = {}
+    if before is not None and after is not None:
+        for field in ("nodes", "relationships"):
+            old, new = getattr(before, field), getattr(after, field)
+            if old is not None and new is not None:
+                counts[field] = {"before": old, "after": new, "delta": new - old}
+    return {
+        "previous_run_id": first.run.id,
+        **{
+            key: [
+                {
+                    "suite_id": change.suite_id,
+                    "check_id": change.check_id,
+                    "before": change.before,
+                    "after": change.after,
+                }
+                for change in values[:SUMMARY_CHANGES_LIMIT]
+            ]
+            for key, values in groups.items()
+        },
+        "count_deltas": counts,
+        "dropped": {
+            key: max(0, len(values) - SUMMARY_CHANGES_LIMIT) for key, values in groups.items()
+        },
+    }
+
+
+def report_summary_json(results: Results, *, changes: dict[str, object] | None = None) -> str:
     summary = report_summary(results)
     return (
         json.dumps(
@@ -535,6 +600,7 @@ def report_summary_json(results: Results) -> str:
                 "suite_scores": [
                     {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
                 ],
+                **({"changes": changes} if changes is not None else {}),
             },
             indent=2,
             sort_keys=True,

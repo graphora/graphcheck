@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- After a comparable previous run, `summary.json` includes a compact `changes` block with new
+  failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
+  at most 20 entries each and report omitted counts; first runs and unavailable comparisons
+  omit the block. Artifact retries preserve the original block after history is pruned.
 - Runs now include `previous_run_id`, `baseline_ref`, and `config_hash` in results schema 2.0,
   with compatibility for older artifacts and a new lineage fixture. Profile references identify
   the latest existing timestamped snapshot; running checks does not trigger profiling. History
