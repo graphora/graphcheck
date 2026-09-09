@@ -40,6 +40,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,
+  so the changes acceptance test can load its Cypher parser and seed data.
 - Drift checks retain partial run status when using present measurements from incomplete
   baselines, without changing their measured verdict or exit-code precedence.
 - Connection and credential preflight now share the run deadline with check execution.
