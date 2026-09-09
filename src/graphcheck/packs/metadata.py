@@ -315,15 +315,59 @@ class PiiPackMetadata(_StrictMetadata):
     value_match: PiiValueMatchMetadata
 
 
+class GraphRAGProvenanceMetadata(_CoreCheckMetadataBase):
+    template: Literal[
+        "orphan_chunks", "entity_without_provenance", "dangling_extraction_relationships"
+    ]
+    sampled: Literal[False]
+
+
+class GraphRAGDuplicateMetadata(_CoreCheckMetadataBase):
+    template: Literal["near_duplicate_entities"]
+    sampled: StrictTrueLiteral
+    estimate: EstimateMetadata
+
+
+class GraphRAGChecksMetadata(_StrictMetadata):
+    orphan_chunks: GraphRAGProvenanceMetadata = Field(
+        json_schema_extra={"properties": {"template": {"const": "orphan_chunks"}}}
+    )
+    entity_without_provenance: GraphRAGProvenanceMetadata = Field(
+        json_schema_extra={"properties": {"template": {"const": "entity_without_provenance"}}}
+    )
+    dangling_extraction_relationships: GraphRAGProvenanceMetadata = Field(
+        json_schema_extra={
+            "properties": {"template": {"const": "dangling_extraction_relationships"}}
+        }
+    )
+    near_duplicate_entities: GraphRAGDuplicateMetadata
+
+    @model_validator(mode="after")
+    def templates_match_names(self) -> GraphRAGChecksMetadata:
+        if any(name != metadata.template for name, metadata in self.items()):
+            raise ValueError("GraphRAG templates must match check names")
+        return self
+
+    def items(self):
+        for name in type(self).model_fields:
+            yield name, getattr(self, name)
+
+
+class GraphRAGPackMetadata(_StrictMetadata):
+    pack: Literal["graphrag"]
+    version: Literal[PACK_VERSION]
+    checks: GraphRAGChecksMetadata
+
+
 type PackMetadata = Annotated[
-    CorePackMetadata | PiiPackMetadata,
+    CorePackMetadata | PiiPackMetadata | GraphRAGPackMetadata,
     Field(discriminator="pack"),
 ]
 
 _PACK_METADATA_ADAPTER = TypeAdapter(PackMetadata)
 
 
-def load_pack_metadata_yaml(text: str) -> CorePackMetadata | PiiPackMetadata:
+def load_pack_metadata_yaml(text: str) -> CorePackMetadata | PiiPackMetadata | GraphRAGPackMetadata:
     """Parse and type-check pack YAML without silently overwriting duplicate keys."""
     raw = load_yaml_mapping(text, description="pack metadata")
     return _PACK_METADATA_ADAPTER.validate_python(raw)

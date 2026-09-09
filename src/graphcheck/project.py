@@ -16,6 +16,7 @@ from pydantic import (
 
 from graphcheck.errors import GraphCheckError
 from graphcheck.generation.config import GenerateConfig
+from graphcheck.packs.graphrag import GraphRAGModel, NearDuplicateOptions
 from graphcheck.yaml_loader import load_yaml_mapping
 
 PROJECT_FILE = "graphcheck.yml"
@@ -30,6 +31,20 @@ class ProjectEngineConfig(BaseModel):
     result_row_limit: Annotated[StrictInt, Field(gt=0)] = 100_000
 
 
+class GraphRAGPackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = True
+    model: GraphRAGModel | None = None
+    near_duplicate_entities: NearDuplicateOptions = Field(default_factory=NearDuplicateOptions)
+
+
+class ProjectPacksConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    graphrag: GraphRAGPackConfig | None = None
+
+
 class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -39,6 +54,7 @@ class ProjectConfig(BaseModel):
     concurrency: PositiveInt = 2
     engine: ProjectEngineConfig = Field(default_factory=ProjectEngineConfig)
     generate: GenerateConfig | None = None
+    packs: ProjectPacksConfig | None = None
 
     @field_validator("concurrency", mode="before")
     @classmethod
@@ -89,8 +105,21 @@ def load_project_config(root: Path) -> ProjectConfig:
         ) from exc if isinstance(exc, ValidationError) else None
 
 
-def write_default_project(root: Path) -> None:
+def write_default_project(root: Path, *, graphrag: bool = False) -> None:
     config = default_project_config()
+    if graphrag:
+        config.packs = ProjectPacksConfig(
+            graphrag=GraphRAGPackConfig(
+                model=GraphRAGModel(
+                    document_label="Document",
+                    chunk_label="Chunk",
+                    entity_label="__Entity__",
+                    document_chunk_rel="PART_OF",
+                    chunk_entity_rel="HAS_ENTITY",
+                    embedding_property="embedding",
+                )
+            )
+        )
     (root / PROJECT_FILE).write_text(
         yaml.safe_dump(config.model_dump(exclude_none=True), sort_keys=False),
         encoding="utf-8",

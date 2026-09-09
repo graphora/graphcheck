@@ -378,7 +378,11 @@ def telemetry_reset_id() -> None:
 
 @app.command()
 @_telemetry_command(CommandName.INIT)
-def init() -> None:
+def init(
+    pack: Annotated[
+        list[str] | None, typer.Option("--pack", help="Enable an optional pack (graphrag).")
+    ] = None,
+) -> None:
     """Scaffold a new GraphCheck project in the current directory."""
     from graphcheck.connection_profiles import write_default_profiles
     from graphcheck.errors import GraphCheckError
@@ -390,7 +394,9 @@ def init() -> None:
     )
 
     root = Path.cwd()
-    write_default_project(root)
+    if set(pack or []) - {"graphrag"}:
+        raise typer.BadParameter("Supported optional pack: graphrag", param_hint="--pack")
+    write_default_project(root, graphrag="graphrag" in (pack or []))
     write_default_profiles(root)
     ensure_gitignore_entries(root)
     write_example_suite(root)
@@ -399,6 +405,11 @@ def init() -> None:
     typer.secho("Wrote profiles.yml", fg=typer.colors.GREEN)
     typer.secho("Profile setup help is included in profiles.yml", fg=typer.colors.CYAN)
     typer.secho("Wrote checks/example.yml with 2 sample checks", fg=typer.colors.GREEN)
+    if "graphrag" in (pack or []):
+        typer.secho(
+            "Enabled 4 GraphRAG checks; configure packs.graphrag.model in graphcheck.yml.",
+            fg=typer.colors.GREEN,
+        )
 
     profiles = load_profiles(root)
     profile_name, profile = select_profile(profiles)

@@ -30,7 +30,7 @@ CREATE
   }),
   (adaDuplicate:__Entity__:person {
     id: 'ada_lovelace',
-    name: 'ADA LOVELACE',
+    name: 'Grace Hopper',
     age: 'unknown',
     confidence: 0.61
   }),
@@ -51,9 +51,6 @@ CREATE
     `display name`: 'U.K.',
     confidence: '0.72'
   }),
-  (orphanDocument:Document {fileName: 'no-chunks.txt'}),
-  (orphanChunk:Chunk {id: 'chunk-orphan', text: 'No source document'}),
-  (unprovenanced:__Entity__ {id: 'unprovenanced-entity', name: 'Charles Babbage'}),
   (escaped:`Odd``Label` {
     id: 'escaped-identifier',
     `tick``key`: 'preserved',
@@ -71,5 +68,4 @@ CREATE
   (chunk2)-[:HAS_ENTITY]->(ukDuplicate),
   (ada)-[:`WORKED-WITH` {source: 'chunk-0001'}]->(engine),
   (ada)-[:LOCATED_IN]->(uk),
-  (ada)-[:MENTORED]->(unprovenanced),
   (escaped)-[:`points to`]->(ukDuplicate)

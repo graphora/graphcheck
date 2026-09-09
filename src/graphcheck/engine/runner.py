@@ -56,6 +56,7 @@ from graphcheck.engine.sampling import SamplingPolicy
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.packs import PACK_VERSION
 from graphcheck.packs.catalog import builtin_pack_catalog
+from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
 from graphcheck.scoring import calculate_score, calculate_suite_scores
 from graphcheck.telemetry.events import (
     CheckProcessed,
@@ -795,8 +796,18 @@ class Engine:
         graph_empty = (
             getattr(target, "nodes", None) == 0 and getattr(target, "relationships", None) == 0
         )
-        allow_missing_schema = graph_empty and isinstance(check.spec, ConformanceCheck)
+        is_graphrag = (
+            isinstance(check.spec, ConformanceCheck) and check.spec.check in GRAPHRAG_CHECK_NAMES
+        )
+        allow_missing_schema = (graph_empty or is_graphrag) and isinstance(
+            check.spec, ConformanceCheck
+        )
         try:
+            if is_graphrag and (reason := self._graphrag_absence(check, deadline)):
+                result = _skipped_result(
+                    check, suite_id, SkipReason.MODEL_ABSENT, explanation=reason
+                )
+                return result, None, timings
             self._telemetry_stage = EngineStage.COMPILE
             stage_started = self._timing_start()
             sample_seed = self.config.sampling.check_seed(
@@ -1139,6 +1150,41 @@ class Engine:
             sampling_population_ms,
         )
 
+    def _graphrag_absence(self, check, deadline: float) -> str | None:
+        from graphcheck.engine.graphrag_pack import configured_model, model_presence_query
+
+        model = configured_model(check.spec.with_)
+        if model is None:
+            return (
+                "GraphRAG model is not configured; set packs.graphrag.model in graphcheck.yml "
+                "or the check's with fields."
+            )
+        query, params = model_presence_query(model)
+        result = self._execute_query_with_event(
+            query,
+            params,
+            role=QueryRole.TARGET_PROBE,
+            timeout_s=_remaining(deadline, self._monotonic()),
+            allow_missing_schema=True,
+        )
+        if (
+            len(result.rows) != 1
+            or not isinstance(result.rows[0].get("missing_labels"), list)
+            or any(label not in params["labels"] for label in result.rows[0]["missing_labels"])
+        ):
+            raise GraphCheckError(
+                "engine.invalid_query_result",
+                "GraphRAG model preflight returned invalid label populations.",
+                "Fix the connector's model preflight result.",
+            )
+        missing = result.rows[0]["missing_labels"]
+        return (
+            "GraphRAG model is absent: no nodes with configured label(s) "
+            f"{', '.join(map(repr, missing))}."
+            if missing
+            else None
+        )
+
     def _reset_telemetry_state(self) -> None:
         self._telemetry = None
         self._telemetry_started_perf = None
@@ -1324,7 +1370,7 @@ class Engine:
             read_guard_cache_hit=execution.read_guard_cache_hit,
             notification_count=execution.notification_count,
         )
-        active_check = self._active_check_context.get()
+        active_check = None if role is QueryRole.TARGET_PROBE else self._active_check_context.get()
         if active_check is not None and execution.read_guard_ms is not None:
             with self._telemetry_state_lock:
                 self._telemetry_read_guard_ms_by_check.setdefault(active_check[0], []).append(
@@ -1389,7 +1435,11 @@ class Engine:
         read_guard_durations = self._telemetry_read_guard_ms_by_check.get(check_sequence, [])
         if result.verdict is Verdict.SKIPPED:
             processing_outcome = ProcessingOutcome.SKIPPED
-            skip_reason = TelemetrySkipReason(result.skip_reason.value)
+            skip_reason = (
+                TelemetrySkipReason.UNSUPPORTED
+                if result.skip_reason is SkipReason.MODEL_ABSENT
+                else TelemetrySkipReason(result.skip_reason.value)
+            )
             error_code = None
             duration_ms = None
         elif result.verdict is Verdict.ERRORED:
@@ -1472,7 +1522,8 @@ class Engine:
             engine_errors = sum(check.verdict is Verdict.ERRORED for check in results.checks)
             generated = sum(check.skip_reason is SkipReason.GENERATED for check in results.checks)
             unsupported = sum(
-                check.skip_reason is SkipReason.UNSUPPORTED for check in results.checks
+                check.skip_reason in {SkipReason.UNSUPPORTED, SkipReason.MODEL_ABSENT}
+                for check in results.checks
             )
             not_run = sum(check.skip_reason is SkipReason.NOT_RUN for check in results.checks)
         run_error_code = (
@@ -1800,7 +1851,9 @@ def _telemetry_outcome(exc: Exception, raw_code: str | None) -> EventOutcome:
     return EventOutcome.ERROR
 
 
-def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
+def _skipped_result(
+    check, suite_id: str, reason: SkipReason, *, explanation: str | None = None
+) -> CheckResult:
     return CheckResult(
         id=check.id,
         suite_id=suite_id,
@@ -1815,7 +1868,10 @@ def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
         compiled_query=None,
         params=None,
         measured=None,
-        expected=expected_for(check),
+        expected={
+            **expected_for(check),
+            **({"not_evaluated_reason": explanation} if explanation else {}),
+        },
         estimate=False,
         evidence=None,
         error=None,
