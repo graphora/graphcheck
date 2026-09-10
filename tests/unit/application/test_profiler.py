@@ -177,6 +177,12 @@ class FakeNeo4jClient:
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": 1 if params == {"property": "id"} else "Ada"}]
+        if query.startswith("MATCH (n:") and "OPTIONAL MATCH" in query:
+            return [{"relType": None, "degree": 0, "nodes_at_degree": 1}]
+        if query.startswith("MATCH (n:") and "nodes_at_degree" in query:
+            return [{"degree": 1, "nodes_at_degree": 1}]
+        if query.startswith("MATCH (n)") and "nodes_at_degree" in query:
+            return [{"degree": 1, "nodes_at_degree": 1}]
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -595,7 +601,7 @@ def test_profile_batches_inventory_and_reuses_it_for_coverage() -> None:
     baseline = profile(cast(Neo4jClient, client))
 
     assert baseline.status is ProfileStatus.COMPLETE
-    assert len(client.calls) == 8
+    assert len(client.calls) == 24  # 8 pre-existing + 16 from degree_distribution collection
     assert sum(query.startswith("CALL {\n  MATCH (n:") for query, _ in client.calls) == 2
     assert sum(query.startswith("CALL {\n  MATCH ()-[r:") for query, _ in client.calls) == 2
     assert not any("WHERE n[$property]" in query for query, _ in client.calls)
