@@ -15,6 +15,7 @@ from graphcheck.contracts.schemas import (
     validate_pack_metadata_schema,
 )
 from graphcheck.packs import PACK_REQUIREMENTS, REGISTRY
+from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
 from graphcheck.packs.metadata import (
     CORE_CHECK_NAMES,
     CorePackMetadata,
@@ -384,7 +385,7 @@ def test_pack_metadata_schema_uses_standard_draft_without_custom_validation_keyw
 
 def test_all_core_conformance_checks_are_registered():
     assert set(CORE_CHECKS) == set(CORE_CHECK_NAMES)
-    assert set(REGISTRY) == set(CORE_CHECKS) | set(PII_CHECKS)
+    assert set(REGISTRY) == set(CORE_CHECKS) | set(PII_CHECKS) | set(GRAPHRAG_CHECK_NAMES)
 
 
 def test_core_check_with_models_accept_representative_configs():

@@ -58,6 +58,7 @@ class CardinalityWith(_WithBase):
 class NoOrphansWith(_WithBase):
     label: Identifier
     rel_type: Identifier | None = None
+    to_label: Identifier | None = None
     direction: Literal["out", "in", "any"] = "any"
 
 
@@ -211,3 +212,7 @@ class PiiValueMatchWith(_PiiWithBase):
         if value is not None and len(value) != len(set(value)):
             raise ValueError("PII properties must not contain duplicate entries")
         return value
+
+
+# Keep the registry model-only; this import registers the optional GraphRAG payloads.
+from graphcheck.packs import graphrag as graphrag  # noqa: E402

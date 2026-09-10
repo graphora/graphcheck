@@ -630,7 +630,8 @@
       "enum": [
         "generated",
         "unsupported",
-        "not_run"
+        "not_run",
+        "model_absent"
       ],
       "title": "SkipReason",
       "type": "string"

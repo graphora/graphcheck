@@ -1,0 +1,41 @@
+pack: graphrag
+version: 0.1.0
+checks:
+  orphan_chunks:
+    catches: Chunks with no configured document link and documents with no configured chunk link.
+    does_not_catch: Multiple parent documents, source correctness, or alternate relationship types and paths.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: orphan_chunks
+  entity_without_provenance:
+    catches: Entities with no direct chunk link of the configured type and direction.
+    does_not_catch: Whether the chunk has a document, supports the entity, or whether alternate paths exist.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: entity_without_provenance
+  dangling_extraction_relationships:
+    catches: Configured entity-to-entity relationships with either endpoint lacking a direct chunk provenance link.
+    does_not_catch: Store corruption, factual correctness, or whether both endpoints share a source chunk.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [rel, node]
+      id_fields: [rel_id, source_id, target_id]
+    template: dangling_extraction_relationships
+  near_duplicate_entities:
+    catches: Sampled entity names with equal normalized keys or character-bigram Dice similarity above the threshold.
+    does_not_catch: Unsampled pairs, aliases with dissimilar spelling, semantic identity, non-string names, or names longer than 256 characters.
+    requires: [read]
+    sampled: true
+    estimate:
+      required_when_sampled: true
+    evidence:
+      elements: [node]
+      id_fields: [node_ids]
+    template: near_duplicate_entities

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -164,6 +165,14 @@ class VerdictEvaluator:
 
         if spec.check in {"pii_name_match", "pii_value_match"}:
             return self._pii(compiled, row, spec.check)
+        if spec.check == "near_duplicate_entities":
+            return self._near_duplicate_entities(compiled, row)
+        if spec.check in {
+            "orphan_chunks",
+            "entity_without_provenance",
+            "dangling_extraction_relationships",
+        }:
+            return self._graphrag_provenance(compiled, row)
 
         if spec.check == "completeness":
             coverage = _number(row, "coverage", compiled)
@@ -221,6 +230,113 @@ class VerdictEvaluator:
             compiled,
             explicit=row.get("evidence", []),
             total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence, estimate=estimate)
+
+    def _graphrag_provenance(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        violations, population = (
+            _integer(row, "violation_count", compiled),
+            _integer(row, "population", compiled),
+        )
+        if violations > population:
+            raise _bad_result(compiled, "violation count exceeds population")
+        measured = {"violations": violations, "population": population}
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records or len(records) > compiled.evidence_cap:
+            raise _bad_result(compiled, "provenance evidence must contain bounded findings")
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("missing_path"), str):
+                raise _bad_result(compiled, "provenance finding omitted its missing path")
+            if any(
+                not isinstance(record.get(field), str) or not record[field]
+                for field in compiled.evidence_id_fields
+            ):
+                raise _bad_result(compiled, "provenance finding omitted an element id")
+        findings = [
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"pointer", "source", "target"}
+            }
+            for record in records
+        ]
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} violation(s). Missing paths: "
+            f"{json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _near_duplicate_entities(
+        self, compiled: CompiledCheck, row: Mapping[str, Any]
+    ) -> Evaluation:
+        from graphcheck.engine.graphrag_pack import MAX_NAME_LENGTH, duplicate_groups
+
+        population, sample_size = (
+            _integer(row, "population", compiled),
+            _integer(row, "sample_size", compiled),
+        )
+        candidates = row.get("candidates")
+        if (
+            sample_size > population
+            or (population and not sample_size)
+            or sample_size > int(compiled.params["sample_size"])
+        ):
+            raise _bad_result(compiled, "invalid duplicate sample size")
+        if not isinstance(candidates, list) or len(candidates) != sample_size:
+            raise _bad_result(compiled, "duplicate candidate count disagrees with sample size")
+        seen = set()
+        for candidate in candidates:
+            if (
+                not isinstance(candidate, dict)
+                or not isinstance(candidate.get("name"), str)
+                or len(candidate["name"]) > MAX_NAME_LENGTH
+            ):
+                raise _bad_result(compiled, "invalid duplicate name candidate")
+            pointer = _pointer_from_value(candidate.get("pointer"))
+            if (
+                pointer is None
+                or pointer.kind != "node"
+                or candidate.get("node_id") != pointer.id
+                or pointer.id in seen
+            ):
+                raise _bad_result(
+                    compiled, "duplicate candidate has a missing or repeated element id"
+                )
+            seen.add(pointer.id)
+        groups = duplicate_groups(candidates, float(compiled.expected["threshold"]))
+        ids = {node_id for group in groups for node_id in group["node_ids"]}
+        # Pair discovery depends on sampling both endpoints: a binomial Wilson CI is invalid.
+        estimate = (
+            Estimate(sample_size=sample_size, population=population, confidence=0.95, ci=None)
+            if sample_size < population
+            else False
+        )
+        findings = groups[: compiled.evidence_cap]
+        measured = {
+            "population": population,
+            "sample_size": sample_size,
+            "violations": len(ids),
+            "duplicate_groups": len(groups),
+            "findings": findings,
+            "findings_truncated": len(findings) < len(groups),
+            "completeness_notice": "Only pairs within the eligible name sample were compared; "
+            "no population duplicate rate or confidence interval is inferred.",
+        }
+        if not groups:
+            return Evaluation(True, measured, estimate=estimate)
+        pointers = [candidate["pointer"] for candidate in candidates if candidate["node_id"] in ids]
+        evidence = _build_evidence(
+            f"{compiled.name}; sample_size={sample_size}, population={population}. "
+            f"Duplicate groups: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            explicit=pointers,
+            total_count=len(ids),
         )
         return Evaluation(False, measured, evidence=evidence, estimate=estimate)
 

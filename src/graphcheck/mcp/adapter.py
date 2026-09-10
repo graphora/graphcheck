@@ -29,7 +29,7 @@ def list_checks() -> dict[str, list[dict[str, Any]]]:
     checks_dir = project_path(root, config.checks)
 
     suites = []
-    for suite_input in load_suite_inputs(checks_dir, []):
+    for suite_input in load_suite_inputs(checks_dir, [], config.packs):
         suite = suite_input.suite
         suites.append(
             {

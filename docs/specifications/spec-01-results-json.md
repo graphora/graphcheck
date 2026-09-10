@@ -110,7 +110,7 @@ including through MCP, preserves null as `not recorded by that schema version`.
    | --- | --- | --- |
    | 1 | `run.run_status:failed` | **3** |
    | 2 | any `verdict:fail`, or (`errored` and `severity:error`) except an `engine.timeout` on a partial run | **1** |
-   | 3 | `run.run_status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
+   | 3 | `run.run_status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`, except a nonempty selection consisting only of `model_absent` skips); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
    | 4 | otherwise (`complete`, ≥ 1 executed, all `pass`/`skipped`) | **0** |
 
 2. **Evidence is mandatory on `fail` and `warn`.** `compiled_query` is present once compiled, `null` if the check errored before compiling; it keeps `$param` placeholders — literal values live only in `params`.
@@ -148,6 +148,11 @@ node/relationship or property-coverage evidence.
    unique, non-null `run.target.labels` and `run.target.relationship_types`. Nullable inventory
    exists only at a compatibility boundary for pre-1.2 input. An empty array is recorded evidence
    of an empty probed category and is never interchangeable with null.
+10. **GraphRAG model absence (new semantics requiring separate approval):**
+    `skipped:model_absent` carries a nonblank `expected.not_evaluated_reason`. It does not
+    force a partial run. A completed, nonempty selection consisting only of these skips
+    exits 0 with null score and incomplete report coverage; the checks remain explicitly
+    not evaluated. See [GraphRAG semantics](../graphrag.md) for the model-presence gate.
 
 ## Downstream and MCP contract
 

@@ -44,6 +44,7 @@ class SkipReason(StrEnum):
     GENERATED = "generated"
     UNSUPPORTED = "unsupported"
     NOT_RUN = "not_run"
+    MODEL_ABSENT = "model_absent"
 
 
 class RunStatus(StrEnum):
@@ -168,6 +169,10 @@ class CheckResult(_Strict):
         if v is Verdict.SKIPPED:
             if self.skip_reason is None:
                 raise ValueError(f"skipped check {self.id!r} must carry skip_reason")
+            if self.skip_reason is SkipReason.MODEL_ABSENT:
+                reason = self.expected.get("not_evaluated_reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    raise ValueError("model_absent checks must carry expected.not_evaluated_reason")
             for field in ("started_at", "duration_ms", "compiled_query", "params", "measured"):
                 if getattr(self, field) is not None:
                     raise ValueError(f"skipped check {self.id!r} must have null {field}")
@@ -227,7 +232,9 @@ def exit_code(status: RunStatus, checks: list[CheckResult]) -> int:
     )
     if hard:
         return 1
-    nothing_evaluated = not any(c.executed for c in checks)
+    nothing_evaluated = not any(c.executed for c in checks) and not (
+        checks and all(c.skip_reason is SkipReason.MODEL_ABSENT for c in checks)
+    )
     soft = any(
         c.verdict is Verdict.WARN or (c.verdict is Verdict.ERRORED and c.severity is Severity.WARN)
         for c in checks

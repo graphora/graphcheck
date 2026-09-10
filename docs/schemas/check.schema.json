@@ -459,6 +459,154 @@
         {
           "properties": {
             "check": {
+              "const": "dangling_extraction_relationships"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Extraction relationships with an endpoint lacking chunk provenance.",
+              "properties": {
+                "chunk_entity_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Chunk Entity Direction",
+                  "type": "string"
+                },
+                "chunk_entity_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Entity Rel"
+                },
+                "chunk_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Label"
+                },
+                "document_chunk_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Document Chunk Direction",
+                  "type": "string"
+                },
+                "document_chunk_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Chunk Rel"
+                },
+                "document_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Label"
+                },
+                "embedding_property": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Embedding Property"
+                },
+                "entity_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Entity Label"
+                },
+                "extraction_rel_types": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Extraction Rel Types"
+                },
+                "name_property": {
+                  "default": "name",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Name Property",
+                  "type": "string"
+                }
+              },
+              "title": "DanglingExtractionRelationshipsWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
               "const": "dangling_rels"
             },
             "with": {
@@ -480,6 +628,154 @@
                 }
               },
               "title": "DanglingRelsWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "entity_without_provenance"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Entities lacking the configured chunk-to-entity path.",
+              "properties": {
+                "chunk_entity_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Chunk Entity Direction",
+                  "type": "string"
+                },
+                "chunk_entity_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Entity Rel"
+                },
+                "chunk_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Label"
+                },
+                "document_chunk_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Document Chunk Direction",
+                  "type": "string"
+                },
+                "document_chunk_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Chunk Rel"
+                },
+                "document_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Label"
+                },
+                "embedding_property": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Embedding Property"
+                },
+                "entity_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Entity Label"
+                },
+                "extraction_rel_types": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Extraction Rel Types"
+                },
+                "name_property": {
+                  "default": "name",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Name Property",
+                  "type": "string"
+                }
+              },
+              "title": "EntityWithoutProvenanceWith",
               "type": "object"
             }
           },
@@ -595,6 +891,168 @@
         {
           "properties": {
             "check": {
+              "const": "near_duplicate_entities"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Bounded name-based duplicate candidates within one entity label.",
+              "properties": {
+                "chunk_entity_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Chunk Entity Direction",
+                  "type": "string"
+                },
+                "chunk_entity_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Entity Rel"
+                },
+                "chunk_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Label"
+                },
+                "document_chunk_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Document Chunk Direction",
+                  "type": "string"
+                },
+                "document_chunk_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Chunk Rel"
+                },
+                "document_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Label"
+                },
+                "embedding_property": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Embedding Property"
+                },
+                "entity_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Entity Label"
+                },
+                "extraction_rel_types": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Extraction Rel Types"
+                },
+                "name_property": {
+                  "default": "name",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Name Property",
+                  "type": "string"
+                },
+                "sample_size": {
+                  "default": 1000,
+                  "exclusiveMinimum": 0,
+                  "le": 2000,
+                  "title": "Sample Size",
+                  "type": "integer"
+                },
+                "threshold": {
+                  "default": 0.9,
+                  "exclusiveMinimum": 0,
+                  "maximum": 1,
+                  "title": "Threshold",
+                  "type": "number"
+                }
+              },
+              "title": "NearDuplicateEntitiesWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
               "const": "no_orphans"
             },
             "with": {
@@ -629,12 +1087,174 @@
                   ],
                   "default": null,
                   "title": "Rel Type"
+                },
+                "to_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "To Label"
                 }
               },
               "required": [
                 "label"
               ],
               "title": "NoOrphansWith",
+              "type": "object"
+            }
+          },
+          "required": [
+            "check",
+            "with"
+          ]
+        },
+        {
+          "properties": {
+            "check": {
+              "const": "orphan_chunks"
+            },
+            "with": {
+              "additionalProperties": false,
+              "description": "Missing document/chunk links in either population; multiple parents are allowed.",
+              "properties": {
+                "chunk_entity_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Chunk Entity Direction",
+                  "type": "string"
+                },
+                "chunk_entity_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Entity Rel"
+                },
+                "chunk_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Chunk Label"
+                },
+                "document_chunk_direction": {
+                  "default": "out",
+                  "enum": [
+                    "out",
+                    "in",
+                    "any"
+                  ],
+                  "title": "Document Chunk Direction",
+                  "type": "string"
+                },
+                "document_chunk_rel": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Chunk Rel"
+                },
+                "document_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Document Label"
+                },
+                "embedding_property": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Embedding Property"
+                },
+                "entity_label": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Entity Label"
+                },
+                "extraction_rel_types": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "\\S",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Extraction Rel Types"
+                },
+                "name_property": {
+                  "default": "name",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "title": "Name Property",
+                  "type": "string"
+                }
+              },
+              "title": "OrphanChunksWith",
               "type": "object"
             }
           },
