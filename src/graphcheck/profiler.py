@@ -783,6 +783,75 @@ def _percentile_from_histogram(histogram: list[tuple[int, int]], percentile: flo
     return float(sorted(histogram)[-1][0])
 
 
+def _direction_pattern(direction: str, variable: str = "") -> str:
+    if direction == "out":
+        return f"(n)-[{variable}]->()"
+    if direction == "in":
+        return f"(n)<-[{variable}]-()"
+    return f"(n)-[{variable}]-()"
+
+
+def _collect_total_degree_histogram(
+    client: Neo4jClient, label: str, direction: str, deadline: float | None
+) -> list[tuple[int, int]]:
+    label_ref = _cypher_identifier(label)
+    pattern = _direction_pattern(direction)
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})\n"
+        f"WITH n, COUNT {{ {pattern} }} AS degree\n"
+        "WITH degree, count(n) AS nodes_at_degree\n"
+        "RETURN degree, nodes_at_degree ORDER BY degree",
+        deadline=deadline,
+    )
+    return [(int(row["degree"]), int(row["nodes_at_degree"])) for row in rows]
+
+
+def _collect_per_type_degree_histograms(
+    client: Neo4jClient, label: str, direction: str, deadline: float | None
+) -> dict[str, list[tuple[int, int]]]:
+    label_ref = _cypher_identifier(label)
+    pattern = _direction_pattern(direction, "r")
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})\n"
+        f"OPTIONAL MATCH {pattern}\n"
+        "WITH n, type(r) AS relType\n"
+        "WITH n, relType, count(*) AS degree\n"
+        "WITH relType, degree, count(n) AS nodes_at_degree\n"
+        "RETURN relType, degree, nodes_at_degree ORDER BY relType, degree",
+        deadline=deadline,
+    )
+    histograms: dict[str, list[tuple[int, int]]] = {}
+    for row in rows:
+        rel_type = row.get("relType")
+        if rel_type is None:
+            continue
+        histograms.setdefault(str(rel_type), []).append(
+            (int(row["degree"]), int(row["nodes_at_degree"]))
+        )
+    return histograms
+
+
+def _collect_type_only_degree_histogram(
+    client: Neo4jClient, relationship_type: str, direction: str, deadline: float | None
+) -> list[tuple[int, int]]:
+    type_ref = _cypher_identifier(relationship_type)
+    if direction == "out":
+        pattern = f"(n)-[:{type_ref}]->()"
+    else:
+        pattern = f"(n)<-[:{type_ref}]-()"
+    rows = _run_read(
+        client,
+        f"MATCH {pattern}\n"
+        f"WITH DISTINCT n, COUNT {{ {pattern} }} AS degree\n"
+        "WITH degree, count(n) AS nodes_at_degree\n"
+        "RETURN degree, nodes_at_degree ORDER BY degree",
+        deadline=deadline,
+    )
+    return [(int(row["degree"]), int(row["nodes_at_degree"])) for row in rows]
+
+
 def collect_property_coverage(
     client: Neo4jClient,
     *,
