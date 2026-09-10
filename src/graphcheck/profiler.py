@@ -13,6 +13,7 @@ from graphcheck import __version__
 from graphcheck.contracts.profile import (
     BaselineProfile,
     ConstraintProfile,
+    DegreeDistributionCoverage,
     DegreeDistribution,
     GraphSchema,
     IndexProfile,
@@ -850,6 +851,100 @@ def _collect_type_only_degree_histogram(
         deadline=deadline,
     )
     return [(int(row["degree"]), int(row["nodes_at_degree"])) for row in rows]
+
+
+DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP = 200
+
+
+def collect_degree_distribution(
+    client: Neo4jClient,
+    labels: list[LabelProfile],
+    relationship_types: list[RelationshipTypeProfile],
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
+    _pair_cap: int = DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP,
+) -> tuple[list[DegreeDistributionCoverage], str | None]:
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
+    directions = ("both", "in", "out")
+    quantiles: tuple[tuple[str, float | None], ...] = (("p50", 0.5), ("p95", 0.95), ("max", None))
+
+    def _values(histogram: list[tuple[int, int]]) -> dict[str, float]:
+        return {
+            name: (
+                float(max((v for v, _ in histogram), default=0))
+                if percentile is None
+                else _percentile_from_histogram(histogram, percentile)
+            )
+            for name, percentile in quantiles
+        }
+
+    records: list[DegreeDistributionCoverage] = []
+    per_label_type_data: dict[str, dict[str, dict[str, list[tuple[int, int]]]]] = {}
+
+    for label in labels:
+        for direction in directions:
+            total_hist = _collect_total_degree_histogram(client, label.name, direction, deadline)
+            for name, value in _values(total_hist).items():
+                records.append(
+                    DegreeDistributionCoverage(
+                        label=label.name,
+                        type=None,
+                        quantile=name,
+                        direction=direction,
+                        value=value,
+                    )
+                )
+            per_type = _collect_per_type_degree_histograms(client, label.name, direction, deadline)
+            per_label_type_data.setdefault(label.name, {})[direction] = per_type
+
+    edge_counts: list[tuple[str, str, int]] = []
+    for label_name, by_direction in per_label_type_data.items():
+        for rel_type, histogram in by_direction.get("both", {}).items():
+            edge_counts.append((label_name, rel_type, sum(v * c for v, c in histogram)))
+
+    edge_counts.sort(key=lambda item: item[2], reverse=True)
+    kept_pairs = {(label_name, rel_type) for label_name, rel_type, _ in edge_counts[:_pair_cap]}
+    partial_reason_code = "degree_incomplete" if len(edge_counts) > _pair_cap else None
+
+    label_counts = {label.name: label.count for label in labels}
+    for label_name, by_direction in per_label_type_data.items():
+        node_count = label_counts.get(label_name, 0)
+        for direction in directions:
+            for rel_type, histogram in by_direction.get(direction, {}).items():
+                if (label_name, rel_type) not in kept_pairs:
+                    continue
+                seen = sum(c for _, c in histogram)
+                zero_count = max(0, node_count - seen)
+                padded = [*histogram, (0, zero_count)] if zero_count else histogram
+                for name, value in _values(padded).items():
+                    records.append(
+                        DegreeDistributionCoverage(
+                            label=label_name,
+                            type=rel_type,
+                            quantile=name,
+                            direction=direction,
+                            value=value,
+                        )
+                    )
+
+    for relationship_type in relationship_types:
+        for direction in ("out", "in"):
+            histogram = _collect_type_only_degree_histogram(
+                client, relationship_type.name, direction, deadline
+            )
+            for name, value in _values(histogram).items():
+                records.append(
+                    DegreeDistributionCoverage(
+                        label=None,
+                        type=relationship_type.name,
+                        quantile=name,
+                        direction=direction,
+                        value=value,
+                    )
+                )
+
+    return records, partial_reason_code
 
 
 def collect_property_coverage(
