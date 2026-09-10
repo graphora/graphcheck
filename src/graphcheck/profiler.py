@@ -109,6 +109,7 @@ def _profile(
     constraints: list[ConstraintProfile] = []
     indexes: list[IndexProfile] = []
     property_coverage: list[PropertyCoverage] = []
+    degree_distribution: list[DegreeDistributionCoverage] = []
 
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -119,6 +120,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget after probe.",
             partial_reason_code="probe_incomplete",
             deadline=deadline,
@@ -149,6 +151,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting labels: {exc}",
             partial_reason_code=exc.partial_reason_code,
             deadline=deadline,
@@ -163,6 +166,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting labels: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -177,6 +181,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting labels.",
             partial_reason_code="schema_incomplete",
@@ -199,6 +204,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting relationship types: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -213,6 +219,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting relationship types.",
             partial_reason_code="schema_incomplete",
@@ -235,6 +242,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting constraints: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -249,6 +257,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting constraints.",
             partial_reason_code="schema_incomplete",
@@ -271,6 +280,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting indexes: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -285,6 +295,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting indexes.",
             partial_reason_code="schema_incomplete",
@@ -307,6 +318,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting property coverage: {exc}",
             partial_reason_code="property_coverage_incomplete",
             deadline=deadline,
@@ -321,9 +333,65 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting property coverage.",
             partial_reason_code="property_coverage_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+
+    try:
+        degree_distribution, degree_partial_reason_code = _observed_profile_call(
+            telemetry_observer,
+            "degree_distribution",
+            lambda: collect_degree_distribution_targets(
+                client, labels, relationship_types, _deadline=deadline
+            ),
+        )
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            f"Failed collecting degree distribution: {exc}",
+            partial_reason_code="degree_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+    if degree_partial_reason_code is not None:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            "Degree distribution collection was capped for (label, type) pair explosion.",
+            partial_reason_code=degree_partial_reason_code,
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+    if _budget_exceeded(deadline):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting degree distribution.",
+            partial_reason_code="degree_incomplete",
             deadline=deadline,
             telemetry_result_observer=telemetry_result_observer,
         )
@@ -338,6 +406,7 @@ def _profile(
         node_count=counts.nodes,
         relationship_count=counts.relationships,
         property_coverage=property_coverage,
+        degree_distribution=degree_distribution,
     )
     baseline = BaselineProfile(
         schema_version="1.1",
@@ -369,6 +438,7 @@ def _partial_profile(
     constraints: list[ConstraintProfile],
     indexes: list[IndexProfile],
     property_coverage: list[PropertyCoverage],
+    degree_distribution: list[DegreeDistributionCoverage],
     reason: str,
     *,
     partial_reason_code: str,
@@ -394,6 +464,7 @@ def _partial_profile(
         node_count=counts.nodes,
         relationship_count=counts.relationships,
         property_coverage=property_coverage,
+        degree_distribution=degree_distribution,
     )
 
     baseline = BaselineProfile(
@@ -856,7 +927,7 @@ def _collect_type_only_degree_histogram(
 DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP = 200
 
 
-def collect_degree_distribution(
+def collect_degree_distribution_targets(
     client: Neo4jClient,
     labels: list[LabelProfile],
     relationship_types: list[RelationshipTypeProfile],
