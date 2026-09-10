@@ -214,6 +214,53 @@ def test_drift_compiler_rejects_unknown_target_keys_and_metrics():
 
 
 @pytest.mark.parametrize(
+    "target",
+    [
+        {"quantile": "p50", "direction": "both", "bogus": 1},
+        {"quantile": "p50", "direction": "both"},
+        {"label": "Account", "quantile": "bad", "direction": "both"},
+        {"label": "Account", "quantile": "p50", "direction": "sideways"},
+        {"type": "OWNS", "quantile": "p50", "direction": "both"},
+        {"label": "", "quantile": "p50", "direction": "both"},
+        {"type": "   ", "quantile": "p50", "direction": "both"},
+    ],
+)
+def test_degree_distribution_compiler_rejects_invalid_targets(target):
+    with pytest.raises(GraphCheckError) as caught:
+        CypherCompiler().compile(_drift("degree_distribution", target))
+    assert caught.value.error.code == "engine.invalid_target"
+
+
+@pytest.mark.parametrize(
+    ("target", "bindings", "placeholders"),
+    [
+        (
+            {"label": "Account", "quantile": "p50", "direction": "both"},
+            {"required_labels": ["Account"], "required_relationship_types": []},
+            ("(n:`Account`)", "percentileDisc(degree, 0.5)"),
+        ),
+        (
+            {"label": "Account", "type": "OWNS", "quantile": "p95", "direction": "out"},
+            {"required_labels": ["Account"], "required_relationship_types": ["OWNS"]},
+            ("(n:`Account`)", "(n)-[:`OWNS`]->()", "percentileDisc(degree, 0.95)"),
+        ),
+        (
+            {"type": "OWNS", "quantile": "max", "direction": "in"},
+            {"required_labels": [], "required_relationship_types": ["OWNS"]},
+            ("(n)<-[:`OWNS`]-()", "max(degree)"),
+        ),
+    ],
+)
+def test_degree_distribution_compiler_emits_expected_query_fragments(target, bindings, placeholders):
+    compiled = CypherCompiler(evidence_cap=9).compile(_drift("degree_distribution", target))
+    for fragment in placeholders:
+        assert fragment in compiled.query
+    for key, value in bindings.items():
+        assert compiled.params[key] == value
+    assert compiled.params["evidence_cap"] == 9
+
+
+@pytest.mark.parametrize(
     "check",
     [
         _completeness({"label": "Customer", "property": "tax_id", "threshold": 0.9}),
