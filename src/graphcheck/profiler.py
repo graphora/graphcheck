@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -766,6 +767,20 @@ def _coverage(populated_count: int, total_count: int) -> float:
     if total_count == 0:
         return 0.0
     return round((populated_count / total_count) * 100, 2)
+
+
+def _percentile_from_histogram(histogram: list[tuple[int, int]], percentile: float) -> float:
+    """Nearest-rank percentile from a (value, count) histogram, matching Cypher percentileDisc."""
+    total = sum(count for _, count in histogram)
+    if total == 0:
+        return 0.0
+    rank = max(1, min(math.ceil(percentile * total), total))
+    cumulative = 0
+    for value, count in sorted(histogram):
+        cumulative += count
+        if cumulative >= rank:
+            return float(value)
+    return float(sorted(histogram)[-1][0])
 
 
 def collect_property_coverage(
