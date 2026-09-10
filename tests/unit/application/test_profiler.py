@@ -930,3 +930,44 @@ def test_partial_profiles_retain_successful_inventory_and_coverage(stage):
         assert len(baseline.graph_schema.relationship_types) == 2
         assert coverage["OWNS", "role"] == 60
     BaselineProfile.model_validate_json(baseline.model_dump_json(by_alias=True))
+
+
+def test_percentile_from_histogram_matches_known_values():
+    histogram = [
+        (0, 3), (1, 459), (2, 1117), (3, 694), (4, 113), (5, 16),
+        (6, 32), (7, 24), (8, 6), (16, 7), (17, 20), (18, 12), (19, 1),
+    ]
+    assert profiler_module._percentile_from_histogram(histogram, 0.5) == 2.0
+    assert profiler_module._percentile_from_histogram(histogram, 0.95) == 4.0
+
+
+def test_percentile_from_histogram_empty_returns_zero():
+    assert profiler_module._percentile_from_histogram([], 0.5) == 0.0
+
+
+class _CappingFakeClient:
+    def run_read(self, query, params=None, *, timeout_s=None):
+        if "OPTIONAL MATCH" in query:
+            return [
+                {"relType": "TypeA", "degree": 10, "nodes_at_degree": 10},
+                {"relType": "TypeB", "degree": 5, "nodes_at_degree": 10},
+                {"relType": "TypeC", "degree": 1, "nodes_at_degree": 10},
+            ]
+        return [{"degree": 1, "nodes_at_degree": 10}]
+
+
+def test_collect_degree_distribution_targets_caps_label_type_pairs_by_edge_count():
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+
+    records, partial_reason_code = profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, _CappingFakeClient()),
+        labels,
+        [],
+        _pair_cap=2,
+    )
+
+    kept_types = {
+        record.type for record in records if record.label == "Foo" and record.type is not None
+    }
+    assert kept_types == {"TypeA", "TypeB"}
+    assert partial_reason_code == "degree_incomplete"
