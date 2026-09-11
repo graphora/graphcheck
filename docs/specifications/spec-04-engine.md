@@ -359,6 +359,8 @@ The engine compiles these metrics:
 | `node_count` | `{}` for the whole graph or `{label: <label>}` |
 | `relationship_count` | `{}` for the whole graph or `{type: <relationship type>}` |
 | `property_coverage` | Exactly one of `label`/`type`, plus a non-blank `property` |
+| `degree_distribution` | `label`/`type` (may combine), `quantile` (`p50`/`p95`/`max`), `direction` (`in`/`out`/`both`; `both` rejected when only `type` is given) |
+| `schema_inventory` | `{}` only; checks every label and relationship type in the current schema |
 
 Count metrics return a current aggregate and population. Property coverage returns a percentage in
 the closed interval `0..100` and pointer evidence to elements missing the property. Unknown target
@@ -366,6 +368,17 @@ keys and unsupported metrics are compile errors. Every node/relationship-count d
 one deterministic aggregate-scope pointer from the metric and the target sorted by key, for example
 `node_count:label=Customer` or `relationship_count:type=OWNS`. Property-coverage drift does not use
 this fallback because its compiled query can identify the concrete elements missing the property.
+
+Degree distribution uses `percentileDisc` and `COUNT { }` (never the deprecated `size()`) to stay
+compatible with Cypher 5 and Cypher 25. `p50`/`p95` findings get the same deterministic aggregate-scope
+pointer as node/relationship counts, since a quantile describes a measurement scope rather than an
+offending element; `max` findings instead name the actual highest-degree element, since it is concrete
+and useful in an audit. Schema inventory has no target: it compares the current label and relationship-
+type inventory against the resolved baseline's, computed as the number of items added plus removed
+(never as a net change in inventory size, which a simultaneous add and remove could cancel out to zero).
+The comparison lives in the evaluator, not the compiled query, since only the evaluator has both the live
+row and the resolved baseline at once; findings name each added/removed label or relationship type as
+its own aggregate-scope pointer.
 
 ## Read-only execution
 
