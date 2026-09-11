@@ -433,13 +433,14 @@ class CypherCompiler:
             "relationship_count": self._compile_relationship_count,
             "property_coverage": self._compile_property_coverage,
             "degree_distribution": self._compile_degree_distribution,
+            "schema_inventory": self._compile_schema_inventory,
         }.get(spec.metric)
         if compiler is None:
             raise GraphCheckError(
                 "engine.metric_unsupported",
                 f"Drift metric {spec.metric!r} has no C1 query compiler.",
                 "Use node_count, relationship_count, property_coverage, "
-                "or degree_distribution, "
+                "or degree_distribution, schema_inventory, "
                 "or install its provider.",
             )
         query, params = compiler(spec)
@@ -568,6 +569,21 @@ class CypherCompiler:
             "evidence_cap": self.evidence_cap,
             "required_labels": required_labels,
             "required_relationship_types": required_types,
+        }
+
+    def _compile_schema_inventory(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target)
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        query = dedent(
+            """
+            CALL db.labels() YIELD label
+            RETURN true AS schema_ok, collect(label) AS labels
+            """
+        ).strip()
+        return query, {
+            "required_labels": [],
+            "required_relationship_types": [],
         }
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
