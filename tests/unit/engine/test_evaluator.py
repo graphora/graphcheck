@@ -1122,3 +1122,26 @@ def test_schema_inventory_detects_simultaneous_add_and_remove_despite_net_zero_s
     assert evaluation.measured["current"] == 2
     ids = {e.id for e in evaluation.evidence.elements}
     assert ids == {"label_added:Fraud", "label_removed:Customer"}
+
+
+def test_schema_inventory_fails_and_names_added_relationship_type():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="relationship_type:OWNS"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": ["Account"],
+                "relationship_types": ["OWNS", "CONTROLS"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert [e.id for e in evaluation.evidence.elements] == ["relationship_type_added:CONTROLS"]
