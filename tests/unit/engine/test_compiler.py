@@ -285,3 +285,20 @@ def test_compilation_is_deterministic(check):
 def test_compiler_rejects_non_positive_integer_evidence_caps(invalid):
     with pytest.raises(ValueError, match="positive integer"):
         CypherCompiler(evidence_cap=invalid)
+
+
+def test_schema_inventory_compiler_rejects_any_target_keys():
+    with pytest.raises(GraphCheckError) as caught:
+        CypherCompiler().compile(_drift("schema_inventory", {"label": "Account"}))
+    assert caught.value.error.code == "engine.invalid_target"
+
+
+def test_schema_inventory_compiler_emits_labels_query():
+    compiled = CypherCompiler(evidence_cap=9).compile(_drift("schema_inventory", {}))
+    assert "db.labels()" in compiled.query
+    assert "schema_ok" in compiled.query
+    assert "labels" in compiled.query
+    assert compiled.params == {
+        "required_labels": [],
+        "required_relationship_types": [],
+    }

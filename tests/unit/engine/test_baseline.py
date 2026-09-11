@@ -419,3 +419,19 @@ def test_c4_degree_distribution_list_resolves_label_type_quantile_direction_targ
     )
 
     assert value == BaselineValue(value=expected)
+
+
+def test_c4_schema_inventory_resolves_value_zero_with_label_evidence():
+    profile = _c4_profile()
+    profile["schema"]["labels"] = [
+        {"name": "Customer", "count": 125},
+        {"name": "Account", "count": 300},
+    ]
+
+    value = MappingBaselineProvider({"latest": profile}).resolve(
+        "latest", "schema_inventory", {}
+    )
+
+    assert value.value == 0
+    assert {e.id for e in value.evidence} == {"label:Customer", "label:Account"}
+    assert all(e.kind == "aggregate" for e in value.evidence)
