@@ -13,8 +13,8 @@ from graphcheck import __version__
 from graphcheck.contracts.profile import (
     BaselineProfile,
     ConstraintProfile,
-    DegreeDistributionCoverage,
     DegreeDistribution,
+    DegreeDistributionCoverage,
     GraphSchema,
     IndexProfile,
     LabelProfile,
@@ -909,10 +909,7 @@ def _collect_type_only_degree_histogram(
     client: Neo4jClient, relationship_type: str, direction: str, deadline: float | None
 ) -> list[tuple[int, int]]:
     type_ref = _cypher_identifier(relationship_type)
-    if direction == "out":
-        pattern = f"(n)-[:{type_ref}]->()"
-    else:
-        pattern = f"(n)<-[:{type_ref}]-()"
+    pattern = f"(n)-[:{type_ref}]->()" if direction == "out" else f"(n)<-[:{type_ref}]-()"
     rows = _run_read(
         client,
         f"MATCH {pattern}\n"

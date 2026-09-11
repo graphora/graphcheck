@@ -251,7 +251,7 @@ def test_degree_distribution_compiler_rejects_invalid_targets(target):
         ),
     ],
 )
-def test_degree_distribution_compiler_emits_expected_query_fragments(target, bindings, placeholders):
+def test_degree_distribution_compiler_emits_query_fragments(target, bindings, placeholders):
     compiled = CypherCompiler(evidence_cap=9).compile(_drift("degree_distribution", target))
     for fragment in placeholders:
         assert fragment in compiled.query

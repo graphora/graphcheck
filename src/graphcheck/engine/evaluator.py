@@ -576,7 +576,8 @@ class VerdictEvaluator:
             )
             if is_aggregate_scope:
                 # Counts describe a measurement scope, not a set of currently offending elements.
-                # Keep any baseline/current pointers as supplemental context, but put the honest scope
+                # Keep any baseline/current pointers as supplemental context, but put the
+                # honest scope
                 # first so a small evidence cap can never replace it with an arbitrary survivor.
                 explicit.insert(0, _aggregate_count_drift_pointer(spec))
                 total_count = 1
@@ -1087,9 +1088,7 @@ def _schema_inventory_diff(
         EvidenceElement(kind="aggregate", id=f"relationship_type_removed:{name}")
         for name in removed_types
     )
-    total_count = (
-        len(added_labels) + len(removed_labels) + len(added_types) + len(removed_types)
-    )
+    total_count = len(added_labels) + len(removed_labels) + len(added_types) + len(removed_types)
     return float(total_count), 0.0, explicit, total_count
 
 
