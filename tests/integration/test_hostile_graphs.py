@@ -135,6 +135,7 @@ def test_empty_graph_cli_matrix_is_graceful(neo4j_profile, tmp_path):
         "node_count": 0,
         "relationship_count": 0,
         "property_coverage": [],
+        "degree_distribution": [],
     }
     assert "Empty graph:" in results["run"].stdout
 
