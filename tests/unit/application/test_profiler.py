@@ -934,8 +934,19 @@ def test_partial_profiles_retain_successful_inventory_and_coverage(stage):
 
 def test_percentile_from_histogram_matches_known_values():
     histogram = [
-        (0, 3), (1, 459), (2, 1117), (3, 694), (4, 113), (5, 16),
-        (6, 32), (7, 24), (8, 6), (16, 7), (17, 20), (18, 12), (19, 1),
+        (0, 3),
+        (1, 459),
+        (2, 1117),
+        (3, 694),
+        (4, 113),
+        (5, 16),
+        (6, 32),
+        (7, 24),
+        (8, 6),
+        (16, 7),
+        (17, 20),
+        (18, 12),
+        (19, 1),
     ]
     assert profiler_module._percentile_from_histogram(histogram, 0.5) == 2.0
     assert profiler_module._percentile_from_histogram(histogram, 0.95) == 4.0

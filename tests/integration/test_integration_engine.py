@@ -354,14 +354,10 @@ def drift_topology_graph(neo4j_profile):
         try:
             yield
         finally:
-            session.run(
-                "MATCH (n:GraphCheckDriftAccount) DETACH DELETE n"
-            ).consume()
+            session.run("MATCH (n:GraphCheckDriftAccount) DETACH DELETE n").consume()
 
 
-def test_degree_distribution_drift_runs_against_a_real_graph(
-    neo4j_profile, drift_topology_graph
-):
+def test_degree_distribution_drift_runs_against_a_real_graph(neo4j_profile, drift_topology_graph):
     client = Neo4jClient(neo4j_profile)
     try:
         results = Engine(
@@ -392,9 +388,7 @@ drift:
     assert check.measured["current"] == 2
 
 
-def test_schema_inventory_drift_names_the_added_label(
-    neo4j_profile, drift_topology_graph
-):
+def test_schema_inventory_drift_names_the_added_label(neo4j_profile, drift_topology_graph):
     client = Neo4jClient(neo4j_profile)
     try:
         results = Engine(
@@ -469,9 +463,7 @@ drift:
     assert [check.verdict for check in results.checks] == [Verdict.PASS] * 3
 
 
-def test_added_high_degree_node_trips_max_and_names_it(
-    neo4j_profile, drift_topology_graph
-):
+def test_added_high_degree_node_trips_max_and_names_it(neo4j_profile, drift_topology_graph):
     with (
         GraphDatabase.driver(
             neo4j_profile.uri,

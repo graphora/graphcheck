@@ -406,7 +406,7 @@ def test_directory_view_pins_aliases_missing_and_failed_reads(tmp_path, monkeypa
         ({"type": "OWNS", "quantile": "p95", "direction": "in"}, 1.0),
     ],
 )
-def test_c4_degree_distribution_list_resolves_label_type_quantile_direction_targets(target, expected):
+def test_c4_degree_distribution_list_resolves_targets(target, expected):
     profile = _c4_profile()
     profile["statistics"]["degree_distribution"] = [
         {"label": "Account", "type": None, "quantile": "p50", "direction": "both", "value": 2.0},
@@ -428,9 +428,7 @@ def test_c4_schema_inventory_resolves_value_zero_with_label_evidence():
         {"name": "Account", "count": 300},
     ]
 
-    value = MappingBaselineProvider({"latest": profile}).resolve(
-        "latest", "schema_inventory", {}
-    )
+    value = MappingBaselineProvider({"latest": profile}).resolve("latest", "schema_inventory", {})
 
     assert value.value == 0
     assert {e.id for e in value.evidence} == {

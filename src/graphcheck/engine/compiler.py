@@ -516,13 +516,19 @@ class CypherCompiler:
         if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
             raise _bad_target(spec.metric, "target.type must be a non-blank string")
         if quantile not in _VALID_QUANTILES:
-            raise _bad_target(spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}")
+            raise _bad_target(
+                spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}"
+            )
         if direction not in _VALID_DIRECTIONS:
-            raise _bad_target(spec.metric, f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}")
+            raise _bad_target(
+                spec.metric,
+                f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            )
         if label is None and rel_type is not None and direction == "both":
             raise _bad_target(
                 spec.metric,
-                "target.direction must be 'in' or 'out' when target.type is given without target.label",
+                "target.direction must be 'in' or 'out' when target.type is given "
+                "without target.label",
             )
         required_labels = [label] if label is not None else []
         required_types = [rel_type] if rel_type is not None else []
@@ -547,7 +553,7 @@ class CypherCompiler:
                   {with_clause}
                   WHERE degree = current
                   WITH n ORDER BY elementId(n) ASC LIMIT $evidence_cap
-                  RETURN collect({_node_pointer('n')}) AS evidence
+                  RETURN collect({_node_pointer("n")}) AS evidence
                 }}
                 RETURN {_SCHEMA_PROJECTION}, current, population, evidence
                 """
