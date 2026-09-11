@@ -578,7 +578,10 @@ class CypherCompiler:
         query = dedent(
             """
             CALL db.labels() YIELD label
-            RETURN true AS schema_ok, collect(label) AS labels
+            WITH collect(label) AS labels
+            CALL db.relationshipTypes() YIELD relationshipType
+            WITH labels, collect(relationshipType) AS relationship_types
+            RETURN true AS schema_ok, labels, relationship_types
             """
         ).strip()
         return query, {
