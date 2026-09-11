@@ -238,6 +238,14 @@
     "GraphRAGChecksMetadata": {
       "additionalProperties": false,
       "properties": {
+        "chunk_coverage": {
+          "$ref": "#/$defs/GraphRAGChunkCoverageMetadata",
+          "properties": {
+            "template": {
+              "const": "chunk_coverage"
+            }
+          }
+        },
         "dangling_extraction_relationships": {
           "$ref": "#/$defs/GraphRAGProvenanceMetadata",
           "properties": {
@@ -245,9 +253,6 @@
               "const": "dangling_extraction_relationships"
             }
           }
-        },
-        "embedding_consistency": {
-          "$ref": "#/$defs/GraphRAGEmbeddingMetadata"
         },
         "entity_without_provenance": {
           "$ref": "#/$defs/GraphRAGProvenanceMetadata",
@@ -274,9 +279,52 @@
         "entity_without_provenance",
         "dangling_extraction_relationships",
         "near_duplicate_entities",
-        "embedding_consistency"
+        "chunk_coverage"
       ],
       "title": "GraphRAGChecksMetadata",
+      "type": "object"
+    },
+    "GraphRAGChunkCoverageMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "const": false,
+          "title": "Sampled",
+          "type": "boolean"
+        },
+        "template": {
+          "const": "chunk_coverage",
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled"
+      ],
+      "title": "GraphRAGChunkCoverageMetadata",
       "type": "object"
     },
     "GraphRAGDuplicateMetadata": {
@@ -322,49 +370,6 @@
         "estimate"
       ],
       "title": "GraphRAGDuplicateMetadata",
-      "type": "object"
-    },
-    "GraphRAGEmbeddingMetadata": {
-      "additionalProperties": false,
-      "properties": {
-        "catches": {
-          "$ref": "#/$defs/NonWhitespaceString"
-        },
-        "does_not_catch": {
-          "$ref": "#/$defs/NonWhitespaceString"
-        },
-        "evidence": {
-          "$ref": "#/$defs/EvidenceMetadata"
-        },
-        "requires": {
-          "items": {
-            "$ref": "#/$defs/CapabilityRequirement"
-          },
-          "minItems": 1,
-          "title": "Requires",
-          "type": "array",
-          "uniqueItems": true
-        },
-        "sampled": {
-          "const": false,
-          "title": "Sampled",
-          "type": "boolean"
-        },
-        "template": {
-          "const": "embedding_consistency",
-          "title": "Template",
-          "type": "string"
-        }
-      },
-      "required": [
-        "catches",
-        "does_not_catch",
-        "requires",
-        "evidence",
-        "template",
-        "sampled"
-      ],
-      "title": "GraphRAGEmbeddingMetadata",
       "type": "object"
     },
     "GraphRAGPackMetadata": {

@@ -10,7 +10,7 @@ from graphcheck.engine.compiler import (
     register_conformance_compiler,
 )
 from graphcheck.engine.core_pack import _compile_no_orphans, _node_pointer, _relationship_path
-from graphcheck.engine.identifiers import node_pattern, property_access
+from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.engine.sampling import (
     CYPHER_SAMPLE_MODULUS,
     cypher_hash_expression,
@@ -337,3 +337,49 @@ def duplicate_groups(candidates: list[dict], threshold: float) -> list[dict]:
         for group in grouped.values()
         if sum(len(by_key[key]) for key in group) > 1
     ]
+
+
+@register_conformance_compiler("chunk_coverage")
+def _compile_chunk_coverage(config: dict, evidence_cap: int, sample_seed: int) -> ConformancePlan:
+    del sample_seed
+    model = GraphRAGModel.model_validate({key: config[key] for key in GraphRAGModel.model_fields})
+    threshold = float(config.get("threshold", 0.95))
+    chunk = node_pattern("n", model.chunk_label)
+    entity = node_pattern("", model.entity_label)
+    relationship = relationship_pattern("", model.chunk_entity_rel)
+    if model.chunk_entity_direction == "out":
+        path = f"(n)-{relationship}->{entity}"
+    elif model.chunk_entity_direction == "in":
+        path = f"(n)<-{relationship}-{entity}"
+    else:
+        path = f"(n)-{relationship}-{entity}"
+    linked = f"EXISTS {{ {path} }}"
+    query = (
+        f"MATCH {chunk}\n"
+        f"RETURN true AS schema_ok, count(n) AS population, "
+        f"sum(CASE WHEN {linked} THEN 1 ELSE 0 END) AS conforming_count, "
+        f"sum(CASE WHEN NOT {linked} THEN 1 ELSE 0 END) AS violation_count, "
+        "CASE WHEN count(n) = 0 THEN 1.0 "
+        f"ELSE toFloat(sum(CASE WHEN {linked} THEN 1 ELSE 0 END)) / count(n) END AS coverage, "
+        "[] AS evidence"
+    )
+    evidence_query = (
+        f"MATCH {chunk}\n"
+        f"WHERE NOT {linked}\n"
+        "WITH n ORDER BY elementId(n) LIMIT $evidence_cap\n"
+        f"RETURN collect({_node_pointer('n')}) AS evidence"
+    )
+    params = {
+        "evidence_cap": evidence_cap,
+        "required_labels": [],
+        "required_relationship_types": [],
+    }
+    return ConformancePlan(
+        query=query,
+        params=params,
+        expected={"threshold": threshold},
+        name="Chunks mention at least one entity",
+        evidence_query=evidence_query,
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("coverage", "lt", threshold),
+    )

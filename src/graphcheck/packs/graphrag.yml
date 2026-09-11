@@ -48,3 +48,12 @@ checks:
       elements: [node]
       id_fields: [node_id]
     template: embedding_consistency
+  chunk_coverage:
+    catches: Chunks with no link of the configured type and direction to any configured entity.
+    does_not_catch: Whether the mentioned entity is correct, whether the chunk has a document, or entities reached by alternate paths.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: chunk_coverage
