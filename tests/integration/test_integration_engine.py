@@ -331,3 +331,96 @@ conformance:
         finally:
             client.close()
             session.run("MATCH (n:GraphCheckConcurrentAudit) DETACH DELETE n").consume()
+
+
+@pytest.fixture
+def drift_topology_graph(neo4j_profile):
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri,
+            auth=(neo4j_profile.user, neo4j_profile.password),
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        session.run(
+            """
+            CREATE (a:GraphCheckDriftAccount {id: 'a'})
+            CREATE (b:GraphCheckDriftAccount {id: 'b'})
+            CREATE (c:GraphCheckDriftAccount {id: 'c'})
+            CREATE (a)-[:GRAPHCHECK_DRIFT_OWNS]->(b)
+            CREATE (a)-[:GRAPHCHECK_DRIFT_OWNS]->(c)
+            """
+        ).consume()
+        try:
+            yield
+        finally:
+            session.run(
+                "MATCH (n:GraphCheckDriftAccount) DETACH DELETE n"
+            ).consume()
+
+
+def test_degree_distribution_drift_runs_against_a_real_graph(
+    neo4j_profile, drift_topology_graph
+):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={
+                "latest": {
+                    "degree_distribution": {
+                        "direction=both|label=GraphCheckDriftAccount|quantile=max": 2
+                    }
+                }
+            },
+        ).run_yaml(
+            """
+suite: degree-drift
+drift:
+  - id: account-max-degree
+    metric: degree_distribution
+    target: {label: GraphCheckDriftAccount, quantile: max, direction: both}
+    baseline: latest
+    tolerance: {max_delta: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.PASS
+    assert check.measured["current"] == 2
+
+
+def test_schema_inventory_drift_names_the_added_label(
+    neo4j_profile, drift_topology_graph
+):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={
+                "latest": {
+                    "status": "complete",
+                    "schema": {"labels": [], "relationship_types": []},
+                }
+            },
+        ).run_yaml(
+            """
+suite: schema-inventory-drift
+drift:
+  - id: schema-inventory
+    metric: schema_inventory
+    target: {}
+    baseline: latest
+    tolerance: {max: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.FAIL
+    pointer_ids = {element.id for element in check.evidence.elements}
+    assert "label_added:GraphCheckDriftAccount" in pointer_ids
+    assert "relationship_type_added:GRAPHCHECK_DRIFT_OWNS" in pointer_ids
