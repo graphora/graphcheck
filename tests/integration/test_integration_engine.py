@@ -424,3 +424,96 @@ drift:
     pointer_ids = {element.id for element in check.evidence.elements}
     assert "label_added:GraphCheckDriftAccount" in pointer_ids
     assert "relationship_type_added:GRAPHCHECK_DRIFT_OWNS" in pointer_ids
+
+
+def test_degree_distribution_unchanged_graph_passes_for_every_quantile(
+    neo4j_profile, drift_topology_graph
+):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={
+                "latest": {
+                    "degree_distribution": {
+                        "direction=both|label=GraphCheckDriftAccount|quantile=p50": 1,
+                        "direction=both|label=GraphCheckDriftAccount|quantile=p95": 2,
+                        "direction=both|label=GraphCheckDriftAccount|quantile=max": 2,
+                    }
+                }
+            },
+        ).run_yaml(
+            """
+suite: degree-drift-quantiles
+drift:
+  - id: p50
+    metric: degree_distribution
+    target: {label: GraphCheckDriftAccount, quantile: p50, direction: both}
+    baseline: latest
+    tolerance: {max_delta: 0}
+  - id: p95
+    metric: degree_distribution
+    target: {label: GraphCheckDriftAccount, quantile: p95, direction: both}
+    baseline: latest
+    tolerance: {max_delta: 0}
+  - id: max
+    metric: degree_distribution
+    target: {label: GraphCheckDriftAccount, quantile: max, direction: both}
+    baseline: latest
+    tolerance: {max_delta: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    assert [check.verdict for check in results.checks] == [Verdict.PASS] * 3
+
+
+def test_added_high_degree_node_trips_max_and_names_it(
+    neo4j_profile, drift_topology_graph
+):
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri,
+            auth=(neo4j_profile.user, neo4j_profile.password),
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        session.run(
+            """
+            CREATE (hub:GraphCheckDriftAccount {id: 'hub'})
+            WITH hub
+            MATCH (other:GraphCheckDriftAccount) WHERE other.id <> 'hub'
+            CREATE (hub)-[:GRAPHCHECK_DRIFT_OWNS]->(other)
+            """
+        ).consume()
+
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={
+                "latest": {
+                    "degree_distribution": {
+                        "direction=both|label=GraphCheckDriftAccount|quantile=max": 2
+                    }
+                }
+            },
+        ).run_yaml(
+            """
+suite: degree-drift-outlier
+drift:
+  - id: account-max-degree
+    metric: degree_distribution
+    target: {label: GraphCheckDriftAccount, quantile: max, direction: both}
+    baseline: latest
+    tolerance: {max_delta: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.FAIL
+    assert check.measured["current"] == 3
+    assert any(element.kind == "node" for element in check.evidence.elements)
