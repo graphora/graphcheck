@@ -467,6 +467,13 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(
         profile = json.loads(results["profile"].stdout)
         assert profile["statistics"]["node_count"] == case["nodes"]
         assert profile["statistics"]["relationship_count"] == case["relationships"]
+        drift_verdicts = {
+            check["id"]: check["verdict"]
+            for check in _run_payload(tmp_path)["checks"]
+            if check["id"].startswith("public-graph-")
+        }
+        assert drift_verdicts["public-graph-schema-inventory"] == "pass"
+        assert drift_verdicts["public-graph-degree-max"] == "pass"
         suite_path = tmp_path / "checks" / str(case["suite"])
         suite = yaml.safe_load(suite_path.read_text(encoding="utf-8"))
         suite["conformance"] = [
