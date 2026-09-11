@@ -433,5 +433,10 @@ def test_c4_schema_inventory_resolves_value_zero_with_label_evidence():
     )
 
     assert value.value == 0
-    assert {e.id for e in value.evidence} == {"label:Customer", "label:Account"}
+    assert {e.id for e in value.evidence} == {
+        "label:Customer",
+        "label:Account",
+        "relationship_type:CONTROLS",
+        "relationship_type:TRANSFERRED_TO",
+    }
     assert all(e.kind == "aggregate" for e in value.evidence)

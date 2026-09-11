@@ -232,13 +232,19 @@ def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | No
     if not isinstance(schema, Mapping):
         return None
     labels = schema.get("labels")
-    if not isinstance(labels, list):
+    relationship_types = schema.get("relationship_types")
+    if not isinstance(labels, list) or not isinstance(relationship_types, list):
         return None
     evidence = [
         {"kind": "aggregate", "id": f"label:{item['name']}"}
         for item in labels
         if isinstance(item, Mapping) and isinstance(item.get("name"), str)
     ]
+    evidence.extend(
+        {"kind": "aggregate", "id": f"relationship_type:{item['name']}"}
+        for item in relationship_types
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    )
     return {"value": 0, "evidence": evidence}
 
 
