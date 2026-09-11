@@ -180,6 +180,8 @@ def _resolve_candidate(
         return _label_count(raw, str(target["label"]))
     if metric == "relationship_count" and target.get("type") is not None:
         return _relationship_count(raw, str(target["type"]))
+    if metric == "schema_inventory":
+        return _schema_inventory_value(raw)
     return None
 
 
@@ -223,6 +225,21 @@ def _relationship_count(raw: Mapping[str, object], rel_type: str) -> object | No
         if isinstance(item, Mapping) and item.get("name") == rel_type:
             return item.get("count")
     return None
+
+
+def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | None:
+    schema = raw.get("schema", raw.get("graph_schema"))
+    if not isinstance(schema, Mapping):
+        return None
+    labels = schema.get("labels")
+    if not isinstance(labels, list):
+        return None
+    evidence = [
+        {"kind": "aggregate", "id": f"label:{item['name']}"}
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    ]
+    return {"value": 0, "evidence": evidence}
 
 
 def _degree_distribution(values: list[object], target: Mapping[str, object]) -> object | None:
