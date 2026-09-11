@@ -554,12 +554,32 @@ class VerdictEvaluator:
             )
         row = _single_summary_row(compiled, rows)
         _require_schema(compiled, row, graph_empty=False)
-        current = _number(row, "current", compiled)
-        previous = baseline.value
-        if spec.metric == "property_coverage" and (
-            not 0.0 <= current <= 100.0 or not 0.0 <= previous <= 100.0
-        ):
-            raise _bad_result(compiled, "property_coverage values must use percent units [0, 100]")
+        if spec.metric == "schema_inventory":
+            current, previous, explicit, total_count = _schema_inventory_diff(row, baseline)
+            is_aggregate_scope = True
+        else:
+            current = _number(row, "current", compiled)
+            previous = baseline.value
+            if spec.metric == "property_coverage" and (
+                not 0.0 <= current <= 100.0 or not 0.0 <= previous <= 100.0
+            ):
+                raise _bad_result(
+                    compiled, "property_coverage values must use percent units [0, 100]"
+                )
+            explicit = [*row.get("evidence", []), *baseline.evidence]
+            total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
+            # degree_distribution's p50/p95 targets describe an aggregate scope, same as
+            # node_count/relationship_count; only its max quantile names a real offending
+            # node, so it is excluded here (see #124).
+            is_aggregate_scope = spec.metric in {"node_count", "relationship_count"} or (
+                spec.metric == "degree_distribution" and spec.target.get("quantile") != "max"
+            )
+            if is_aggregate_scope:
+                # Counts describe a measurement scope, not a set of currently offending elements.
+                # Keep any baseline/current pointers as supplemental context, but put the honest scope
+                # first so a small evidence cap can never replace it with an arbitrary survivor.
+                explicit.insert(0, _aggregate_count_drift_pointer(spec))
+                total_count = 1
         delta = current - previous
         percent = None if previous == 0 else 100.0 * delta / abs(previous)
         measured: dict[str, object] = {
@@ -572,20 +592,6 @@ class VerdictEvaluator:
         failures = _drift_failures(current, previous, spec.tolerance)
         if not failures:
             return Evaluation(True, measured)
-        explicit = [*row.get("evidence", []), *baseline.evidence]
-        total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
-        # degree_distribution's p50/p95 targets describe an aggregate scope, same as
-        # node_count/relationship_count; only its max quantile names a real offending
-        # node, so it is excluded here (see #124).
-        is_aggregate_scope = spec.metric in {"node_count", "relationship_count"} or (
-            spec.metric == "degree_distribution" and spec.target.get("quantile") != "max"
-        )
-        if is_aggregate_scope:
-            # Counts describe a measurement scope, not a set of currently offending elements.
-            # Keep any baseline/current pointers as supplemental context, but put the honest scope
-            # first so a small evidence cap can never replace it with an arbitrary survivor.
-            explicit.insert(0, _aggregate_count_drift_pointer(spec))
-            total_count = 1
         message = f"{compiled.name}: " + "; ".join(failures)
         evidence = _build_evidence(
             message,
@@ -1046,6 +1052,27 @@ def _aggregate_count_drift_pointer(spec: DriftCheck) -> EvidenceElement:
         labels=[str(label)] if label is not None else None,
         type=str(rel_type) if rel_type is not None else None,
     )
+
+
+def _schema_inventory_diff(
+    row: Mapping[str, Any], baseline: BaselineValue
+) -> tuple[float, float, list[EvidenceElement], int]:
+    current_labels = {str(name) for name in (row.get("labels") or [])}
+    baseline_labels = {
+        pointer.id.split(":", 1)[1]
+        for pointer in baseline.evidence
+        if pointer.kind == "aggregate" and pointer.id.startswith("label:")
+    }
+    added = sorted(current_labels - baseline_labels)
+    removed = sorted(baseline_labels - current_labels)
+    explicit: list[EvidenceElement] = [
+        EvidenceElement(kind="aggregate", id=f"label_added:{name}") for name in added
+    ]
+    explicit.extend(
+        EvidenceElement(kind="aggregate", id=f"label_removed:{name}") for name in removed
+    )
+    total_count = len(added) + len(removed)
+    return float(total_count), 0.0, explicit, total_count
 
 
 def _drift_failures(current: float, baseline: float, tolerance: Mapping[str, object]) -> list[str]:
