@@ -366,6 +366,13 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
         profile = json.loads(results["profile"].stdout)
         assert profile["statistics"]["node_count"] == case["nodes"]
         assert profile["statistics"]["relationship_count"] == case["relationships"]
+        drift_verdicts = {
+            check["id"]: check["verdict"]
+            for check in _run_payload(tmp_path)["checks"]
+            if check["id"].startswith("public-graph-")
+        }
+        assert drift_verdicts["public-graph-schema-inventory"] == "pass"
+        assert drift_verdicts["public-graph-degree-max"] == "pass"
         # Exercise duplicate discovery on the same public graph, with a configured model.
         with (
             GraphDatabase.driver(
