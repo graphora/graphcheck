@@ -338,6 +338,11 @@ class GraphRAGChunkCoverageMetadata(_CoreCheckMetadataBase):
     sampled: Literal[False]
 
 
+class GraphRAGLabelExplosionMetadata(_CoreCheckMetadataBase):
+    template: Literal["label_explosion"]
+    sampled: Literal[False]
+
+
 class GraphRAGChecksMetadata(_StrictMetadata):
     orphan_chunks: GraphRAGProvenanceMetadata = Field(
         json_schema_extra={"properties": {"template": {"const": "orphan_chunks"}}}
@@ -354,6 +359,9 @@ class GraphRAGChecksMetadata(_StrictMetadata):
     embedding_consistency: GraphRAGEmbeddingMetadata
     chunk_coverage: GraphRAGChunkCoverageMetadata = Field(
         json_schema_extra={"properties": {"template": {"const": "chunk_coverage"}}}
+    )
+    label_explosion: GraphRAGLabelExplosionMetadata = Field(
+        json_schema_extra={"properties": {"template": {"const": "label_explosion"}}}
     )
 
     @model_validator(mode="after")

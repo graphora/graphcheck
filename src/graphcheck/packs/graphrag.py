@@ -14,6 +14,7 @@ GRAPHRAG_CHECK_NAMES = (
     "near_duplicate_entities",
     "embedding_consistency",
     "chunk_coverage",
+    "label_explosion",
 )
 
 
@@ -84,3 +85,12 @@ class ChunkCoverageOptions(_WithBase):
 @register("chunk_coverage")
 class ChunkCoverageWith(GraphRAGWith, ChunkCoverageOptions):
     """Share of chunks linked to at least one entity by the configured path."""
+
+
+class LabelExplosionOptions(_WithBase):
+    threshold: Annotated[PositiveJsonSchemaInteger, Field(le=1000)] = 1
+
+
+@register("label_explosion")
+class LabelExplosionWith(GraphRAGWith, LabelExplosionOptions):
+    """Labels and relationship types whose population is at or below the threshold."""

@@ -57,3 +57,12 @@ checks:
       elements: [node]
       id_fields: [node_id]
     template: chunk_coverage
+  label_explosion:
+    catches: Labels and relationship types whose population is at or below the configured threshold, the signature of an extractor inventing one-off types.
+    does_not_catch: Whether a rare label is legitimate, near-duplicate names, or types that are frequent but wrong.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: label_explosion

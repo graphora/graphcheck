@@ -165,6 +165,8 @@ class VerdictEvaluator:
 
         if spec.check in {"pii_name_match", "pii_value_match"}:
             return self._pii(compiled, row, spec.check)
+        if spec.check == "label_explosion":
+            return self._label_explosion(compiled, row)
         if spec.check == "near_duplicate_entities":
             return self._near_duplicate_entities(compiled, row)
         if spec.check == "embedding_consistency":
@@ -276,6 +278,36 @@ class VerdictEvaluator:
         evidence = _build_evidence(
             f"{compiled.name}: {violations} violation(s); reference dimension {dimension}. "
             f"Findings: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _label_explosion(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        violations = _integer(row, "violation_count", compiled)
+        measured: dict[str, object] = {"violations": violations, "population": violations}
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records:
+            raise _bad_result(compiled, "label explosion evidence must contain findings")
+        findings = [
+            record["finding"]
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("finding"), dict)
+        ]
+        if len(findings) != len(records):
+            raise _bad_result(compiled, "label explosion finding omitted its name and count")
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} near-singleton(s). "
+            f"{json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
             compiled,
             rows=records,
             total_count=violations,

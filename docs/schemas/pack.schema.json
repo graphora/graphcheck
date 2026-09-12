@@ -262,6 +262,14 @@
             }
           }
         },
+        "label_explosion": {
+          "$ref": "#/$defs/GraphRAGLabelExplosionMetadata",
+          "properties": {
+            "template": {
+              "const": "label_explosion"
+            }
+          }
+        },
         "near_duplicate_entities": {
           "$ref": "#/$defs/GraphRAGDuplicateMetadata"
         },
@@ -279,7 +287,8 @@
         "entity_without_provenance",
         "dangling_extraction_relationships",
         "near_duplicate_entities",
-        "chunk_coverage"
+        "chunk_coverage",
+        "label_explosion"
       ],
       "title": "GraphRAGChecksMetadata",
       "type": "object"
@@ -370,6 +379,49 @@
         "estimate"
       ],
       "title": "GraphRAGDuplicateMetadata",
+      "type": "object"
+    },
+    "GraphRAGLabelExplosionMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "const": false,
+          "title": "Sampled",
+          "type": "boolean"
+        },
+        "template": {
+          "const": "label_explosion",
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled"
+      ],
+      "title": "GraphRAGLabelExplosionMetadata",
       "type": "object"
     },
     "GraphRAGPackMetadata": {

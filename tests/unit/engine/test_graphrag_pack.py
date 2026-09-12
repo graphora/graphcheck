@@ -482,3 +482,34 @@ def test_embedding_malformed_results_are_errors(patch):
                 }
             ],
         )
+def test_label_explosion_names_singleton_labels_and_relationship_types():
+    finding_label = {"item_kind": "label", "name": "Person", "count": 1}
+    finding_type = {"item_kind": "relationship_type", "name": "WORKED-WITH", "count": 1}
+    client = Client(
+        row={"schema_ok": True, "population": 2, "violation_count": 2},
+        evidence=[
+            {
+                "node_id": "4:g:1",
+                "pointer": {"kind": "node", "id": "4:g:1"},
+                "finding": finding_label,
+            },
+            {
+                "node_id": "4:g:2",
+                "pointer": {"kind": "node", "id": "4:g:2"},
+                "finding": finding_type,
+            },
+        ],
+    )
+    results = Engine(client).run_suite(suite(names=("label_explosion",)), target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.FAIL
+    assert check.measured["findings"] == [finding_label, finding_type]
+    assert "WORKED-WITH" in check.evidence.message
+    assert "Person" in check.evidence.message
+
+
+def test_label_explosion_passes_when_no_near_singletons():
+    client = Client(row={"schema_ok": True, "population": 0, "violation_count": 0})
+    results = Engine(client).run_suite(suite(names=("label_explosion",)), target=TARGET)
+    assert results.checks[0].verdict is Verdict.PASS

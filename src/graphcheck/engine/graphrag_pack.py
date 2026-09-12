@@ -383,3 +383,50 @@ def _compile_chunk_coverage(config: dict, evidence_cap: int, sample_seed: int) -
         evidence_params=params,
         evidence_condition=EvidenceCondition("coverage", "lt", threshold),
     )
+
+
+@register_conformance_compiler("label_explosion")
+def _compile_label_explosion(config: dict, evidence_cap: int, sample_seed: int) -> ConformancePlan:
+    del sample_seed
+    GraphRAGModel.model_validate({key: config[key] for key in GraphRAGModel.model_fields})
+    threshold = int(config.get("threshold", 1))
+    scan = (
+        "CALL {\n"
+        "  MATCH (n)\n"
+        "  UNWIND labels(n) AS name\n"
+        "  WITH name, count(*) AS item_count, collect(n)[0] AS sample\n"
+        "  RETURN 'label' AS kind, name, item_count, sample\n"
+        "  UNION ALL\n"
+        "  MATCH ()-[r]->()\n"
+        "  WITH type(r) AS name, count(*) AS item_count, collect(startNode(r))[0] AS sample\n"
+        "  RETURN 'relationship_type' AS kind, name, item_count, sample\n"
+        "}\n"
+        "WITH kind, name, item_count, sample\n"
+        "WHERE item_count <= $label_explosion_threshold\n"
+    )
+    params = {
+        "evidence_cap": evidence_cap,
+        "label_explosion_threshold": threshold,
+        "required_labels": [],
+        "required_relationship_types": [],
+    }
+    return ConformancePlan(
+        query=(
+            f"{scan}"
+            "RETURN true AS schema_ok, count(*) AS violation_count, "
+            "count(*) AS population, [] AS evidence"
+        ),
+        params=params,
+        expected={"singletons": 0},
+        name="Labels and relationship types are not near-singletons",
+        evidence_query=(
+            f"{scan}"
+            "WITH kind, name, item_count, sample ORDER BY kind, name LIMIT $evidence_cap\n"
+            "RETURN collect({"
+            "kind: 'node', id: elementId(sample), labels: labels(sample), "
+            f"finding: {{item_kind: kind, name: name, count: item_count}}"
+            "}) AS evidence"
+        ),
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("violation_count", "gt", 0),
+    )
