@@ -167,6 +167,8 @@ class VerdictEvaluator:
             return self._pii(compiled, row, spec.check)
         if spec.check == "near_duplicate_entities":
             return self._near_duplicate_entities(compiled, row)
+        if spec.check == "embedding_consistency":
+            return self._embedding_consistency(compiled, row)
         if spec.check in {
             "orphan_chunks",
             "entity_without_provenance",
@@ -232,6 +234,53 @@ class VerdictEvaluator:
             total_count=violations,
         )
         return Evaluation(False, measured, evidence=evidence, estimate=estimate)
+
+    def _embedding_consistency(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        population = _integer(row, "population", compiled)
+        violations = _integer(row, "violation_count", compiled)
+        dimension = row.get("expected_dimension")
+        if violations > population or (
+            dimension is not None and (type(dimension) is not int or dimension <= 0)
+        ):
+            raise _bad_result(compiled, "invalid embedding count or reference dimension")
+        measured = {
+            "population": population,
+            "violations": violations,
+            "expected_dimension": dimension,
+        }
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records or len(records) > compiled.evidence_cap:
+            raise _bad_result(compiled, "embedding evidence must contain bounded findings")
+        for record in records:
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("node_id"), str)
+                or not record["node_id"]
+                or record.get("defect")
+                not in {"missing", "invalid_type", "empty", "nan", "zero", "wrong_dimension"}
+                or "dimension" not in record
+                or (
+                    record["dimension"] is not None
+                    and (type(record["dimension"]) is not int or record["dimension"] < 0)
+                )
+            ):
+                raise _bad_result(
+                    compiled, "embedding finding omitted its id, dimension, or defect"
+                )
+        findings = [
+            {key: record[key] for key in ("node_id", "dimension", "defect")} for record in records
+        ]
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} violation(s); reference dimension {dimension}. "
+            f"Findings: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
 
     def _graphrag_provenance(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
         violations, population = (

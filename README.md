@@ -153,7 +153,7 @@ fail before execution. Runtime evaluation is rule-based; generated check suggest
 until a person reviews and activates them.
 
 For document/chunk/entity graphs, enable the optional [GraphRAG pack](docs/graphrag.md) with
-`graphcheck init --pack graphrag`. It checks provenance and sampled duplicate names using your
+`graphcheck init --pack graphrag`. It checks provenance, embedding consistency, and sampled duplicate names using your
 configured labels, relationships, and properties.
 
 For the full contracts, see the [check YAML specification](docs/specifications/spec-02-check-yaml.md),

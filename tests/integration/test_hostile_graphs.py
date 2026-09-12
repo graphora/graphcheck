@@ -20,6 +20,7 @@ from neo4j import GraphDatabase
 
 from graphcheck.connection_profiles import ConnectionProfile, ProfilesFile
 from graphcheck.contracts.check import load_suite
+from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
 from graphcheck.project import PROFILES_FILE, write_default_project
 
 pytestmark = [
@@ -63,13 +64,14 @@ def _cli(root: Path, *arguments: str, timeout: int = 150) -> subprocess.Complete
     )
 
 
-def _assert_safe(result: subprocess.CompletedProcess[str], expected_exit: int) -> None:
+def _assert_safe(
+    result: subprocess.CompletedProcess[str], expected_exit: int, *, data_failure: bool = False
+) -> None:
     output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode == expected_exit, output
     assert "Traceback (most recent call last)" not in output
-    assert not (result.returncode and "Fix:" not in output and "Suggested fix" not in output), (
-        output
-    )
+    if result.returncode and not data_failure:
+        assert "Fix:" in output or "Suggested fix" in output, output
 
 
 def _matrix(
@@ -84,8 +86,14 @@ def _matrix(
         "profile": _cli(root, "profile", "--json", timeout=timeout),
         "run": _cli(root, "run", "--suite", suite_id, timeout=timeout),
     }
-    for result, exit_code in zip(results.values(), expected, strict=True):
-        _assert_safe(result, exit_code)
+    payload = _run_payload(root)
+    data_failure = (
+        payload["run"]["run_status"] == "complete"
+        and any(check["verdict"] == "fail" for check in payload["checks"])
+        and all(check["error"] is None for check in payload["checks"])
+    )
+    for (command, result), exit_code in zip(results.items(), expected, strict=True):
+        _assert_safe(result, exit_code, data_failure=command == "run" and data_failure)
     assert (root / ".graphcheck" / "runs" / "latest" / "results.json").is_file()
     return results
 
@@ -152,6 +160,96 @@ def test_llm_kg_builder_cli_matrix_handles_noisy_schema(neo4j_profile, tmp_path)
     assert {"__Entity__", "Country / Region", "Odd`Label"} <= labels
     assert {"HAS_ENTITY", "WORKED-WITH", "points to"} <= relationship_types
     assert _run_payload(tmp_path)["run"]["run_status"] == "complete"
+
+
+def _assert_graphrag_fixture(profile, checks, *, clean):
+    assert set(checks) == set(GRAPHRAG_CHECK_NAMES)
+    assert all(check["verdict"] == ("pass" if clean else "fail") for check in checks.values())
+    with (
+        GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver,
+        driver.session(database=profile.database) as session,
+    ):
+        # These two features remain fixture assertions, not additional pack checks.
+        singleton = session.run(
+            "MATCH (n:__Entity__:SingletonTopic) RETURN count(n) AS count"
+        ).single(strict=True)["count"]
+        assert singleton == (0 if clean else 1)
+        uncovered = session.run(
+            "MATCH (n:Chunk) WHERE NOT EXISTS { MATCH (n)-[:HAS_ENTITY]->(:__Entity__) } "
+            "RETURN n.id AS id"
+        )
+        assert {row["id"] for row in uncovered} == (
+            set()
+            if clean
+            else {
+                "chunk-orphan",
+                "chunk-missing-embedding",
+                "chunk-wrong-dimension",
+                "chunk-zero-embedding",
+                "chunk-nan-embedding",
+            }
+        )
+        if clean:
+            return
+        node_ids = dict(
+            session.run(
+                "MATCH (n) RETURN elementId(n) AS element_id, coalesce(n.id, n.fileName) AS id"
+            ).values()
+        )
+        expected = {
+            "orphan_chunks": {"chunk-orphan", "no-chunks.txt"},
+            "entity_without_provenance": {"unprovenanced-entity"},
+        }
+        for name, planted in expected.items():
+            assert checks[name]["measured"]["violations"] == len(planted)
+            assert {
+                node_ids[row["node_id"]] for row in checks[name]["measured"]["findings"]
+            } == planted
+            assert all(row["missing_path"] for row in checks[name]["measured"]["findings"])
+        dangling = checks["dangling_extraction_relationships"]["measured"]
+        assert dangling["violations"] == 1
+        planted_rel = session.run("MATCH ()-[r:MENTORED]->() RETURN elementId(r) AS id").single(
+            strict=True
+        )["id"]
+        assert dangling["findings"][0]["rel_id"] == planted_rel
+        assert {node_ids[value] for value in dangling["findings"][0]["missing_node_ids"]} == {
+            "unprovenanced-entity"
+        }
+        duplicates = checks["near_duplicate_entities"]["measured"]["findings"]
+        assert len(duplicates) == 1 and duplicates[0]["normalized_key"] == "adalovelace"
+        assert {node_ids[value] for value in duplicates[0]["node_ids"]} == {
+            "Ada Lovelace",
+            "ada_lovelace",
+        }
+        embeddings = checks["embedding_consistency"]["measured"]
+        assert embeddings["violations"] == 4 and embeddings["expected_dimension"] == 4
+        assert {
+            node_ids[row["node_id"]]: (row["defect"], row["dimension"])
+            for row in embeddings["findings"]
+        } == {
+            "chunk-missing-embedding": ("missing", None),
+            "chunk-wrong-dimension": ("wrong_dimension", 3),
+            "chunk-zero-embedding": ("zero", 4),
+            "chunk-nan-embedding": ("nan", 4),
+        }
+        assert all(check["evidence"]["elements"] for check in checks.values())
+
+
+def _graphrag_case(root, profile, name, *, clean):
+    _prepare_case(root, profile, name)
+    fixture = (_HOSTILE / _CASES[name]["fixture"]).read_text(encoding="utf-8")
+    with _seeded_graph(profile, fixture):
+        _case_matrix(root, name)
+        checks = {check["id"]: check for check in _run_payload(root)["checks"]}
+        _assert_graphrag_fixture(profile, checks, clean=clean)
+
+
+def test_graphrag_hostile_pack_finds_every_planted_defect(neo4j_profile, tmp_path):
+    _graphrag_case(tmp_path, neo4j_profile, "graphrag-planted", clean=False)
+
+
+def test_graphrag_hostile_clean_pack_passes(neo4j_profile, tmp_path):
+    _graphrag_case(tmp_path, neo4j_profile, "graphrag-clean", clean=True)
 
 
 def test_apoc_less_cli_matrix_is_actionable_and_isolated(neo4j_profile, tmp_path):
@@ -352,7 +450,9 @@ MERGE (source)-[:EMAILED]->(target)
 
 
 @pytest.mark.hostile_scale
-def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path):
+def test_public_scale_cli_matrix_is_bounded_and_graceful(
+    neo4j_profile, tmp_path, record_testsuite_property
+):
     case = _CASES["public-scale"]
     enable_env = str(case["enable_env"])
     if os.environ.get(enable_env) != "1":
@@ -365,7 +465,7 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
         profile = json.loads(results["profile"].stdout)
         assert profile["statistics"]["node_count"] == case["nodes"]
         assert profile["statistics"]["relationship_count"] == case["relationships"]
-        # Exercise duplicate discovery on the same public graph, with a configured model.
+        # Exercise every pack check over the same 265,214-node / 420,045-edge graph.
         with (
             GraphDatabase.driver(
                 neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
@@ -373,39 +473,70 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
             driver.session(database=neo4j_profile.database) as session,
         ):
             session.run(
-                "MATCH (n:HostileEmailAddress) SET n.name = 'email-' + toString(n.id)"
+                "MATCH (n:HostileEmailAddress) "
+                "SET n.name = 'email-' + toString(n.id), n.embedding = [1.0, 0.0, 0.0, 0.0]"
             ).consume()
-        duplicate_suite = {
-            "suite": "graphrag-scale",
-            "conformance": [
-                {
-                    "id": "bounded-duplicates",
-                    "check": "near_duplicate_entities",
-                    "with": {
-                        "document_label": "HostileEmailAddress",
-                        "chunk_label": "HostileEmailAddress",
-                        "entity_label": "HostileEmailAddress",
-                        "document_chunk_rel": "EMAILED",
-                        "chunk_entity_rel": "EMAILED",
-                        "embedding_property": "embedding",
-                        "sample_size": 1000,
-                        "threshold": 1.0,
-                    },
-                }
-            ],
-        }
+            planted_ids = [
+                row["id"]
+                for row in session.run(
+                    "MATCH (n:HostileEmailAddress) RETURN n.id AS id ORDER BY id LIMIT 4"
+                )
+            ]
+            session.run(
+                "MATCH (n:HostileEmailAddress) WHERE n.id IN $ids "
+                "SET n.embedding = CASE n.id WHEN $ids[0] THEN null "
+                "WHEN $ids[1] THEN [1.0, 2.0, 3.0] WHEN $ids[2] THEN [0.0, 0.0, 0.0, 0.0] "
+                "ELSE [1.0, 0.0 / 0.0, 0.0, 0.0] END",
+                ids=planted_ids,
+            ).consume()
+        pack_suite = yaml.safe_load((_HOSTILE / case["pack_suite"]).read_text(encoding="utf-8"))
+        pack_suite["suite"] = "graphrag-scale"
+        for check in pack_suite["conformance"]:
+            check["with"] = {
+                **check["with"],
+                "document_label": "HostileEmailAddress",
+                "chunk_label": "HostileEmailAddress",
+                "entity_label": "HostileEmailAddress",
+                "document_chunk_rel": "EMAILED",
+                "chunk_entity_rel": "EMAILED",
+            }
+            if check["check"] == "near_duplicate_entities":
+                check["with"].update(sample_size=1000, threshold=1.0)
         (tmp_path / "checks/graphrag-scale.yml").write_text(
-            yaml.safe_dump(duplicate_suite), encoding="utf-8"
+            yaml.safe_dump(pack_suite), encoding="utf-8"
         )
         started = time.monotonic()
-        run = _cli(tmp_path, "run", "--suite", "graphrag-scale", timeout=60)
-        assert time.monotonic() - started < 60
-        _assert_safe(run, 0)
-        check = _run_payload(tmp_path)["checks"][0]
+        run = _cli(
+            tmp_path, "run", "--suite", "graphrag-scale", timeout=case["pack_timeout_seconds"]
+        )
+        elapsed = time.monotonic() - started
+        record_testsuite_property("graphrag_runtime_seconds", round(elapsed, 3))
+        record_testsuite_property("graphrag_nodes", case["nodes"])
+        record_testsuite_property("graphrag_relationships", case["relationships"])
+        assert elapsed < case["pack_timeout_seconds"]
+        _assert_safe(run, case["pack_expected_exit_code"], data_failure=True)
+        checks = {check["id"]: check for check in _run_payload(tmp_path)["checks"]}
+        assert set(checks) == set(GRAPHRAG_CHECK_NAMES)
+        assert all(check["verdict"] in {"pass", "fail"} for check in checks.values())
+        check = checks["near_duplicate_entities"]
         assert check["verdict"] == "pass", check["error"]
         assert check["measured"]["population"] == case["nodes"]
         assert 0 < check["measured"]["sample_size"] <= 1000
         assert check["estimate"]["sample_size"] <= 1000 and check["estimate"]["ci"] is None
+        embeddings = checks["embedding_consistency"]["measured"]
+        assert embeddings["population"] == case["nodes"] and embeddings["violations"] == 4
+        assert embeddings["expected_dimension"] == 4
+        assert {row["defect"] for row in embeddings["findings"]} == {
+            "missing",
+            "wrong_dimension",
+            "zero",
+            "nan",
+        }
+        print(
+            f"GraphRAG hostile pack: {case['nodes']} nodes, "
+            f"{case['relationships']} relationships in {elapsed:.2f}s"
+        )
+
     finally:
         with (
             GraphDatabase.driver(

@@ -21,6 +21,53 @@ from graphcheck.packs.graphrag import GraphRAGModel
 MAX_NAME_LENGTH = 256
 
 
+@register_conformance_compiler("embedding_consistency")
+def _compile_embedding_consistency(
+    config: dict, evidence_cap: int, sample_seed: int
+) -> ConformancePlan:
+    # Neo4j 5.26's stored-array type path requires concrete, non-null element types.
+    # Inspect each vector in the database; aggregate and transfer only scalar summaries.
+    scan = f"""MATCH {node_pattern("n", config["chunk_label"])}
+WITH n, {property_access("n", config["embedding_property"])} AS vector
+WITH n, vector, CASE WHEN vector IS :: LIST<INTEGER NOT NULL>
+                      OR vector IS :: LIST<FLOAT NOT NULL> THEN vector END AS numeric
+WITH n, CASE WHEN numeric IS NOT NULL THEN size(numeric) END AS dimension,
+     CASE WHEN vector IS NULL THEN 'missing'
+          WHEN numeric IS NULL THEN 'invalid_type'
+          WHEN size(numeric) = 0 THEN 'empty'
+          WHEN any(value IN numeric WHERE isNaN(value)) THEN 'nan'
+          WHEN all(value IN numeric WHERE value = 0) THEN 'zero' END AS defect"""
+    reference = f"""CALL {{
+  {scan}
+  WHERE defect IS NULL
+  WITH dimension, count(*) AS frequency ORDER BY frequency DESC, dimension LIMIT 1
+  RETURN max(dimension) AS expected_dimension
+}}"""
+    # Import the scalar reference through each WITH in the second scan.
+    classified = scan.replace("WITH n,", "WITH expected_dimension, n,")
+    prefix = f"""{reference}
+{classified}
+WITH expected_dimension, n, dimension,
+     CASE WHEN defect IS NOT NULL THEN defect
+          WHEN dimension <> expected_dimension THEN 'wrong_dimension' END AS defect"""
+    params = {"evidence_cap": evidence_cap}
+    return ConformancePlan(
+        query=f"""{prefix}
+RETURN true AS schema_ok, count(n) AS population, max(expected_dimension) AS expected_dimension,
+       count(defect) AS violation_count, [] AS evidence""",
+        params=params,
+        expected={"invalid_embeddings": 0, "dimension_reference": "mode; smallest on ties"},
+        name="Chunk embeddings are present, nonzero, NaN-free, and dimensionally consistent",
+        evidence_query=f"""{prefix}
+WHERE defect IS NOT NULL
+WITH n, dimension, defect ORDER BY elementId(n) LIMIT $evidence_cap
+RETURN collect({{node_id: elementId(n), dimension: dimension, defect: defect,
+                 pointer: {_node_pointer("n")}}}) AS evidence""",
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("violation_count", "gt", 0),
+    )
+
+
 def configured_model(config: dict) -> GraphRAGModel | None:
     fields = GraphRAGModel.model_fields
     if any(config.get(name) is None for name, field in fields.items() if field.is_required()):
