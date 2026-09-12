@@ -1058,37 +1058,28 @@ def _aggregate_count_drift_pointer(spec: DriftCheck) -> EvidenceElement:
 def _schema_inventory_diff(
     row: Mapping[str, Any], baseline: BaselineValue
 ) -> tuple[float, float, list[EvidenceElement], int]:
-    current_labels = {str(name) for name in (row.get("labels") or [])}
-    current_types = {str(name) for name in (row.get("relationship_types") or [])}
-    baseline_labels = {
-        pointer.id.split(":", 1)[1]
-        for pointer in baseline.evidence
-        if pointer.kind == "aggregate" and pointer.id.startswith("label:")
-    }
-    baseline_types = {
-        pointer.id.split(":", 1)[1]
-        for pointer in baseline.evidence
-        if pointer.kind == "aggregate" and pointer.id.startswith("relationship_type:")
-    }
-    added_labels = sorted(current_labels - baseline_labels)
-    removed_labels = sorted(baseline_labels - current_labels)
-    added_types = sorted(current_types - baseline_types)
-    removed_types = sorted(baseline_types - current_types)
-    explicit: list[EvidenceElement] = [
-        EvidenceElement(kind="aggregate", id=f"label_added:{name}") for name in added_labels
-    ]
-    explicit.extend(
-        EvidenceElement(kind="aggregate", id=f"label_removed:{name}") for name in removed_labels
+    def _live(key: str) -> set[str]:
+        return {str(name) for name in (row.get(key) or [])}
+
+    def _baseline(prefix: str) -> set[str]:
+        return {
+            pointer.id.split(":", 1)[1]
+            for pointer in baseline.evidence
+            if pointer.kind == "aggregate" and pointer.id.startswith(prefix)
+        }
+
+    dimensions = (
+        ("label", _live("labels"), _baseline("label:")),
+        ("relationship_type", _live("relationship_types"), _baseline("relationship_type:")),
+        ("property", _live("properties"), _baseline("property:")),
     )
-    explicit.extend(
-        EvidenceElement(kind="aggregate", id=f"relationship_type_added:{name}")
-        for name in added_types
-    )
-    explicit.extend(
-        EvidenceElement(kind="aggregate", id=f"relationship_type_removed:{name}")
-        for name in removed_types
-    )
-    total_count = len(added_labels) + len(removed_labels) + len(added_types) + len(removed_types)
+    explicit: list[EvidenceElement] = []
+    for name, current, previous in dimensions:
+        for item in sorted(current - previous):
+            explicit.append(EvidenceElement(kind="aggregate", id=f"{name}_added:{item}"))
+        for item in sorted(previous - current):
+            explicit.append(EvidenceElement(kind="aggregate", id=f"{name}_removed:{item}"))
+    total_count = len(explicit)
     return float(total_count), 0.0, explicit, total_count
 
 

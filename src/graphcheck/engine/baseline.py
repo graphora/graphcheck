@@ -245,6 +245,13 @@ def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | No
         for item in relationship_types
         if isinstance(item, Mapping) and isinstance(item.get("name"), str)
     )
+    evidence.extend(
+        {"kind": "aggregate", "id": f"property:{item['name']}.{prop['name']}"}
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+        for prop in (item.get("properties") or [])
+        if isinstance(prop, Mapping) and isinstance(prop.get("name"), str)
+    )
     return {"value": 0, "evidence": evidence}
 
 

@@ -587,7 +587,14 @@ class CypherCompiler:
             WITH collect(label) AS labels
             CALL db.relationshipTypes() YIELD relationshipType
             WITH labels, collect(relationshipType) AS relationship_types
-            RETURN true AS schema_ok, labels, relationship_types
+            CALL db.schema.nodeTypeProperties()
+            YIELD nodeLabels, propertyName
+            WITH labels, relationship_types, nodeLabels, propertyName
+            WHERE propertyName IS NOT NULL
+            UNWIND nodeLabels AS owner
+            WITH labels, relationship_types,
+                 collect(DISTINCT owner + '.' + propertyName) AS properties
+            RETURN true AS schema_ok, labels, relationship_types, properties
             """
         ).strip()
         return query, {
