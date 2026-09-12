@@ -924,6 +924,21 @@ def _collect_type_only_degree_histogram(
 DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP = 200
 
 
+def _collect_label_type_edge_counts(
+    client: Neo4jClient, label: str, deadline: float | None
+) -> list[tuple[str, int]]:
+    """Cheap per-(label, type) edge counts used to bound pair selection before histograms."""
+    label_ref = _cypher_identifier(label)
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})-[r]-()\n"
+        "WITH type(r) AS relType, count(r) AS edge_count\n"
+        "RETURN relType, edge_count ORDER BY edge_count DESC",
+        deadline=deadline,
+    )
+    return [(str(row["relType"]), int(row["edge_count"])) for row in rows]
+
+
 def collect_degree_distribution_targets(
     client: Neo4jClient,
     labels: list[LabelProfile],
@@ -948,8 +963,19 @@ def collect_degree_distribution_targets(
         }
 
     records: list[DegreeDistributionCoverage] = []
-    per_label_type_data: dict[str, dict[str, dict[str, list[tuple[int, int]]]]] = {}
 
+    # Bound the (label, type) pair set with cheap aggregate counts before collecting any
+    # detailed histograms, so the cap limits database work and memory, not just output.
+    edge_counts: list[tuple[str, str, int]] = []
+    for label in labels:
+        for rel_type, edge_count in _collect_label_type_edge_counts(client, label.name, deadline):
+            edge_counts.append((label.name, rel_type, edge_count))
+    edge_counts.sort(key=lambda item: (-item[2], item[0], item[1]))
+    kept_pairs = {(label_name, rel_type) for label_name, rel_type, _ in edge_counts[:_pair_cap]}
+    partial_reason_code = "degree_incomplete" if len(edge_counts) > _pair_cap else None
+    kept_labels = {label_name for label_name, _ in kept_pairs}
+
+    per_label_type_data: dict[str, dict[str, dict[str, list[tuple[int, int]]]]] = {}
     for label in labels:
         for direction in directions:
             total_hist = _collect_total_degree_histogram(client, label.name, direction, deadline)
@@ -963,17 +989,14 @@ def collect_degree_distribution_targets(
                         value=value,
                     )
                 )
+            if label.name not in kept_labels:
+                continue
             per_type = _collect_per_type_degree_histograms(client, label.name, direction, deadline)
-            per_label_type_data.setdefault(label.name, {})[direction] = per_type
-
-    edge_counts: list[tuple[str, str, int]] = []
-    for label_name, by_direction in per_label_type_data.items():
-        for rel_type, histogram in by_direction.get("both", {}).items():
-            edge_counts.append((label_name, rel_type, sum(v * c for v, c in histogram)))
-
-    edge_counts.sort(key=lambda item: item[2], reverse=True)
-    kept_pairs = {(label_name, rel_type) for label_name, rel_type, _ in edge_counts[:_pair_cap]}
-    partial_reason_code = "degree_incomplete" if len(edge_counts) > _pair_cap else None
+            per_label_type_data.setdefault(label.name, {})[direction] = {
+                rel_type: histogram
+                for rel_type, histogram in per_type.items()
+                if (label.name, rel_type) in kept_pairs
+            }
 
     label_counts = {label.name: label.count for label in labels}
     for label_name, by_direction in per_label_type_data.items():
