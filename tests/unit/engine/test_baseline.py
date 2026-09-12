@@ -438,3 +438,26 @@ def test_c4_schema_inventory_resolves_value_zero_with_label_evidence():
         "relationship_type:TRANSFERRED_TO",
     }
     assert all(e.kind == "aggregate" for e in value.evidence)
+
+
+def test_c4_schema_inventory_includes_label_scoped_property_evidence():
+    profile = _c4_profile()
+    profile["schema"]["labels"] = [
+        {
+            "name": "Account",
+            "count": 300,
+            "properties": [
+                {"name": "id", "type": "STRING"},
+                {"name": "balance", "type": "INTEGER"},
+            ],
+        }
+    ]
+    profile["schema"]["relationship_types"] = []
+
+    value = MappingBaselineProvider({"latest": profile}).resolve("latest", "schema_inventory", {})
+
+    assert {e.id for e in value.evidence} == {
+        "label:Account",
+        "property:Account.id",
+        "property:Account.balance",
+    }
