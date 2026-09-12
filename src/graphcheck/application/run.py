@@ -12,6 +12,7 @@ from graphcheck.application.artifacts import (
 )
 from graphcheck.application.paths import project_path
 from graphcheck.application.suites import load_suite_inputs
+from graphcheck.baselines import latest_baseline
 from graphcheck.connection_profiles import (
     load_profiles,
     select_profile,
@@ -31,6 +32,7 @@ from graphcheck.project import (
     find_project_root,
     load_project_config,
 )
+from graphcheck.provenance import config_hash
 from graphcheck.telemetry.events import EngineEventSink
 
 
@@ -80,13 +82,16 @@ def execute_run(
     runs_dir = artifacts / "runs"
 
     checks_dir = project_path(root, config.checks)
+    baseline = None
+    profile_name, selected_profile = request.profile, None
     client: Neo4jClient | None = None
     setup_done_perf: float | None = None
     engine_started = False
 
     try:
         profiles = load_profiles(root)
-        _, selected_profile = select_profile(profiles, request.profile)
+        profile_name, selected_profile = select_profile(profiles, request.profile)
+        baseline = latest_baseline(root, config.artifacts)
         max_concurrency = request.concurrency or int(config.concurrency)
         engine_config = EngineConfig(
             max_concurrency=max_concurrency, result_row_limit=config.engine.result_row_limit
@@ -179,6 +184,23 @@ def execute_run(
     # artifact_error with the real artifact-write timing boundary — never a retried write
     # nor a re-labelled run.configuration result.
     artifact_started_perf = time.monotonic()
+    results.run.baseline_ref = baseline.name if baseline is not None else None
+    results.run.config_hash = config_hash(
+        {
+            "engine": results.run.config_hash,
+            "project": config.model_dump(mode="json", exclude={"generate", "concurrency"}),
+            "concurrency": request.concurrency or config.concurrency,
+            "profile": profile_name,
+            "connection": {
+                "uri": selected_profile.uri,
+                "database": selected_profile.database,
+                "user": selected_profile.user,
+            }
+            if selected_profile is not None
+            else None,
+            "verify_read_only_credential": request.verify_read_only_credential,
+        }
+    )
     try:
         if stage_observer is not None:
             stage_observer("Writing reports", None)

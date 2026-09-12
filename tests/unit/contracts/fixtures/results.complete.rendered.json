@@ -115,6 +115,8 @@
     }
   ],
   "run": {
+    "baseline_ref": null,
+    "config_hash": null,
     "error": null,
     "exit_code": 1,
     "finished_at": "2026-07-06T09:02:41Z",
@@ -122,6 +124,7 @@
     "id": "run_01HXATZ",
     "pack_version": "0.1.0",
     "partial_reason": null,
+    "previous_run_id": null,
     "redaction": {
       "applied": false,
       "policy": "none"

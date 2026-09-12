@@ -305,6 +305,68 @@ graphcheck redact .graphcheck/runs/<run-id> --output export/results.json
 Without `--output`, the command writes `results.redacted.json` beside the source and never
 overwrites the original.
 
+## Comparing runs
+
+```console
+graphcheck report --history
+graphcheck changes
+graphcheck changes --since previous --json
+graphcheck changes --since <run-id> --json
+```
+
+`report --history` (also `--list`) shows each run's previous-run ID. New runs link to the last
+published run under the publication lock, including concurrent CLI and MCP runs. A missing
+previous link is shown as `—`. Deleting or pruning a run does not rewrite its successors' links.
+
+`changes` compares the latest published run to its linked predecessor by default. For older
+artifacts without a previous-run field, it uses the two newest runs. `--since <run-id>` selects
+another stored run to compare to latest. A missing predecessor produces an actionable error;
+select a retained run explicitly after pruning. Runs from different databases are rejected.
+
+The text and JSON output combine verdict changes, added and removed checks, coverage, suite
+scores, profile differences, and evidence element IDs. Profile differences reuse `graphcheck diff`;
+outcome differences reuse `report --compare`. JSON keys and delta lists have stable ordering and
+contain no comparison timestamp, so repeated comparisons of the same stored inputs are byte-identical.
+
+Each run records the filename of the latest existing timestamped profile in `run.baseline_ref`,
+resolved before execution. Running checks does not trigger profiling or change drift-check baseline
+selection. To compare graph changes, run `graphcheck profile` before each run:
+
+```console
+graphcheck profile --json
+graphcheck run
+# After changing the graph:
+graphcheck profile --json
+graphcheck run
+graphcheck changes --json
+```
+
+Without a saved profile, `baseline_ref` is null. If either run lacks a reference or has a partial
+profile, `changes` marks profile deltas unavailable while still comparing outcomes and evidence.
+Two runs referencing the same profile have no profile delta, even if the graph changed between runs.
+Missing, invalid, or mismatched referenced profile files are errors. Retain the referenced profiles
+with run history.
+
+Evidence identity is `(kind, element ID)`, scoped by `(suite ID, check ID)`. Aggregate measurement
+pointers are excluded. Each check shares the smaller input evidence cap across appeared and
+disappeared IDs; appeared IDs come first, and both lists are sorted. `dropped` counts known retained
+evidence deltas omitted at that cap. It does not estimate unseen IDs. Input truncation is reported
+separately: differences describe the stored evidence samples, not necessarily all graph changes.
+An absent evidence list (including a skipped or errored check) is an empty stored sample, not proof
+that the graph was repaired. Redacted inputs have no comparable element IDs.
+
+`changes` has its own exit policy:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | No outcome regression; existing failures, fixes, and profile/evidence changes alone do not fail the command |
+| `1` | A verdict regressed, a new failing/warning/errored check appeared, or a check newly reached `fail` |
+| `2` | The requested runs or referenced profiles could not be read or compared, or arguments were invalid |
+
+Verdict regressions use the same ranking as `report --compare`: pass, skipped, warn,
+warning-severity error, then failure/error-severity error. Profile availability and coverage are
+reported independently; exit `0` does not assert that both runs had complete coverage or profiles.
+
 ## Exit codes
 
 GraphCheck uses stable CI-oriented exit semantics:

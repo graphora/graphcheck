@@ -70,6 +70,42 @@ With the default `graphcheck.yml`, every run writes:
 report. The Action's `upload-artifacts` input accepts `always`, `on-failure`, or `never`; uploaded
 files appear in the workflow run as the `graphcheck-results` artifact.
 
+When a comparable previous run is available, `summary.json` also includes an optional `changes`
+block. Compatible versions of `graphcheck-action` render it as **What changed** in the Step
+Summary; older or first-run artifacts omit it silently. Preserve the previous run in the same
+artifacts directory (for example, by running twice in one job or restoring trusted history).
+The Action does not download previous workflow artifacts automatically.
+
+The block uses this additive shape; the summary schema remains `2.0`:
+
+```json
+{
+  "changes": {
+    "previous_run_id": "neo4j_previous-run",
+    "new_failures": [
+      {"suite_id": "fraud-ring", "check_id": "account-no-orphans", "before": "pass", "after": "fail"}
+    ],
+    "fixed_checks": [
+      {"suite_id": "fraud-ring", "check_id": "customer-tax-id", "before": "fail", "after": "pass"}
+    ],
+    "count_deltas": {
+      "nodes": {"before": 5005, "after": 5006, "delta": 1},
+      "relationships": {"before": 7500, "after": 7500, "delta": 0}
+    },
+    "dropped": {"new_failures": 0, "fixed_checks": 0}
+  }
+}
+```
+
+New failures are checks entering `fail` or `errored` from a different, non-failing state, including
+newly added checks (`before: null`). Fixed checks move from `fail`, `warn`, or `errored` to `pass`;
+removed checks are not counted as fixes. Each list retains the first 20 checks in suite/check-ID
+order, with remaining counts in `dropped`. Count deltas use `run.target.nodes` and
+`run.target.relationships`, so no profile is required. Unknown counts are omitted rather than
+treated as zero. Redacted runs, different databases, and unavailable predecessors omit the
+entire block; a comparable run with no changes still includes empty check lists and zero deltas
+for known counts.
+
 GraphCheck's exit-code contract is:
 
 | Code | Meaning | Typical policy |

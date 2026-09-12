@@ -22,6 +22,7 @@ from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.writer import load_results
 
 SUMMARY_FILENAME = "summary.json"
+SUMMARY_CHANGES_LIMIT = 20
 
 
 class ReportHistoryError(ValueError):
@@ -34,6 +35,7 @@ class ReportSummary:
     finished_at: str
     coverage_status: CoverageStatus
     suite_scores: tuple[tuple[str, int | None], ...]
+    previous_run_id: str | None = None
 
 
 @dataclass(frozen=True, init=False)
@@ -153,14 +155,17 @@ def format_report_history(records: list[ReportRun]) -> str:
     rows = [
         (
             record.id,
+            record.summary.previous_run_id or "—",
             record.summary.finished_at,
             record.summary.coverage_status.value,
             _summary_suite_scores(record.summary),
         )
         for record in records
     ]
-    headers = ("REPORT NAME", "FINISHED AT", "COVERAGE STATUS", "SUITE SCORES")
-    widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
+    headers = ("REPORT NAME", "PREVIOUS RUN ID", "FINISHED AT", "COVERAGE STATUS", "SUITE SCORES")
+    widths = [
+        max(len(header), *(len(row[index]) for row in rows)) for index, header in enumerate(headers)
+    ]
     lines = [
         _format_row(headers, widths),
         _format_row(tuple("-" * width for width in widths), widths),
@@ -183,21 +188,62 @@ def report_name(results: Results) -> str:
     return prefix + hashlib.sha256(results.run.id.encode("utf-8")).hexdigest()[:32]
 
 
-def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
-    """Render suite-score and outcome changes from the first report to the second report."""
-    first_checks = {_identity(check): check for check in first.results.checks}
-    second_checks = {_identity(check): check for check in second.results.checks}
+@dataclass(frozen=True)
+class CheckDelta:
+    suite_id: str
+    check_id: str
+    name: str
+    before: str | None
+    after: str | None
+
+    def display(self) -> str:
+        outcome = (
+            f"{self.before} -> {self.after}"
+            if self.before and self.after
+            else (self.after or self.before)
+        )
+        return f"{self.suite_id}::{self.check_id}: {outcome}"
+
+
+@dataclass(frozen=True)
+class ReportComparison:
+    regressions: list[CheckDelta]
+    improvements: list[CheckDelta]
+    other_changes: list[CheckDelta]
+    added: list[CheckDelta]
+    removed: list[CheckDelta]
+    coverage_before: str
+    coverage_after: str
+    suite_scores: list[dict[str, str | int | None]]
+
+    @property
+    def regressed(self) -> bool:
+        return (
+            bool(self.regressions)
+            or any(change.after in {"fail", "warn", "errored"} for change in self.added)
+            or any(change.after == "fail" for change in self.other_changes)
+        )
+
+
+def compare_reports(first: ReportRun, second: ReportRun) -> ReportComparison:
+    """Compare outcomes once for both the report and changes commands."""
+    return _compare_results(first.results, second.results)
+
+
+def _compare_results(first: Results, second: Results) -> ReportComparison:
+    first_checks = {_identity(check): check for check in first.checks}
+    second_checks = {_identity(check): check for check in second.checks}
     shared = sorted(first_checks.keys() & second_checks.keys())
 
-    regressions: list[str] = []
-    improvements: list[str] = []
-    other_changes: list[str] = []
+    regressions: list[CheckDelta] = []
+    improvements: list[CheckDelta] = []
+    other_changes: list[CheckDelta] = []
     for identity in shared:
         before = first_checks[identity]
         after = second_checks[identity]
         if before.verdict is after.verdict:
             continue
-        change = f"{_display_identity(identity)}: {before.verdict.value} -> {after.verdict.value}"
+        change = CheckDelta(*identity, after.name, before.verdict.value, after.verdict.value)
         before_rank = _outcome_rank(before)
         after_rank = _outcome_rank(after)
         if after_rank > before_rank:
@@ -208,27 +254,55 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
             other_changes.append(change)
 
     added = [
-        f"{_display_identity(identity)}: {second_checks[identity].verdict.value}"
+        CheckDelta(
+            *identity, second_checks[identity].name, None, second_checks[identity].verdict.value
+        )
         for identity in sorted(second_checks.keys() - first_checks.keys())
     ]
     removed = [
-        f"{_display_identity(identity)}: {first_checks[identity].verdict.value}"
+        CheckDelta(
+            *identity, first_checks[identity].name, first_checks[identity].verdict.value, None
+        )
         for identity in sorted(first_checks.keys() - second_checks.keys())
     ]
 
+    before_scores = {suite.id: suite.score for suite in first.suites}
+    after_scores = {suite.id: suite.score for suite in second.suites}
+    return ReportComparison(
+        regressions,
+        improvements,
+        other_changes,
+        added,
+        removed,
+        calculate_coverage_status(first).value,
+        calculate_coverage_status(second).value,
+        [
+            {"suite_id": key, "before": before_scores.get(key), "after": after_scores.get(key)}
+            for key in sorted(before_scores.keys() | after_scores.keys())
+        ],
+    )
+
+
+def format_report_comparison(
+    first: ReportRun, second: ReportRun, *, comparison: ReportComparison | None = None
+) -> str:
+    """Render suite-score and outcome changes from the first report to the second report."""
+    comparison = comparison or compare_reports(first, second)
     lines = [
         f"Comparing {first.id} -> {second.id}",
-        f"Coverage status: {calculate_coverage_status(first.results).value} -> "
-        f"{calculate_coverage_status(second.results).value}",
+        f"Coverage status: {comparison.coverage_before} -> {comparison.coverage_after}",
         "Suite scores:",
         *_suite_score_changes(first.results, second.results),
         "",
     ]
-    _append_section(lines, "Regressions", regressions)
-    _append_section(lines, "Improvements", improvements)
-    _append_section(lines, "Other verdict changes", other_changes)
-    _append_section(lines, "Added checks", added)
-    _append_section(lines, "Removed checks", removed)
+    for heading, changes in (
+        ("Regressions", comparison.regressions),
+        ("Improvements", comparison.improvements),
+        ("Other verdict changes", comparison.other_changes),
+        ("Added checks", comparison.added),
+        ("Removed checks", comparison.removed),
+    ):
+        _append_section(lines, heading, [change.display() for change in changes])
     return "\n".join(lines).rstrip()
 
 
@@ -444,6 +518,7 @@ def _load_summary_run(
 def report_summary(results: Results) -> ReportSummary:
     return ReportSummary(
         id=results.run.id,
+        previous_run_id=results.run.previous_run_id,
         finished_at=results.run.finished_at,
         coverage_status=calculate_coverage_status(results),
         suite_scores=tuple(
@@ -452,18 +527,80 @@ def report_summary(results: Results) -> ReportSummary:
     )
 
 
-def report_summary_json(results: Results) -> str:
+def report_changes_summary(first: Results, second: Results) -> dict[str, object] | None:
+    """Summarize outcome changes and live run counts without retaining evidence or profiles."""
+    before, after = first.run.target, second.run.target
+    if (
+        first.run.redaction.applied
+        or second.run.redaction.applied
+        or first.run.id != second.run.previous_run_id
+        or first.run.id == second.run.id
+        or (before is not None and after is not None and before.database != after.database)
+    ):
+        return None
+    comparison = _compare_results(first, second)
+    changes = sorted(
+        [
+            *comparison.regressions,
+            *comparison.improvements,
+            *comparison.other_changes,
+            *comparison.added,
+        ],
+        key=lambda change: (change.suite_id, change.check_id),
+    )
+    groups = {
+        "new_failures": [
+            change
+            for change in changes
+            if change.after in {"fail", "errored"} and change.before not in {"fail", "errored"}
+        ],
+        "fixed_checks": [
+            change
+            for change in changes
+            if change.before in {"fail", "warn", "errored"} and change.after == "pass"
+        ],
+    }
+    counts = {}
+    if before is not None and after is not None:
+        for field in ("nodes", "relationships"):
+            old, new = getattr(before, field), getattr(after, field)
+            if old is not None and new is not None:
+                counts[field] = {"before": old, "after": new, "delta": new - old}
+    return {
+        "previous_run_id": first.run.id,
+        **{
+            key: [
+                {
+                    "suite_id": change.suite_id,
+                    "check_id": change.check_id,
+                    "before": change.before,
+                    "after": change.after,
+                }
+                for change in values[:SUMMARY_CHANGES_LIMIT]
+            ]
+            for key, values in groups.items()
+        },
+        "count_deltas": counts,
+        "dropped": {
+            key: max(0, len(values) - SUMMARY_CHANGES_LIMIT) for key, values in groups.items()
+        },
+    }
+
+
+def report_summary_json(results: Results, *, changes: dict[str, object] | None = None) -> str:
     summary = report_summary(results)
     return (
         json.dumps(
             {
                 "schema_version": "2.0",
                 "id": summary.id,
+                "previous_run_id": summary.previous_run_id,
                 "finished_at": summary.finished_at,
                 "coverage_status": summary.coverage_status.value,
                 "suite_scores": [
                     {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
                 ],
+                **({"changes": changes} if changes is not None else {}),
             },
             indent=2,
             sort_keys=True,
@@ -476,6 +613,9 @@ def _parse_summary(payload: object) -> ReportSummary:
     if not isinstance(payload, dict) or payload.get("schema_version") not in {"1.0", "2.0"}:
         raise ValueError("invalid report summary schema")
     run_id = payload["id"]
+    previous_run_id = payload.get("previous_run_id")
+    if previous_run_id is not None and not isinstance(previous_run_id, str):
+        raise ValueError("invalid previous run id")
     finished_at = payload["finished_at"]
     if not isinstance(run_id, str) or not isinstance(finished_at, str):
         raise ValueError("invalid report summary identity")
@@ -494,6 +634,7 @@ def _parse_summary(payload: object) -> ReportSummary:
     status_key = "status" if payload["schema_version"] == "1.0" else "coverage_status"
     return ReportSummary(
         id=run_id,
+        previous_run_id=previous_run_id,
         finished_at=finished_at,
         coverage_status=CoverageStatus(payload[status_key]),
         suite_scores=tuple(sorted(scores)),

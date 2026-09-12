@@ -257,6 +257,12 @@ def test_concurrent_latest_publication_is_serialized(tmp_path):
     assert latest_report.is_file()
     assert load_results(latest_results).run.id in set(run_ids.values())
     assert {record.id for record in discover_report_runs(runs_dir)} == set(run_ids.values())
+    chain = {
+        record.id: record.results.run.previous_run_id for record in discover_report_runs(runs_dir)
+    }
+    latest = load_results(latest_results).run.id
+    assert chain[latest] == next(run_id for run_id in chain if run_id != latest)
+    assert chain[chain[latest]] is None
 
 
 def test_artifact_writer_uses_target_neutral_id_for_redacted_runs(tmp_path):
@@ -1902,6 +1908,54 @@ def test_forced_history_collision_never_overwrites_prior_run(tmp_path, monkeypat
     with pytest.raises(FileExistsError):
         _write_run_artifacts(second, tmp_path)
     assert (tmp_path / "collision" / "results.json").read_bytes() == previous
+
+
+def test_publication_rechecks_lineage_after_rendering_without_holding_the_lock(
+    tmp_path, monkeypatch
+):
+    from filelock import FileLock
+
+    from graphcheck.application import artifacts as artifacts_module
+
+    first = load_results(FIXTURES / "results.complete.json")
+    second, third = first.model_copy(deep=True), first.model_copy(deep=True)
+    first.run.id, second.run.id, third.run.id = "first", "second", "third"
+    _write_run_artifacts(first, tmp_path)
+    real_render = artifacts_module.render_run_artifacts
+    interleaved = False
+
+    def render(results, **kwargs):
+        nonlocal interleaved
+        with FileLock(str(tmp_path / ".latest.lock"), timeout=0):
+            pass  # Rendering must allow report readers and other publishers to acquire the lock.
+        rendered = real_render(results, **kwargs)
+        if results is second and not interleaved:
+            interleaved = True
+            _write_run_artifacts(third, tmp_path)
+        return rendered
+
+    monkeypatch.setattr(artifacts_module, "render_run_artifacts", render)
+    _write_run_artifacts(second, tmp_path)
+    assert interleaved
+    assert third.run.previous_run_id == first.run.id
+    assert second.run.previous_run_id == third.run.id
+    assert load_results(tmp_path / "latest/results.json").run.previous_run_id == third.run.id
+    assert (
+        json.loads((tmp_path / "latest/summary.json").read_text())["changes"]["previous_run_id"]
+        == third.run.id
+    )
+    original = (tmp_path / third.run.id / "results.json").read_bytes()
+    _write_run_artifacts(third, tmp_path)
+    assert (tmp_path / third.run.id / "results.json").read_bytes() == original
+
+
+def test_corrupt_latest_does_not_prevent_publishing_a_new_run(tmp_path):
+    latest = tmp_path / "latest"
+    latest.mkdir()
+    (latest / "results.json").write_text("{", encoding="utf-8")
+    result = load_results(FIXTURES / "results.complete.json")
+    _write_run_artifacts(result, tmp_path)
+    assert load_results(latest / "results.json").run.id == result.run.id
 
 
 @pytest.mark.parametrize("exhaust", [False, True])
