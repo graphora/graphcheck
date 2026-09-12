@@ -177,6 +177,8 @@ class FakeNeo4jClient:
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": 1 if params == {"property": "id"} else "Ada"}]
+        if query.startswith("MATCH (n:") and "edge_count" in query:
+            return [{"relType": "OWNS", "edge_count": 2}]
         if query.startswith("MATCH (n:") and "OPTIONAL MATCH" in query:
             return [{"relType": None, "degree": 0, "nodes_at_degree": 1}]
         if query.startswith("MATCH (n:") and "nodes_at_degree" in query:
@@ -601,7 +603,8 @@ def test_profile_batches_inventory_and_reuses_it_for_coverage() -> None:
     baseline = profile(cast(Neo4jClient, client))
 
     assert baseline.status is ProfileStatus.COMPLETE
-    assert len(client.calls) == 24  # 8 pre-existing + 16 from degree_distribution collection
+    # 8 pre-existing + 2 pair-ranking + 16 from degree_distribution collection
+    assert len(client.calls) == 26
     assert sum(query.startswith("CALL {\n  MATCH (n:") for query, _ in client.calls) == 2
     assert sum(query.startswith("CALL {\n  MATCH ()-[r:") for query, _ in client.calls) == 2
     assert not any("WHERE n[$property]" in query for query, _ in client.calls)
@@ -957,8 +960,18 @@ def test_percentile_from_histogram_empty_returns_zero():
 
 
 class _CappingFakeClient:
+    def __init__(self):
+        self.histogram_queries = 0
+
     def run_read(self, query, params=None, *, timeout_s=None):
+        if "edge_count" in query:
+            return [
+                {"relType": "TypeA", "edge_count": 100},
+                {"relType": "TypeB", "edge_count": 50},
+                {"relType": "TypeC", "edge_count": 1},
+            ]
         if "OPTIONAL MATCH" in query:
+            self.histogram_queries += 1
             return [
                 {"relType": "TypeA", "degree": 10, "nodes_at_degree": 10},
                 {"relType": "TypeB", "degree": 5, "nodes_at_degree": 10},
@@ -982,3 +995,15 @@ def test_collect_degree_distribution_targets_caps_label_type_pairs_by_edge_count
     }
     assert kept_types == {"TypeA", "TypeB"}
     assert partial_reason_code == "degree_incomplete"
+
+
+def test_collect_degree_distribution_targets_bounds_pairs_before_collecting_histograms():
+    """The cap must limit database work, not just serialized output."""
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+    client = _CappingFakeClient()
+
+    profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, client), labels, [], _pair_cap=0
+    )
+
+    assert client.histogram_queries == 0
