@@ -633,9 +633,10 @@ def _register_builtin_pack_compilers() -> None:
     # The pack registry remains model-only. Importing the C1 bridge installs compiler
     # callbacks for the template names carried by C3's data-only core pack.
     from graphcheck.engine import core_pack as loaded_core_pack
+    from graphcheck.engine import graphrag_pack as loaded_graphrag_pack
     from graphcheck.engine import pii_pack as loaded_pii_pack
 
-    del loaded_core_pack, loaded_pii_pack
+    del loaded_core_pack, loaded_graphrag_pack, loaded_pii_pack
 
 
 _register_builtin_pack_compilers()

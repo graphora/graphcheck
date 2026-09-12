@@ -410,6 +410,47 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(neo4j_profile, tmp_path
         assert len(delta["appeared"]) + len(delta["disappeared"]) <= delta["cap"] == 100
         assert delta["dropped"] == 100
         assert delta["before_truncated"] and delta["after_truncated"]
+        # Exercise duplicate discovery on the same public graph, with a configured model.
+        with (
+            GraphDatabase.driver(
+                neo4j_profile.uri, auth=(neo4j_profile.user, neo4j_profile.password)
+            ) as driver,
+            driver.session(database=neo4j_profile.database) as session,
+        ):
+            session.run(
+                "MATCH (n:HostileEmailAddress) SET n.name = 'email-' + toString(n.id)"
+            ).consume()
+        duplicate_suite = {
+            "suite": "graphrag-scale",
+            "conformance": [
+                {
+                    "id": "bounded-duplicates",
+                    "check": "near_duplicate_entities",
+                    "with": {
+                        "document_label": "HostileEmailAddress",
+                        "chunk_label": "HostileEmailAddress",
+                        "entity_label": "HostileEmailAddress",
+                        "document_chunk_rel": "EMAILED",
+                        "chunk_entity_rel": "EMAILED",
+                        "embedding_property": "embedding",
+                        "sample_size": 1000,
+                        "threshold": 1.0,
+                    },
+                }
+            ],
+        }
+        (tmp_path / "checks/graphrag-scale.yml").write_text(
+            yaml.safe_dump(duplicate_suite), encoding="utf-8"
+        )
+        started = time.monotonic()
+        run = _cli(tmp_path, "run", "--suite", "graphrag-scale", timeout=60)
+        assert time.monotonic() - started < 60
+        _assert_safe(run, 0)
+        check = _run_payload(tmp_path)["checks"][0]
+        assert check["verdict"] == "pass", check["error"]
+        assert check["measured"]["population"] == case["nodes"]
+        assert 0 < check["measured"]["sample_size"] <= 1000
+        assert check["estimate"]["sample_size"] <= 1000 and check["estimate"]["ci"] is None
     finally:
         with (
             GraphDatabase.driver(

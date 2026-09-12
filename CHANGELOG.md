@@ -22,6 +22,21 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Changes output includes appeared and disappeared evidence element IDs per check, sharing the
   smaller input evidence cap across both directions, counting dropped deltas, and identifying
   truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
+- Optional GraphRAG pack enabled by `graphcheck init --pack graphrag`, with configurable
+  Document, Chunk, and Entity labels, relationship types/directions, extraction relationship
+  selection, and name/embedding properties in `graphcheck.yml`.
+- GraphRAG provenance checks `orphan_chunks`, `entity_without_provenance`, and
+  `dangling_extraction_relationships`, with exhaustive counts, capped element-ID evidence,
+  and missing configured paths. Chunks may have multiple documents; entity provenance requires
+  a direct chunk link, and extraction relationships are flagged when either endpoint lacks one.
+- Seeded `near_duplicate_entities` sampling with normalized-name equality or character-bigram
+  Dice similarity strictly above a configurable threshold (default 0.9). Connected duplicate
+  groups include normalized keys and element IDs. Samples default to 1,000 names, allow up to
+  2,000 subject to engine limits, and exclude non-string names and names over 256 characters.
+  Sampled results state sample size/population without inferring a population confidence interval.
+- GraphRAG metadata/schema validation, planted and clean builder fixtures, and opt-in fraud-ring
+  and public-scale acceptance coverage. [GraphRAG documentation](docs/graphrag.md) details the new
+  check semantics requiring separate approval.
 - Added `engine.result_row_limit` project configuration, shared by CLI and MCP, with a default
   ceiling of 100,000 competency rows and strict positive-integer validation.
 - Baseline schema 1.1 preserves declared RANGE index property order while reading legacy 1.0
@@ -30,6 +45,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- GraphRAG checks report `skipped:model_absent` with an explicit reason when the model is
+  unconfigured or any configured role label has no nodes. Completed runs containing only these
+  skips exit 0 with a null score and incomplete report coverage. Missing relationship types remain
+  defects when role populations exist; actual execution errors remain errors. This new skip/exit
+  policy requires separate approval.
+- `no_orphans` accepts optional `to_label` filtering for the opposite endpoint; omitting it
+  preserves existing behavior. This additional check semantic requires separate approval.
 - Runs prepare suites once, prefer the C-backed safe YAML parser, and show loading, connecting,
   running, and report-writing stages in interactive terminals.
 - Graph inventory uses one combined request, and built-in same-label completeness checks share

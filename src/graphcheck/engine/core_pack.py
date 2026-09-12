@@ -120,14 +120,21 @@ def _direction(config: dict[str, object], *, default: str = "any") -> str:
 
 
 def _relationship_path(
-    direction: str, *, relationship_type: str | None = None, other_label: str | None = None
+    direction: str,
+    *,
+    relationship_type: str | None = None,
+    other_label: str | None = None,
+    variable: str = "n",
+    label: str | None = None,
+    relationship_variable: str = "r",
 ) -> str:
-    relationship = relationship_pattern("r", relationship_type)
+    relationship = relationship_pattern(relationship_variable, relationship_type)
+    node = node_pattern(variable, label)
     other = node_pattern("other", other_label)
     return {
-        "out": f"(n)-{relationship}->{other}",
-        "in": f"(n)<-{relationship}-{other}",
-        "any": f"(n)-{relationship}-{other}",
+        "out": f"{node}-{relationship}->{other}",
+        "in": f"{node}<-{relationship}-{other}",
+        "any": f"{node}-{relationship}-{other}",
     }[direction]
 
 
@@ -189,7 +196,13 @@ def _relationship_predicate_queries(
     ).strip()
 
 
-def _degree_queries(*, node: str, pattern: str, violation: str) -> tuple[str, str]:
+def _degree_queries(
+    *,
+    node: str,
+    pattern: str,
+    violation: str,
+    evidence_projection: str | None = None,
+) -> tuple[str, str]:
     return dedent(
         f"""
         {_SCHEMA_CATALOG}
@@ -210,7 +223,7 @@ def _degree_queries(*, node: str, pattern: str, violation: str) -> tuple[str, st
         WITH n, count(r) AS degree
         WHERE {violation}
         WITH n ORDER BY elementId(n) LIMIT $evidence_cap
-        RETURN collect({_node_pointer("n")}) AS evidence
+        RETURN collect({evidence_projection or _node_pointer("n")}) AS evidence
         """
     ).strip()
 
@@ -266,20 +279,26 @@ def _compile_cardinality(
 
 @register_conformance_compiler("no_orphans")
 def _compile_no_orphans(
-    config: dict[str, object], evidence_cap: int, sample_seed: int
+    config: dict[str, object],
+    evidence_cap: int,
+    sample_seed: int,
+    *,
+    evidence_projection: str | None = None,
 ) -> ConformancePlan:
     del sample_seed
     label = _string(config, "label")
     rel_type = _optional_string(config, "rel_type")
+    to_label = _optional_string(config, "to_label")
     direction = _direction(config)
     queries = _degree_queries(
         node=node_pattern("n", label),
-        pattern=_relationship_path(direction, relationship_type=rel_type),
+        pattern=_relationship_path(direction, relationship_type=rel_type, other_label=to_label),
         violation="degree = 0",
+        evidence_projection=evidence_projection,
     )
     params = {
         **_schema_params(
-            labels=[label],
+            labels=[label, *([to_label] if to_label is not None else [])],
             relationship_types=[rel_type] if rel_type is not None else [],
             evidence_cap=evidence_cap,
         ),

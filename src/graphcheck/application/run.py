@@ -97,7 +97,7 @@ def execute_run(
             max_concurrency=max_concurrency, result_row_limit=config.engine.result_row_limit
         )
         deadline = time.monotonic() + engine_config.time_budget_s
-        suite_inputs = load_suite_inputs(checks_dir, request.suite_ids)
+        suite_inputs = load_suite_inputs(checks_dir, request.suite_ids, config.packs)
         check_count = sum(
             not request.tags or any(tag in check.tags for tag in request.tags)
             for item in suite_inputs

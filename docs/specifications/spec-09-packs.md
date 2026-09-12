@@ -322,6 +322,14 @@ Every failing PII result contains node evidence pointers. Missing/malformed cand
 query, timeout, schema warning, population/result disagreement, invalid checksum metadata, or
 missing pointer produces `errored`; none can become a pass or a silent skip.
 
+## GraphRAG pack
+
+`src/graphcheck/packs/graphrag.yml` declares `orphan_chunks`,
+`entity_without_provenance`, `dangling_extraction_relationships`, and
+`near_duplicate_entities`. See [GraphRAG configuration and semantics](../graphrag.md) for
+the configurable model, sampling limits, evidence contract, and new semantics requiring
+separate approval, including the `model_absent` skip and zero-exit policy.
+
 ## Runtime consumption
 
 C1 consumes packs in this order:

@@ -235,6 +235,163 @@
       "title": "EvidenceMetadata",
       "type": "object"
     },
+    "GraphRAGChecksMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "dangling_extraction_relationships": {
+          "$ref": "#/$defs/GraphRAGProvenanceMetadata",
+          "properties": {
+            "template": {
+              "const": "dangling_extraction_relationships"
+            }
+          }
+        },
+        "entity_without_provenance": {
+          "$ref": "#/$defs/GraphRAGProvenanceMetadata",
+          "properties": {
+            "template": {
+              "const": "entity_without_provenance"
+            }
+          }
+        },
+        "near_duplicate_entities": {
+          "$ref": "#/$defs/GraphRAGDuplicateMetadata"
+        },
+        "orphan_chunks": {
+          "$ref": "#/$defs/GraphRAGProvenanceMetadata",
+          "properties": {
+            "template": {
+              "const": "orphan_chunks"
+            }
+          }
+        }
+      },
+      "required": [
+        "orphan_chunks",
+        "entity_without_provenance",
+        "dangling_extraction_relationships",
+        "near_duplicate_entities"
+      ],
+      "title": "GraphRAGChecksMetadata",
+      "type": "object"
+    },
+    "GraphRAGDuplicateMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "estimate": {
+          "$ref": "#/$defs/EstimateMetadata"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "$ref": "#/$defs/StrictTrueLiteral"
+        },
+        "template": {
+          "const": "near_duplicate_entities",
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled",
+        "estimate"
+      ],
+      "title": "GraphRAGDuplicateMetadata",
+      "type": "object"
+    },
+    "GraphRAGPackMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/GraphRAGChecksMetadata"
+        },
+        "pack": {
+          "const": "graphrag",
+          "title": "Pack",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.1.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pack",
+        "version",
+        "checks"
+      ],
+      "title": "GraphRAGPackMetadata",
+      "type": "object"
+    },
+    "GraphRAGProvenanceMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "catches": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "does_not_catch": {
+          "$ref": "#/$defs/NonWhitespaceString"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceMetadata"
+        },
+        "requires": {
+          "items": {
+            "$ref": "#/$defs/CapabilityRequirement"
+          },
+          "minItems": 1,
+          "title": "Requires",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sampled": {
+          "const": false,
+          "title": "Sampled",
+          "type": "boolean"
+        },
+        "template": {
+          "enum": [
+            "orphan_chunks",
+            "entity_without_provenance",
+            "dangling_extraction_relationships"
+          ],
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "catches",
+        "does_not_catch",
+        "requires",
+        "evidence",
+        "template",
+        "sampled"
+      ],
+      "title": "GraphRAGProvenanceMetadata",
+      "type": "object"
+    },
     "NonWhitespaceString": {
       "minLength": 1,
       "pattern": "\\S",
@@ -588,6 +745,7 @@
   "discriminator": {
     "mapping": {
       "core": "#/$defs/CorePackMetadata",
+      "graphrag": "#/$defs/GraphRAGPackMetadata",
       "pii": "#/$defs/PiiPackMetadata"
     },
     "propertyName": "pack"
@@ -598,6 +756,9 @@
     },
     {
       "$ref": "#/$defs/PiiPackMetadata"
+    },
+    {
+      "$ref": "#/$defs/GraphRAGPackMetadata"
     }
   ],
   "x-pack-version": "0.1.0"
