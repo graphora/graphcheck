@@ -16,8 +16,12 @@ from graphcheck.reporting.writer import load_results
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
 
 
+@pytest.mark.parametrize(
+    ("connection_field", "changed_value"),
+    [("uri", "bolt://another-server:7687"), ("user", "different-reader")],
+)
 def test_runs_pin_existing_profiles_and_hash_effective_config_without_profiling(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, connection_field, changed_value
 ):
     write_default_project(tmp_path)
     write_default_profiles(tmp_path)
@@ -52,7 +56,11 @@ def test_runs_pin_existing_profiles_and_hash_effective_config_without_profiling(
     profiles["profiles"]["local"]["password"] = "another-test-password"
     profiles_path.write_text(yaml.safe_dump(profiles), encoding="utf-8")
     assert run().results.run.config_hash == third.results.run.config_hash
-    profiles["profiles"]["local"]["uri"] = "bolt://another-server:7687"
+    monkeypatch.setenv("GRAPHCHECK_TEST_PASSWORD", "environment-test-password")
+    profiles["profiles"]["local"]["password_env"] = "GRAPHCHECK_TEST_PASSWORD"
+    profiles_path.write_text(yaml.safe_dump(profiles), encoding="utf-8")
+    assert run().results.run.config_hash == third.results.run.config_hash
+    profiles["profiles"]["local"][connection_field] = changed_value
     profiles_path.write_text(yaml.safe_dump(profiles), encoding="utf-8")
     assert run().results.run.config_hash != third.results.run.config_hash
 

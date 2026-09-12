@@ -191,7 +191,11 @@ def execute_run(
             "project": config.model_dump(mode="json", exclude={"generate", "concurrency"}),
             "concurrency": request.concurrency or config.concurrency,
             "profile": profile_name,
-            "connection": {"uri": selected_profile.uri, "database": selected_profile.database}
+            "connection": {
+                "uri": selected_profile.uri,
+                "database": selected_profile.database,
+                "user": selected_profile.user,
+            }
             if selected_profile is not None
             else None,
             "verify_read_only_credential": request.verify_read_only_credential,

@@ -44,6 +44,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Run configuration hashes include the authenticated username so permission changes between
+  users have distinct provenance, while passwords and password environment variables stay excluded.
 - Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,
   so the changes acceptance test can load its Cypher parser and seed data.
 - The fraud-ring changes acceptance test uses the explicit `node_element_id` evidence alias,
