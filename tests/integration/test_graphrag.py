@@ -143,6 +143,25 @@ def test_custom_reversed_model_and_multiple_documents_are_supported(neo4j_profil
         assert all(check["verdict"] == "pass" for check in _run_payload(tmp_path)["checks"])
 
 
+@pytest.mark.parametrize("vector", ["[1, 2]", "[0.125, -0.25]", "[1, 0.5]"])
+def test_stored_numeric_embeddings_pass(neo4j_profile, tmp_path, vector):
+    _enable_pack(tmp_path, neo4j_profile)
+    with _seeded_graph(
+        neo4j_profile, (HOSTILE / "llm-kg-builder-clean.cypher").read_text(encoding="utf-8")
+    ):
+        # Write and read in separate transactions to exercise stored arrays, not list literals.
+        _write(neo4j_profile, f"MATCH (n:Chunk) SET n.embedding = {vector}")
+        _assert_cli_exit(_cli(tmp_path, "run", "--suite", "graphrag"), 0)
+        result = next(
+            check
+            for check in _run_payload(tmp_path)["checks"]
+            if check["id"] == "embedding_consistency"
+        )
+        assert result["verdict"] == "pass", result["error"]
+        assert result["measured"] == {"population": 2, "violations": 0, "expected_dimension": 2}
+        assert result["evidence"] is None and result["estimate"] is False
+
+
 @pytest.mark.parametrize(
     ("value", "defect", "dimension"),
     [

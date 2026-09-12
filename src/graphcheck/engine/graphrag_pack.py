@@ -25,10 +25,12 @@ MAX_NAME_LENGTH = 256
 def _compile_embedding_consistency(
     config: dict, evidence_cap: int, sample_seed: int
 ) -> ConformancePlan:
+    # Neo4j 5.26's stored-array type path requires concrete, non-null element types.
     # Inspect each vector in the database; aggregate and transfer only scalar summaries.
     scan = f"""MATCH {node_pattern("n", config["chunk_label"])}
 WITH n, {property_access("n", config["embedding_property"])} AS vector
-WITH n, vector, CASE WHEN vector IS :: LIST<INTEGER | FLOAT> THEN vector END AS numeric
+WITH n, vector, CASE WHEN vector IS :: LIST<INTEGER NOT NULL>
+                      OR vector IS :: LIST<FLOAT NOT NULL> THEN vector END AS numeric
 WITH n, CASE WHEN numeric IS NOT NULL THEN size(numeric) END AS dimension,
      CASE WHEN vector IS NULL THEN 'missing'
           WHEN numeric IS NULL THEN 'invalid_type'

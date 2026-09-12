@@ -58,6 +58,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- GraphRAG embedding consistency accepts stored numeric arrays on Neo4j 5.26 LTS by using
+  concrete non-null integer/float list predicates. GraphRAG integration tests now run in every
+  supported CI lane, including stored integer, float, and mixed-numeric embedding regressions.
 - Drift checks retain partial run status when using present measurements from incomplete
   baselines, without changing their measured verdict or exit-code precedence.
 - Connection and credential preflight now share the run deadline with check execution.
