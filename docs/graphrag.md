@@ -1,6 +1,6 @@
 # GraphRAG pack
 
-Enable the four checks with `graphcheck init --pack graphrag`, then edit the example model
+Enable the five checks with `graphcheck init --pack graphrag`, then edit the example model
 in `graphcheck.yml`. Run only this pack with `graphcheck run --suite graphrag`.
 
 ```yaml
@@ -28,9 +28,9 @@ hard-coded into a query. Identifiers are escaped, including spaces and backticks
 are `out`, `in`, or `any`, relative to Document for the document/chunk link and Chunk for the
 chunk/entity link. Omit `extraction_rel_types` to inspect all relationships whose endpoints
 both have the configured entity label. An explicit list must be nonempty and unique.
-`embedding_property` is reserved model configuration; these four checks do not inspect embeddings.
+`embedding_property` selects the numeric list inspected on every configured chunk.
 
-Enabling the pack adds a virtual `graphrag` suite containing all four checks, tagged `graphrag`.
+Enabling the pack adds a virtual `graphrag` suite containing all five checks, tagged `graphrag`.
 Its effective configuration contributes to the suite hash and sampling seed. Setting
 `enabled: false` removes that automatic suite. Explicit GraphRAG checks in other suites still run.
 Do not name another suite `graphrag` while the automatic suite is enabled.
@@ -132,14 +132,47 @@ the engine's evidence limit, with truncation reported.
   but no confidence interval or population duplicate rate is claimed: discovering a pair requires
   sampling both endpoints, so the individual Bernoulli assumption behind a Wilson interval is invalid.
 
+### Embedding consistency
+
+`embedding_consistency` inspects `embedding_property` on every node with the configured chunk
+label. Missing properties, nonnumeric/non-list values, empty lists, NaN-containing lists, and
+all-zero lists fail. Integer and float lists are supported; native Neo4j `VECTOR` properties are
+reported as `invalid_type`. The check requires only read access and does not depend on APOC.
+
+The reference dimension is the most frequent dimension among otherwise valid vectors; ties
+choose the smaller dimension. Other valid vectors of a different size fail as `wrong_dimension`.
+If no valid vectors exist, the reference is null and each chunk is still reported with its defect.
+This detects inconsistent sizes, not a uniformly incorrect dimension or different embedding
+models producing the same size. Each chunk counts once, with defect precedence `missing`,
+`invalid_type`, `empty`, `nan`, `zero`, then `wrong_dimension`.
+
+Counts are exhaustive. Neo4j scans and aggregates scalar dimensions, then counts classified
+chunks; a separate query collects capped findings only on failure. No vectors cross the driver
+boundary or enter Python memory, including when the graph exceeds the sampling threshold.
+The database evaluates one vector per row and groups scalar dimensions rather than collecting
+vectors. Evidence ordering happens after dropping vector values. Runtime scales with the total
+number of embedding components scanned; this check is not sampled.
+
+`measured.expected_dimension` records the reference. Each `measured.findings` item carries
+`node_id`, `dimension` (null for missing/invalid types), and `defect`; standard evidence contains
+the corresponding element pointers and marks truncation. The summary count is never capped.
+
+Copy [`examples/graphrag/graphrag.yml`](../examples/graphrag/graphrag.yml) into your `checks/`
+directory for an explicit five-check suite with editable model fields. It needs no pack configuration.
+
 ## Verification
 
 Unit tests cover configuration, metadata/schema parity, escaping, missing models, failure isolation,
 paths and evidence IDs, normalization, similarity thresholds, deterministic sampling, limits, and
 malformed-result rejection. Opt-in Neo4j tests cover the planted and clean `llm-kg-builder`
 fixtures, the fraud-ring fixture, wholly missing links, wrong endpoint labels, and reversed custom
-models. The existing public-scale hostile test also exercises duplicate discovery on its 265,214
-nodes with a 1,000-name limit and a 60-second CLI ceiling.
+models, embedding defect types, tied dimensions, all-invalid vectors, and evidence truncation.
+The fast hostile lane runs the whole pack against both builder variants, asserting every planted
+element ID. Singleton labels and chunks without entity links remain fixture-only assertions.
+The public-scale hostile test runs all five checks on its 265,214 nodes and 420,045 relationships,
+with a 1,000-name sample limit and a 60-second ceiling for the complete pack CLI run. It plants
+and asserts all four embedding defects across that population. This is an enforced test budget,
+not a timing measurement; run the scale lane to certify it on your host.
 
 ```sh
 pytest tests/unit/engine/test_graphrag_pack.py

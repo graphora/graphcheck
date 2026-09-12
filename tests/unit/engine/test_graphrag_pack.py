@@ -113,13 +113,13 @@ def test_absent_model_skips_every_check_with_reason_and_exit_zero(missing):
     client = Client(missing=missing)
     results = Engine(client).run_suite(suite(), target=TARGET)
     assert results.run.exit_code == 0 and results.run.run_status == "complete"
-    assert results.score is None and results.totals.skipped == 4
+    assert results.score is None and results.totals.skipped == len(GRAPHRAG_CHECK_NAMES)
     for check in results.checks:
         assert check.verdict is Verdict.SKIPPED and check.skip_reason is SkipReason.MODEL_ABSENT
         assert check.error is None and check.measured is None
         assert missing[0] in present_check(check).skip_reason.explanation
         assert present_check(check).evaluation_label == "Not evaluated"
-    assert len(client.calls) == 4 and all(call[2] for call in client.calls)
+    assert len(client.calls) == len(GRAPHRAG_CHECK_NAMES) and all(call[2] for call in client.calls)
     assert "No checks were evaluated" in present_results(results).primary_sentence
     Results.model_validate_json(results.model_dump_json(by_alias=True))
 
@@ -147,9 +147,14 @@ def test_absent_model_telemetry_reconciles_without_emitting_model_details():
     )
     assert results.run.exit_code == 0
     assert not any(isinstance(event, EngineFaulted) for event in collector.events)
-    assert len([event for event in collector.events if isinstance(event, CheckProcessed)]) == 4
+    assert len([event for event in collector.events if isinstance(event, CheckProcessed)]) == len(
+        GRAPHRAG_CHECK_NAMES
+    )
     finished = next(event for event in collector.events if isinstance(event, RunFinished))
-    assert finished.skipped_unsupported_count == 4 and finished.engine_error_count == 0
+    assert (
+        finished.skipped_unsupported_count == len(GRAPHRAG_CHECK_NAMES)
+        and finished.engine_error_count == 0
+    )
 
 
 def test_malformed_model_preflight_is_an_error():
@@ -225,7 +230,7 @@ def test_custom_model_is_bound_and_init_scaffolds_config(tmp_path, monkeypatch):
     assert config.packs.graphrag.model.embedding_property == "embedding"
     config.packs.graphrag.model.entity_label = "Custom Entity"
     checks = load_suite_inputs(tmp_path / "checks", ["graphrag"], config.packs)[0].suite.checks
-    assert len(checks) == 4
+    assert len(checks) == len(GRAPHRAG_CHECK_NAMES)
     assert all(check.spec.with_["entity_label"] == "Custom Entity" for check in checks)
 
 
@@ -367,3 +372,113 @@ def test_sampled_clean_result_keeps_sampling_notice():
     )
     assert result.passed and result.estimate.sample_size == 1
     assert "no population duplicate rate" in result.measured["completeness_notice"]
+
+
+@pytest.mark.parametrize(
+    ("defect", "dimension"),
+    [
+        ("missing", None),
+        ("invalid_type", None),
+        ("empty", 0),
+        ("nan", 4),
+        ("zero", 4),
+        ("wrong_dimension", 3),
+    ],
+)
+def test_embedding_findings_retain_defect_dimension_and_element_id(defect, dimension):
+    record = {
+        "node_id": "chunk:1",
+        "dimension": dimension,
+        "defect": defect,
+        "pointer": {"kind": "node", "id": "chunk:1", "labels": ["Chunk"]},
+    }
+    client = Client(
+        row={"schema_ok": True, "population": 10, "violation_count": 1, "expected_dimension": 4},
+        evidence=[record],
+    )
+    result = Engine(client).run_suite(suite(["embedding_consistency"]), target=TARGET).checks[0]
+    assert result.verdict is Verdict.FAIL, result.error
+    assert result.measured["findings"] == [
+        {"node_id": "chunk:1", "dimension": dimension, "defect": defect}
+    ]
+    assert result.measured["expected_dimension"] == 4 and result.estimate is False
+    assert result.evidence.elements[0].id == "chunk:1"
+    assert defect in result.evidence.message and len(client.calls) == 3
+
+
+def test_clean_embeddings_do_not_fetch_evidence_or_vectors():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 265214,
+            "violation_count": 0,
+            "expected_dimension": 1536,
+        }
+    )
+    result = Engine(client).run_suite(suite(["embedding_consistency"]), target=TARGET).checks[0]
+    assert result.verdict is Verdict.PASS and result.evidence is None
+    assert result.measured["population"] == 265214 and len(client.calls) == 2
+    plan = CypherCompiler().compile(suite(["embedding_consistency"]).checks[0])
+    assert not plan.sampled and "LIMIT" not in plan.query.rsplit("MATCH", 1)[1]
+    assert "collect(" not in plan.query
+    assert "ORDER BY frequency DESC, dimension LIMIT 1" in plan.query
+    assert "LIMIT $evidence_cap" in plan.evidence_query
+    assert "vector" not in plan.evidence_query.rsplit("RETURN", 1)[1]
+    escaped = CypherCompiler().compile(
+        suite(["embedding_consistency"], model={**MODEL, "embedding_property": "vec`tor"}).checks[0]
+    )
+    assert "n.`vec``tor`" in escaped.query and "n.`vec``tor`" in escaped.evidence_query
+
+
+def test_embedding_evidence_is_capped_without_capping_violation_count():
+    plan = CypherCompiler(evidence_cap=1).compile(suite(["embedding_consistency"]).checks[0])
+    result = VerdictEvaluator().evaluate(
+        plan,
+        [
+            {
+                "schema_ok": True,
+                "population": 100,
+                "violation_count": 100,
+                "expected_dimension": None,
+                "evidence": [
+                    {
+                        "node_id": "n:1",
+                        "dimension": None,
+                        "defect": "missing",
+                        "pointer": {"kind": "node", "id": "n:1", "labels": ["Chunk"]},
+                    }
+                ],
+            }
+        ],
+    )
+    assert not result.passed and result.measured["violations"] == 100
+    assert result.evidence.truncated and len(result.evidence.elements) == 1
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"violation_count": 11},
+        {"expected_dimension": -1},
+        {"expected_dimension": True},
+        {"evidence": []},
+        {"evidence": [{"node_id": "n:1", "defect": "zero"}]},
+        {"evidence": [{"node_id": "n:1", "defect": "zero", "dimension": -1}]},
+    ],
+)
+def test_embedding_malformed_results_are_errors(patch):
+    plan = CypherCompiler().compile(suite(["embedding_consistency"]).checks[0])
+    with pytest.raises(GraphCheckError):
+        VerdictEvaluator().evaluate(
+            plan,
+            [
+                {
+                    "schema_ok": True,
+                    "population": 10,
+                    "violation_count": 1,
+                    "expected_dimension": 4,
+                    "evidence": [],
+                    **patch,
+                }
+            ],
+        )
