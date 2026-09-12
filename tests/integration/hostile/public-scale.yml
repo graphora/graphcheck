@@ -4,3 +4,14 @@ competency:
     question: Can GraphCheck count the public graph without materializing it?
     query: MATCH (n:HostileEmailAddress) RETURN count(n) AS nodes
     expect: {rows: {exactly: 1}, columns: [nodes], equals: [265214]}
+drift:
+  - id: public-graph-schema-inventory
+    metric: schema_inventory
+    target: {}
+    baseline: latest
+    tolerance: {max: 0}
+  - id: public-graph-degree-max
+    metric: degree_distribution
+    target: {label: HostileEmailAddress, quantile: max, direction: both}
+    baseline: latest
+    tolerance: {max_increase_pct: 100}

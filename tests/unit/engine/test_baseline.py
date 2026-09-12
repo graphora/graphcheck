@@ -396,3 +396,68 @@ def test_directory_view_pins_aliases_missing_and_failed_reads(tmp_path, monkeypa
     with pytest.raises(GraphCheckError):
         provider.resolve("broken", "node_count", {})
     assert provider.fresh().resolve("broken", "node_count", {}).value == 30
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ({"label": "Account", "quantile": "p50", "direction": "both"}, 2.0),
+        ({"label": "Account", "type": "OWNS", "quantile": "max", "direction": "out"}, 1.0),
+        ({"type": "OWNS", "quantile": "p95", "direction": "in"}, 1.0),
+    ],
+)
+def test_c4_degree_distribution_list_resolves_targets(target, expected):
+    profile = _c4_profile()
+    profile["statistics"]["degree_distribution"] = [
+        {"label": "Account", "type": None, "quantile": "p50", "direction": "both", "value": 2.0},
+        {"label": "Account", "type": "OWNS", "quantile": "max", "direction": "out", "value": 1.0},
+        {"label": None, "type": "OWNS", "quantile": "p95", "direction": "in", "value": 1.0},
+    ]
+
+    value = MappingBaselineProvider({"latest": profile}).resolve(
+        "latest", "degree_distribution", target
+    )
+
+    assert value == BaselineValue(value=expected)
+
+
+def test_c4_schema_inventory_resolves_value_zero_with_label_evidence():
+    profile = _c4_profile()
+    profile["schema"]["labels"] = [
+        {"name": "Customer", "count": 125},
+        {"name": "Account", "count": 300},
+    ]
+
+    value = MappingBaselineProvider({"latest": profile}).resolve("latest", "schema_inventory", {})
+
+    assert value.value == 0
+    assert {e.id for e in value.evidence} == {
+        "label:Customer",
+        "label:Account",
+        "relationship_type:CONTROLS",
+        "relationship_type:TRANSFERRED_TO",
+    }
+    assert all(e.kind == "aggregate" for e in value.evidence)
+
+
+def test_c4_schema_inventory_includes_label_scoped_property_evidence():
+    profile = _c4_profile()
+    profile["schema"]["labels"] = [
+        {
+            "name": "Account",
+            "count": 300,
+            "properties": [
+                {"name": "id", "type": "STRING"},
+                {"name": "balance", "type": "INTEGER"},
+            ],
+        }
+    ]
+    profile["schema"]["relationship_types"] = []
+
+    value = MappingBaselineProvider({"latest": profile}).resolve("latest", "schema_inventory", {})
+
+    assert {e.id for e in value.evidence} == {
+        "label:Account",
+        "property:Account.id",
+        "property:Account.balance",
+    }

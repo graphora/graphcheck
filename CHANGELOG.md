@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Drift metrics `degree_distribution` (degree quantiles `p50`/`p95`/`max` per label, relationship
+  type, and direction, using `percentileDisc` and `COUNT { }` for Cypher 5/25 compatibility) and
+  `schema_inventory` (labels, relationship types, and label-scoped property names added or
+  removed since baseline, evaluated as the count of differences rather than net inventory size
+  so a simultaneous addition and removal cannot cancel out to zero). See
+  [SPEC-04](docs/specifications/spec-04-engine.md) and
+  [SPEC-05](docs/specifications/spec-05-profiler-baseline.md) for details.
 - Optional GraphRAG pack enabled by `graphcheck init --pack graphrag`, with configurable
   Document, Chunk, and Entity labels, relationship types/directions, extraction relationship
   selection, and name/embedding properties in `graphcheck.yml`.

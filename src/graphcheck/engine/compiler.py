@@ -17,6 +17,9 @@ from graphcheck.engine.identifiers import node_pattern, property_access, relatio
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
 
+_VALID_QUANTILES = {"p50", "p95", "max"}
+_VALID_DIRECTIONS = {"in", "out", "both"}
+
 
 @dataclass(frozen=True)
 class EvidenceCondition:
@@ -122,6 +125,15 @@ def _node_pointer(variable: str) -> str:
 
 def _rel_pointer(variable: str) -> str:
     return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
+
+
+def _degree_edge_pattern(direction: str, relationship_type: str | None) -> str:
+    relationship = relationship_pattern("", relationship_type)
+    if direction == "out":
+        return f"(n)-{relationship}->()"
+    if direction == "in":
+        return f"(n)<-{relationship}-()"
+    return f"(n)-{relationship}-()"
 
 
 @register_conformance_compiler("completeness")
@@ -420,12 +432,15 @@ class CypherCompiler:
             "node_count": self._compile_node_count,
             "relationship_count": self._compile_relationship_count,
             "property_coverage": self._compile_property_coverage,
+            "degree_distribution": self._compile_degree_distribution,
+            "schema_inventory": self._compile_schema_inventory,
         }.get(spec.metric)
         if compiler is None:
             raise GraphCheckError(
                 "engine.metric_unsupported",
                 f"Drift metric {spec.metric!r} has no C1 query compiler.",
-                "Use node_count, relationship_count, or property_coverage, "
+                "Use node_count, relationship_count, property_coverage, "
+                "or degree_distribution, schema_inventory, "
                 "or install its provider.",
             )
         query, params = compiler(spec)
@@ -484,6 +499,107 @@ class CypherCompiler:
         return query, {
             "required_labels": [],
             "required_relationship_types": required_types,
+        }
+
+    def _compile_degree_distribution(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target) - {"label", "type", "quantile", "direction"}
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        label = spec.target.get("label")
+        rel_type = spec.target.get("type")
+        quantile = spec.target.get("quantile")
+        direction = spec.target.get("direction", "both")
+        if label is None and rel_type is None:
+            raise _bad_target(spec.metric, "target requires at least one of label or type")
+        if label is not None and (not isinstance(label, str) or not label.strip()):
+            raise _bad_target(spec.metric, "target.label must be a non-blank string")
+        if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
+            raise _bad_target(spec.metric, "target.type must be a non-blank string")
+        if quantile not in _VALID_QUANTILES:
+            raise _bad_target(
+                spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}"
+            )
+        if direction not in _VALID_DIRECTIONS:
+            raise _bad_target(
+                spec.metric,
+                f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            )
+        if label is None and rel_type is not None and direction == "both":
+            raise _bad_target(
+                spec.metric,
+                "target.direction must be 'in' or 'out' when target.type is given "
+                "without target.label",
+            )
+        required_labels = [label] if label is not None else []
+        required_types = [rel_type] if rel_type is not None else []
+        edge = _degree_edge_pattern(direction, rel_type)
+        if label is not None:
+            match_clause = f"MATCH {node_pattern('n', label)}"
+            with_clause = f"WITH n, COUNT {{ {edge} }} AS degree"
+        else:
+            match_clause = f"MATCH {edge}"
+            with_clause = f"WITH DISTINCT n, COUNT {{ {edge} }} AS degree"
+        if quantile == "max":
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN max(degree) AS current, count(n) AS population
+                }}
+                CALL (current) {{
+                  {match_clause}
+                  {with_clause}
+                  WHERE degree = current
+                  WITH n ORDER BY elementId(n) ASC LIMIT $evidence_cap
+                  RETURN collect({_node_pointer("n")}) AS evidence
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, evidence
+                """
+            ).strip()
+        else:
+            percentile = 0.5 if quantile == "p50" else 0.95
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN percentileDisc(degree, {percentile}) AS current, count(n) AS population
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, [] AS evidence
+                """
+            ).strip()
+        return query, {
+            "evidence_cap": self.evidence_cap,
+            "required_labels": required_labels,
+            "required_relationship_types": required_types,
+        }
+
+    def _compile_schema_inventory(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target)
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        query = dedent(
+            """
+            CALL db.labels() YIELD label
+            WITH collect(label) AS labels
+            CALL db.relationshipTypes() YIELD relationshipType
+            WITH labels, collect(relationshipType) AS relationship_types
+            CALL db.schema.nodeTypeProperties()
+            YIELD nodeLabels, propertyName
+            WITH labels, relationship_types, nodeLabels, propertyName
+            WHERE propertyName IS NOT NULL
+            UNWIND nodeLabels AS owner
+            WITH labels, relationship_types,
+                 collect(DISTINCT owner + '.' + propertyName) AS properties
+            RETURN true AS schema_ok, labels, relationship_types, properties
+            """
+        ).strip()
+        return query, {
+            "required_labels": [],
+            "required_relationship_types": [],
         }
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:

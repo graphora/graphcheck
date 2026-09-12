@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -13,6 +14,7 @@ from graphcheck.contracts.profile import (
     BaselineProfile,
     ConstraintProfile,
     DegreeDistribution,
+    DegreeDistributionCoverage,
     GraphSchema,
     IndexProfile,
     LabelProfile,
@@ -107,6 +109,7 @@ def _profile(
     constraints: list[ConstraintProfile] = []
     indexes: list[IndexProfile] = []
     property_coverage: list[PropertyCoverage] = []
+    degree_distribution: list[DegreeDistributionCoverage] = []
 
     if _budget_exceeded(deadline):
         return _partial_profile(
@@ -117,6 +120,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget after probe.",
             partial_reason_code="probe_incomplete",
             deadline=deadline,
@@ -147,6 +151,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting labels: {exc}",
             partial_reason_code=exc.partial_reason_code,
             deadline=deadline,
@@ -161,6 +166,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting labels: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -175,6 +181,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting labels.",
             partial_reason_code="schema_incomplete",
@@ -197,6 +204,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting relationship types: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -211,6 +219,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting relationship types.",
             partial_reason_code="schema_incomplete",
@@ -233,6 +242,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting constraints: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -247,6 +257,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting constraints.",
             partial_reason_code="schema_incomplete",
@@ -269,6 +280,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting indexes: {exc}",
             partial_reason_code="schema_incomplete",
             deadline=deadline,
@@ -283,6 +295,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting indexes.",
             partial_reason_code="schema_incomplete",
@@ -305,6 +318,7 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Failed collecting property coverage: {exc}",
             partial_reason_code="property_coverage_incomplete",
             deadline=deadline,
@@ -319,9 +333,65 @@ def _profile(
             constraints,
             indexes,
             property_coverage,
+            degree_distribution,
             f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
             "after collecting property coverage.",
             partial_reason_code="property_coverage_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+
+    try:
+        degree_distribution, degree_partial_reason_code = _observed_profile_call(
+            telemetry_observer,
+            "degree_distribution",
+            lambda: collect_degree_distribution_targets(
+                client, labels, relationship_types, _deadline=deadline
+            ),
+        )
+    except GraphCheckError as exc:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            f"Failed collecting degree distribution: {exc}",
+            partial_reason_code="degree_incomplete",
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+    if degree_partial_reason_code is not None:
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            "Degree distribution collection was capped for (label, type) pair explosion.",
+            partial_reason_code=degree_partial_reason_code,
+            deadline=deadline,
+            telemetry_result_observer=telemetry_result_observer,
+        )
+    if _budget_exceeded(deadline):
+        return _partial_profile(
+            target,
+            counts,
+            labels,
+            relationship_types,
+            constraints,
+            indexes,
+            property_coverage,
+            degree_distribution,
+            f"Profiling exceeded the {DEFAULT_PROFILE_BUDGET_SECONDS} second budget "
+            "after collecting degree distribution.",
+            partial_reason_code="degree_incomplete",
             deadline=deadline,
             telemetry_result_observer=telemetry_result_observer,
         )
@@ -336,6 +406,7 @@ def _profile(
         node_count=counts.nodes,
         relationship_count=counts.relationships,
         property_coverage=property_coverage,
+        degree_distribution=degree_distribution,
     )
     baseline = BaselineProfile(
         schema_version="1.1",
@@ -367,6 +438,7 @@ def _partial_profile(
     constraints: list[ConstraintProfile],
     indexes: list[IndexProfile],
     property_coverage: list[PropertyCoverage],
+    degree_distribution: list[DegreeDistributionCoverage],
     reason: str,
     *,
     partial_reason_code: str,
@@ -392,6 +464,7 @@ def _partial_profile(
         node_count=counts.nodes,
         relationship_count=counts.relationships,
         property_coverage=property_coverage,
+        degree_distribution=degree_distribution,
     )
 
     baseline = BaselineProfile(
@@ -766,6 +839,203 @@ def _coverage(populated_count: int, total_count: int) -> float:
     if total_count == 0:
         return 0.0
     return round((populated_count / total_count) * 100, 2)
+
+
+def _percentile_from_histogram(histogram: list[tuple[int, int]], percentile: float) -> float:
+    """Nearest-rank percentile from a (value, count) histogram, matching Cypher percentileDisc."""
+    total = sum(count for _, count in histogram)
+    if total == 0:
+        return 0.0
+    rank = max(1, min(math.ceil(percentile * total), total))
+    cumulative = 0
+    for value, count in sorted(histogram):
+        cumulative += count
+        if cumulative >= rank:
+            return float(value)
+    return float(sorted(histogram)[-1][0])
+
+
+def _direction_pattern(direction: str, variable: str = "") -> str:
+    if direction == "out":
+        return f"(n)-[{variable}]->()"
+    if direction == "in":
+        return f"(n)<-[{variable}]-()"
+    return f"(n)-[{variable}]-()"
+
+
+def _collect_total_degree_histogram(
+    client: Neo4jClient, label: str, direction: str, deadline: float | None
+) -> list[tuple[int, int]]:
+    label_ref = _cypher_identifier(label)
+    pattern = _direction_pattern(direction)
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})\n"
+        f"WITH n, COUNT {{ {pattern} }} AS degree\n"
+        "WITH degree, count(n) AS nodes_at_degree\n"
+        "RETURN degree, nodes_at_degree ORDER BY degree",
+        deadline=deadline,
+    )
+    return [(int(row["degree"]), int(row["nodes_at_degree"])) for row in rows]
+
+
+def _collect_per_type_degree_histograms(
+    client: Neo4jClient, label: str, direction: str, deadline: float | None
+) -> dict[str, list[tuple[int, int]]]:
+    label_ref = _cypher_identifier(label)
+    pattern = _direction_pattern(direction, "r")
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})\n"
+        f"OPTIONAL MATCH {pattern}\n"
+        "WITH n, type(r) AS relType\n"
+        "WITH n, relType, count(*) AS degree\n"
+        "WITH relType, degree, count(n) AS nodes_at_degree\n"
+        "RETURN relType, degree, nodes_at_degree ORDER BY relType, degree",
+        deadline=deadline,
+    )
+    histograms: dict[str, list[tuple[int, int]]] = {}
+    for row in rows:
+        rel_type = row.get("relType")
+        if rel_type is None:
+            continue
+        histograms.setdefault(str(rel_type), []).append(
+            (int(row["degree"]), int(row["nodes_at_degree"]))
+        )
+    return histograms
+
+
+def _collect_type_only_degree_histogram(
+    client: Neo4jClient, relationship_type: str, direction: str, deadline: float | None
+) -> list[tuple[int, int]]:
+    type_ref = _cypher_identifier(relationship_type)
+    pattern = f"(n)-[:{type_ref}]->()" if direction == "out" else f"(n)<-[:{type_ref}]-()"
+    rows = _run_read(
+        client,
+        f"MATCH {pattern}\n"
+        f"WITH DISTINCT n, COUNT {{ {pattern} }} AS degree\n"
+        "WITH degree, count(n) AS nodes_at_degree\n"
+        "RETURN degree, nodes_at_degree ORDER BY degree",
+        deadline=deadline,
+    )
+    return [(int(row["degree"]), int(row["nodes_at_degree"])) for row in rows]
+
+
+DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP = 200
+
+
+def _collect_label_type_edge_counts(
+    client: Neo4jClient, label: str, deadline: float | None
+) -> list[tuple[str, int]]:
+    """Cheap per-(label, type) edge counts used to bound pair selection before histograms."""
+    label_ref = _cypher_identifier(label)
+    rows = _run_read(
+        client,
+        f"MATCH (n:{label_ref})-[r]-()\n"
+        "WITH type(r) AS relType, count(r) AS edge_count\n"
+        "RETURN relType, edge_count ORDER BY edge_count DESC",
+        deadline=deadline,
+    )
+    return [(str(row["relType"]), int(row["edge_count"])) for row in rows]
+
+
+def collect_degree_distribution_targets(
+    client: Neo4jClient,
+    labels: list[LabelProfile],
+    relationship_types: list[RelationshipTypeProfile],
+    *,
+    timeout_s: float | None = None,
+    _deadline: float | None = None,
+    _pair_cap: int = DEFAULT_DEGREE_LABEL_TYPE_PAIR_CAP,
+) -> tuple[list[DegreeDistributionCoverage], str | None]:
+    deadline = _deadline if _deadline is not None else _timeout_deadline(timeout_s)
+    directions = ("both", "in", "out")
+    quantiles: tuple[tuple[str, float | None], ...] = (("p50", 0.5), ("p95", 0.95), ("max", None))
+
+    def _values(histogram: list[tuple[int, int]]) -> dict[str, float]:
+        return {
+            name: (
+                float(max((v for v, _ in histogram), default=0))
+                if percentile is None
+                else _percentile_from_histogram(histogram, percentile)
+            )
+            for name, percentile in quantiles
+        }
+
+    records: list[DegreeDistributionCoverage] = []
+
+    # Bound the (label, type) pair set with cheap aggregate counts before collecting any
+    # detailed histograms, so the cap limits database work and memory, not just output.
+    edge_counts: list[tuple[str, str, int]] = []
+    for label in labels:
+        for rel_type, edge_count in _collect_label_type_edge_counts(client, label.name, deadline):
+            edge_counts.append((label.name, rel_type, edge_count))
+    edge_counts.sort(key=lambda item: (-item[2], item[0], item[1]))
+    kept_pairs = {(label_name, rel_type) for label_name, rel_type, _ in edge_counts[:_pair_cap]}
+    partial_reason_code = "degree_incomplete" if len(edge_counts) > _pair_cap else None
+    kept_labels = {label_name for label_name, _ in kept_pairs}
+
+    per_label_type_data: dict[str, dict[str, dict[str, list[tuple[int, int]]]]] = {}
+    for label in labels:
+        for direction in directions:
+            total_hist = _collect_total_degree_histogram(client, label.name, direction, deadline)
+            for name, value in _values(total_hist).items():
+                records.append(
+                    DegreeDistributionCoverage(
+                        label=label.name,
+                        type=None,
+                        quantile=name,
+                        direction=direction,
+                        value=value,
+                    )
+                )
+            if label.name not in kept_labels:
+                continue
+            per_type = _collect_per_type_degree_histograms(client, label.name, direction, deadline)
+            per_label_type_data.setdefault(label.name, {})[direction] = {
+                rel_type: histogram
+                for rel_type, histogram in per_type.items()
+                if (label.name, rel_type) in kept_pairs
+            }
+
+    label_counts = {label.name: label.count for label in labels}
+    for label_name, by_direction in per_label_type_data.items():
+        node_count = label_counts.get(label_name, 0)
+        for direction in directions:
+            for rel_type, histogram in by_direction.get(direction, {}).items():
+                if (label_name, rel_type) not in kept_pairs:
+                    continue
+                seen = sum(c for _, c in histogram)
+                zero_count = max(0, node_count - seen)
+                padded = [*histogram, (0, zero_count)] if zero_count else histogram
+                for name, value in _values(padded).items():
+                    records.append(
+                        DegreeDistributionCoverage(
+                            label=label_name,
+                            type=rel_type,
+                            quantile=name,
+                            direction=direction,
+                            value=value,
+                        )
+                    )
+
+    for relationship_type in relationship_types:
+        for direction in ("out", "in"):
+            histogram = _collect_type_only_degree_histogram(
+                client, relationship_type.name, direction, deadline
+            )
+            for name, value in _values(histogram).items():
+                records.append(
+                    DegreeDistributionCoverage(
+                        label=None,
+                        type=relationship_type.name,
+                        quantile=name,
+                        direction=direction,
+                        value=value,
+                    )
+                )
+
+    return records, partial_reason_code
 
 
 def collect_property_coverage(

@@ -77,6 +77,7 @@
   },
   "schema_version": "1.0",
   "statistics": {
+    "degree_distribution": [],
     "node_count": 13,
     "property_coverage": [
       {

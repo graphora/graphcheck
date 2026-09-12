@@ -162,6 +162,8 @@ def _resolve_candidate(
         candidate = statistics[metric]
         if metric == "property_coverage" and isinstance(candidate, list):
             return _property_coverage(candidate, target)
+        if metric == "degree_distribution" and isinstance(candidate, list):
+            return _degree_distribution(candidate, target)
         if metric == "node_count" and target.get("label") is not None:
             label_count = _label_count(raw, str(target["label"]))
             if label_count is not None:
@@ -178,6 +180,8 @@ def _resolve_candidate(
         return _label_count(raw, str(target["label"]))
     if metric == "relationship_count" and target.get("type") is not None:
         return _relationship_count(raw, str(target["type"]))
+    if metric == "schema_inventory":
+        return _schema_inventory_value(raw)
     return None
 
 
@@ -220,6 +224,52 @@ def _relationship_count(raw: Mapping[str, object], rel_type: str) -> object | No
     for item in relationships:
         if isinstance(item, Mapping) and item.get("name") == rel_type:
             return item.get("count")
+    return None
+
+
+def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | None:
+    schema = raw.get("schema", raw.get("graph_schema"))
+    if not isinstance(schema, Mapping):
+        return None
+    labels = schema.get("labels")
+    relationship_types = schema.get("relationship_types")
+    if not isinstance(labels, list) or not isinstance(relationship_types, list):
+        return None
+    evidence = [
+        {"kind": "aggregate", "id": f"label:{item['name']}"}
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    ]
+    evidence.extend(
+        {"kind": "aggregate", "id": f"relationship_type:{item['name']}"}
+        for item in relationship_types
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    )
+    evidence.extend(
+        {"kind": "aggregate", "id": f"property:{item['name']}.{prop['name']}"}
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+        for prop in (item.get("properties") or [])
+        if isinstance(prop, Mapping) and isinstance(prop.get("name"), str)
+    )
+    return {"value": 0, "evidence": evidence}
+
+
+def _degree_distribution(values: list[object], target: Mapping[str, object]) -> object | None:
+    label = target.get("label")
+    rel_type = target.get("type")
+    quantile = target.get("quantile")
+    direction = target.get("direction", "both")
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        if (
+            item.get("label") == label
+            and item.get("type") == rel_type
+            and item.get("quantile") == quantile
+            and item.get("direction", "both") == direction
+        ):
+            return item.get("value")
     return None
 
 

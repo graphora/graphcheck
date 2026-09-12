@@ -155,6 +155,61 @@ def _drift(
     )
 
 
+def _degree_drift(quantile: str, tolerance: dict[str, object]):
+    spec = DriftCheck(
+        id="drift",
+        metric="degree_distribution",
+        target={"label": "Account", "quantile": quantile, "direction": "both"},
+        baseline="release-42",
+        tolerance=tolerance,
+    )
+    return CypherCompiler(evidence_cap=4).compile(_loaded(spec, Pattern.DRIFT))
+
+
+def test_degree_distribution_p50_failure_gets_aggregate_evidence_pointer():
+    evaluation = evaluate_check(
+        _degree_drift("p50", {"max_increase_pct": 1}),
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": 5,
+                "population": 5,
+                "evidence": [],
+            }
+        ],
+        baseline=BaselineValue(1),
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert any(element.kind == "aggregate" for element in evaluation.evidence.elements)
+
+
+def test_degree_distribution_max_failure_names_real_node_not_aggregate():
+    evaluation = evaluate_check(
+        _degree_drift("max", {"max_increase_pct": 1}),
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": 19,
+                "population": 2504,
+                "evidence": [{"kind": "node", "id": "4:graph:1"}],
+            }
+        ],
+        baseline=BaselineValue(3),
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert all(element.kind != "aggregate" for element in evaluation.evidence.elements)
+    assert any(
+        element.kind == "node" and element.id == "4:graph:1"
+        for element in evaluation.evidence.elements
+    )
+
+
 def _completeness_row(**updates):
     row = {
         "schema_ok": True,
@@ -985,3 +1040,135 @@ def test_early_equality_mismatch_still_requires_real_graph_evidence():
     with pytest.raises(GraphCheckError) as caught:
         evaluate_check(compiled, [{"value": 2}], columns=["value"], complete=False)
     assert caught.value.error.code == "engine.evidence_missing"
+
+
+def _schema_inventory_drift(tolerance: dict[str, object]):
+    spec = DriftCheck(
+        id="drift",
+        metric="schema_inventory",
+        target={},
+        baseline="release-42",
+        tolerance=tolerance,
+    )
+    return CypherCompiler(evidence_cap=10).compile(_loaded(spec, Pattern.DRIFT))
+
+
+def test_schema_inventory_passes_when_labels_unchanged():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Customer"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is True
+
+
+def test_schema_inventory_fails_and_names_added_label():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Customer", "Transaction"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert [e.id for e in evaluation.evidence.elements] == ["label_added:Transaction"]
+
+
+def test_schema_inventory_fails_and_names_removed_label():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert [e.id for e in evaluation.evidence.elements] == ["label_removed:Customer"]
+
+
+def test_schema_inventory_detects_simultaneous_add_and_remove_despite_net_zero_size():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Fraud"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.measured["current"] == 2
+    ids = {e.id for e in evaluation.evidence.elements}
+    assert ids == {"label_added:Fraud", "label_removed:Customer"}
+
+
+def test_schema_inventory_fails_and_names_added_relationship_type():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="relationship_type:OWNS"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": ["Account"],
+                "relationship_types": ["OWNS", "CONTROLS"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert [e.id for e in evaluation.evidence.elements] == ["relationship_type_added:CONTROLS"]
+
+
+def test_schema_inventory_detects_property_change_when_labels_and_types_are_unchanged():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="relationship_type:OWNS"),
+            EvidenceElement(kind="aggregate", id="property:Account.balance"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": ["Account"],
+                "relationship_types": ["OWNS"],
+                "properties": ["Account.currency"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.measured["current"] == 2
+    ids = {element.id for element in evaluation.evidence.elements}
+    assert ids == {"property_added:Account.currency", "property_removed:Account.balance"}
