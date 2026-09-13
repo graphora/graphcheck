@@ -1,6 +1,6 @@
 # GraphRAG pack
 
-Enable the five checks with `graphcheck init --pack graphrag`, then edit the example model
+Enable the seven checks with `graphcheck init --pack graphrag`, then edit the example model
 in `graphcheck.yml`. Run only this pack with `graphcheck run --suite graphrag`.
 
 ```yaml
@@ -28,9 +28,9 @@ hard-coded into a query. Identifiers are escaped, including spaces and backticks
 are `out`, `in`, or `any`, relative to Document for the document/chunk link and Chunk for the
 chunk/entity link. Omit `extraction_rel_types` to inspect all relationships whose endpoints
 both have the configured entity label. An explicit list must be nonempty and unique.
-`embedding_property` selects the numeric list inspected on every configured chunk.
+`embedding_property` is reserved model configuration; these checks do not inspect embeddings.
 
-Enabling the pack adds a virtual `graphrag` suite containing all five checks, tagged `graphrag`.
+Enabling the pack adds a virtual `graphrag` suite containing all seven checks, tagged `graphrag`.
 Its effective configuration contributes to the suite hash and sampling seed. Setting
 `enabled: false` removes that automatic suite. Explicit GraphRAG checks in other suites still run.
 Do not name another suite `graphrag` while the automatic suite is enabled.
@@ -158,7 +158,16 @@ number of embedding components scanned; this check is not sampled.
 the corresponding element pointers and marks truncation. The summary count is never capped.
 
 Copy [`examples/graphrag/graphrag.yml`](../examples/graphrag/graphrag.yml) into your `checks/`
-directory for an explicit five-check suite with editable model fields. It needs no pack configuration.
+directory for an explicit seven-check suite with editable model fields. It needs no pack configuration.
+
+### Chunk coverage
+
+Reports the share of Chunks linked to at least one Entity by the configured `chunk_entity_rel`
+and `chunk_entity_direction`. `threshold` is the minimum acceptable coverage ratio, in the
+closed interval `[0, 1]`, defaulting to `0.95`. A Chunk with zero configured links counts as
+a violation regardless of whether it has other, unconfigured relationships. `measured.coverage`
+reports the exact ratio; evidence names each entity-less Chunk's element ID, capped by the
+engine evidence limit like every other check.
 
 ## Verification
 
