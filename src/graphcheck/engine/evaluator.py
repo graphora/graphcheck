@@ -308,11 +308,6 @@ class VerdictEvaluator:
             total_count=violations,
         )
         return Evaluation(False, measured, evidence=evidence)
-            compiled,
-            rows=records,
-            total_count=violations,
-        )
-        return Evaluation(False, measured, evidence=evidence)
 
     def _graphrag_provenance(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
         violations, population = (
