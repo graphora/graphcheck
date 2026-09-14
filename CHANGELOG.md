@@ -22,6 +22,14 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Changes output includes appeared and disappeared evidence element IDs per check, sharing the
   smaller input evidence cap across both directions, counting dropped deltas, and identifying
   truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
+- GraphRAG `embedding_consistency` checks every chunk for missing, invalid, empty, zero,
+  NaN-containing, and inconsistent-dimension embeddings. It uses the most frequent valid
+  dimension (smallest on ties) and returns exact counts plus capped element-ID, dimension,
+  and defect evidence without transferring vectors to Python.
+- Hostile GraphRAG planted/clean cases with expected CLI exit codes, assertions identifying every
+  planted defect, and a copyable suite under `examples/graphrag/`. Singleton labels and uncovered
+  chunks remain fixture-only assertions. The public-scale hostile lane exercises all five checks
+  with a 60-second pack-run budget and verifies planted embedding defects over 265,214 nodes.
 - Optional GraphRAG pack enabled by `graphcheck init --pack graphrag`, with configurable
   Document, Chunk, and Entity labels, relationship types/directions, extraction relationship
   selection, and name/embedding properties in `graphcheck.yml`.
@@ -72,6 +80,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
   so the changes acceptance test can load its Cypher parser and seed data.
 - The fraud-ring changes acceptance test uses the explicit `node_element_id` evidence alias,
   so its planted tax-ID finding fails with evidence and then passes after the repair.
+- GraphRAG embedding consistency accepts stored numeric arrays on Neo4j 5.26 LTS by using
+  concrete non-null integer/float list predicates. GraphRAG integration tests now run in every
+  supported CI lane, including stored integer, float, and mixed-numeric embedding regressions.
 - Drift checks retain partial run status when using present measurements from incomplete
   baselines, without changing their measured verdict or exit-code precedence.
 - Connection and credential preflight now share the run deadline with check execution.

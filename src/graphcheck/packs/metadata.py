@@ -328,6 +328,11 @@ class GraphRAGDuplicateMetadata(_CoreCheckMetadataBase):
     estimate: EstimateMetadata
 
 
+class GraphRAGEmbeddingMetadata(_CoreCheckMetadataBase):
+    template: Literal["embedding_consistency"]
+    sampled: Literal[False]
+
+
 class GraphRAGChecksMetadata(_StrictMetadata):
     orphan_chunks: GraphRAGProvenanceMetadata = Field(
         json_schema_extra={"properties": {"template": {"const": "orphan_chunks"}}}
@@ -341,6 +346,7 @@ class GraphRAGChecksMetadata(_StrictMetadata):
         }
     )
     near_duplicate_entities: GraphRAGDuplicateMetadata
+    embedding_consistency: GraphRAGEmbeddingMetadata
 
     @model_validator(mode="after")
     def templates_match_names(self) -> GraphRAGChecksMetadata:

@@ -11,6 +11,8 @@ CASES = yaml.safe_load((HOSTILE / "cases.yml").read_text(encoding="utf-8"))["cas
 def test_hostile_manifest_defines_every_required_case_and_command():
     assert set(CASES) == {
         "llm-kg-builder",
+        "graphrag-planted",
+        "graphrag-clean",
         "public-scale",
         "neo4j-4.4-cluster",
         "apoc-less",
@@ -51,6 +53,20 @@ def test_llm_fixture_keeps_noisy_schema_features():
 def test_hostile_suites_are_valid_graphcheck_contracts():
     for suite in {case["suite"] for case in CASES.values()}:
         assert load_suite((HOSTILE / suite).read_text(encoding="utf-8")).suite
+
+
+def test_graphrag_hostile_and_copyable_suites_cover_the_whole_pack():
+    from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
+
+    example = HOSTILE.parents[2] / "examples/graphrag/graphrag.yml"
+    fixture_suite = (HOSTILE / "graphrag.yml").read_text(encoding="utf-8")
+    assert example.read_text(encoding="utf-8") == fixture_suite
+    assert {check.spec.check for check in load_suite(fixture_suite).checks} == set(
+        GRAPHRAG_CHECK_NAMES
+    )
+    assert CASES["graphrag-planted"]["expected_exit_codes"]["run"] == 1
+    assert CASES["graphrag-clean"]["expected_exit_codes"]["run"] == 0
+    assert CASES["public-scale"]["pack_timeout_seconds"] == 60
 
 
 def test_neo4j_44_compose_defines_three_pinned_enterprise_members():

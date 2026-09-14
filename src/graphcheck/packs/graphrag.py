@@ -12,6 +12,7 @@ GRAPHRAG_CHECK_NAMES = (
     "entity_without_provenance",
     "dangling_extraction_relationships",
     "near_duplicate_entities",
+    "embedding_consistency",
 )
 
 
@@ -68,3 +69,8 @@ class DanglingExtractionRelationshipsWith(GraphRAGWith):
 @register("near_duplicate_entities")
 class NearDuplicateEntitiesWith(GraphRAGWith, NearDuplicateOptions):
     """Bounded name-based duplicate candidates within one entity label."""
+
+
+@register("embedding_consistency")
+class EmbeddingConsistencyWith(GraphRAGWith):
+    """Every chunk has a nonempty numeric, nonzero, NaN-free vector of one dimension."""
