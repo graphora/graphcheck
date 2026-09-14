@@ -165,7 +165,12 @@ def test_llm_kg_builder_cli_matrix_handles_noisy_schema(neo4j_profile, tmp_path)
 
 def _assert_graphrag_fixture(profile, checks, *, clean):
     assert set(checks) == set(GRAPHRAG_CHECK_NAMES)
-    assert all(check["verdict"] == ("pass" if clean else "fail") for check in checks.values())
+    for name, check in checks.items():
+        if name == "label_explosion" and clean:
+            assert check["verdict"] == "skipped"
+            assert check["error"] is None and check["measured"] is None
+            continue
+        assert check["verdict"] == ("pass" if clean else "fail")
     with (
         GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver,
         driver.session(database=profile.database) as session,
@@ -190,6 +195,12 @@ def _assert_graphrag_fixture(profile, checks, *, clean):
                 "chunk-nan-embedding",
             }
         )
+        assert checks["chunk_coverage"]["measured"] == {
+            "population": 2,
+            "conforming_count": 2,
+            "violation_count": 0,
+            "coverage": 1.0,
+        }
         if clean:
             return
         node_ids = dict(
@@ -232,6 +243,42 @@ def _assert_graphrag_fixture(profile, checks, *, clean):
             "chunk-wrong-dimension": ("wrong_dimension", 3),
             "chunk-zero-embedding": ("zero", 4),
             "chunk-nan-embedding": ("nan", 4),
+        }
+        chunk_coverage = checks["chunk_coverage"]["measured"]
+        assert chunk_coverage["population"] == 7
+        assert chunk_coverage["conforming_count"] == 2
+        assert chunk_coverage["violation_count"] == 5
+        assert chunk_coverage["coverage"] == pytest.approx(2 / 7)
+        uncovered_ids = {
+            node_ids[element["id"]]
+            for element in checks["chunk_coverage"]["evidence"]["elements"]
+        }
+        assert uncovered_ids == {
+            "chunk-orphan",
+            "chunk-missing-embedding",
+            "chunk-wrong-dimension",
+            "chunk-zero-embedding",
+            "chunk-nan-embedding",
+        }
+        label_explosion = checks["label_explosion"]["measured"]
+        assert label_explosion["violations"] == 13
+        findings = {
+            (finding["item_kind"], finding["name"]) for finding in label_explosion["findings"]
+        }
+        assert findings == {
+            ("label", "Person"),
+            ("label", "person"),
+            ("label", "Machine / Concept"),
+            ("label", "Country"),
+            ("label", "Country / Region"),
+            ("label", "SingletonTopic"),
+            ("label", "Odd`Label"),
+            ("relationship_type", "FIRST_CHUNK"),
+            ("relationship_type", "NEXT_CHUNK"),
+            ("relationship_type", "WORKED-WITH"),
+            ("relationship_type", "LOCATED_IN"),
+            ("relationship_type", "MENTORED"),
+            ("relationship_type", "points to"),
         }
         assert all(check["evidence"]["elements"] for check in checks.values())
 
