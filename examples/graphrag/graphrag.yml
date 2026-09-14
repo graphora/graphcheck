@@ -26,3 +26,9 @@ conformance:
   - id: embedding_consistency
     check: embedding_consistency
     with: *model
+  - id: chunk_coverage
+    check: chunk_coverage
+    with: *model
+  - id: label_explosion
+    check: label_explosion
+    with: *model
