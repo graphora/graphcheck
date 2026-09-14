@@ -119,6 +119,8 @@ jobs:
       GRAPHCHECK_NEO4J_TARGET: ${{ matrix.neo4j-target }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --group dev
       - run: >

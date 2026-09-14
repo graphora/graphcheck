@@ -309,6 +309,9 @@ class Redaction(_Strict):
 
 class Run(_Strict):
     id: str
+    previous_run_id: str | None = None
+    baseline_ref: str | None = None
+    config_hash: str | None = None
     started_at: str
     finished_at: str
     graphcheck_version: str

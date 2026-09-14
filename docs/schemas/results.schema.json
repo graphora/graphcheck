@@ -469,6 +469,30 @@
     "Run": {
       "additionalProperties": false,
       "properties": {
+        "baseline_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Ref"
+        },
+        "config_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Hash"
+        },
         "error": {
           "anyOf": [
             {
@@ -509,6 +533,18 @@
             }
           ],
           "title": "Partial Reason"
+        },
+        "previous_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Run Id"
         },
         "redaction": {
           "$ref": "#/$defs/Redaction"

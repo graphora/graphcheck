@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- After a comparable previous run, `summary.json` includes a compact `changes` block with new
+  failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
+  at most 20 entries each and report omitted counts; first runs and unavailable comparisons
+  omit the block. Artifact retries preserve the original block after history is pruned.
+- Runs now include `previous_run_id`, `baseline_ref`, and `config_hash` in results schema 2.0,
+  with compatibility for older artifacts and a new lineage fixture. Profile references identify
+  the latest existing timestamped snapshot; running checks does not trigger profiling. History
+  summaries and `graphcheck report --history` show the previous-run links, assigned under the
+  publication lock for concurrent CLI and MCP runs. Redacted exports clear lineage metadata.
+- Added `graphcheck changes [--since <run-id|previous>] [--json]` to combine check outcome,
+  coverage, suite-score, and profile deltas through the existing report comparison and profile
+  diff implementations. JSON is deterministic; exit codes distinguish no regressions (`0`),
+  regressions or new failures (`1`), and invalid or unavailable comparison inputs (`2`).
+- Changes output includes appeared and disappeared evidence element IDs per check, sharing the
+  smaller input evidence cap across both directions, counting dropped deltas, and identifying
+  truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
 - GraphRAG `embedding_consistency` checks every chunk for missing, invalid, empty, zero,
   NaN-containing, and inconsistent-dimension embeddings. It uses the most frequent valid
   dimension (smallest on ties) and returns exact counts plus capped element-ID, dimension,
@@ -58,6 +74,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Run configuration hashes include the authenticated username so permission changes between
+  users have distinct provenance, while passwords and password environment variables stay excluded.
+- Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,
+  so the changes acceptance test can load its Cypher parser and seed data.
+- The fraud-ring changes acceptance test uses the explicit `node_element_id` evidence alias,
+  so its planted tax-ID finding fails with evidence and then passes after the repair.
 - GraphRAG embedding consistency accepts stored numeric arrays on Neo4j 5.26 LTS by using
   concrete non-null integer/float list predicates. GraphRAG integration tests now run in every
   supported CI lane, including stored integer, float, and mixed-numeric embedding regressions.

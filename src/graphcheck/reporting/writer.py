@@ -23,6 +23,8 @@ def json_compatible(value: object) -> Any:
         if historical_schema_version is not None:
             value["schema_version"] = historical_schema_version
             run = value["run"]
+            for key in ("previous_run_id", "baseline_ref", "config_hash"):
+                run.pop(key, None)
             run["status"] = run.pop("run_status")
             if historical_schema_version in {"1.0", "1.1"}:
                 target = run["target"]

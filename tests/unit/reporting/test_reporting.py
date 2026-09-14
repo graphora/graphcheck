@@ -78,7 +78,9 @@ def _next_steps_fragment(rendered: str) -> str:
     return rendered[start:end]
 
 
-@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize(
+    "name", ["clean", "complete", "partial", "generated-only", "failed", "lineage"]
+)
 def test_writer_round_trips_existing_results_fixtures(name: str):
     source = _fixture(name)
     model = load_results(source)

@@ -926,6 +926,7 @@ def report(
     list_reports: bool = typer.Option(
         False,
         "--list",
+        "--history",
         help="List report history with timestamps, scores, and statuses.",
     ),
     compare: tuple[str, str] | None = typer.Option(
@@ -1117,6 +1118,37 @@ def report(
             telemetry.fail(ProcessOutcome.USER_ERROR, stage, code)
         typer.echo(f"report.error: {exc}", err=True)
         raise typer.Exit(1) from exc
+
+
+@app.command("changes")
+def changes_command(
+    since: str = typer.Option(
+        "previous", "--since", help="Compare latest to this run ID or previous."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit deterministic JSON."),
+) -> None:
+    """Show outcome, profile, and evidence deltas. Exit 1 for regressions, 2 for errors."""
+    from graphcheck.errors import GraphCheckError
+    from graphcheck.project import load_project_config
+    from graphcheck.reporting.changes import load_changes
+
+    try:
+        root = find_project_root()
+        config = load_project_config(root)
+        result = load_changes(_project_path(root, config.artifacts) / "runs", since)
+    except (GraphCheckError, OSError, ValueError) as exc:
+        message = exc.error.message if isinstance(exc, GraphCheckError) else str(exc)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {"error": {"code": "changes.unavailable", "message": message}}, sort_keys=True
+                )
+            )
+        else:
+            typer.echo(f"changes.unavailable: {message}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(result.json() if json_output else result.text())
+    raise typer.Exit(result.exit_code)
 
 
 @baseline_app.command("set")
