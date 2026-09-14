@@ -119,10 +119,18 @@ def _run_payload(root: Path) -> dict[str, object]:
     )
 
 
+def _reset_schema(session) -> None:
+    for record in session.run("SHOW CONSTRAINTS YIELD name RETURN name").data():
+        session.run(f"DROP CONSTRAINT `{record['name']}` IF EXISTS").consume()
+    for record in session.run("SHOW INDEXES YIELD name RETURN name").data():
+        session.run(f"DROP INDEX `{record['name']}` IF EXISTS").consume()
+
+
 @contextmanager
 def _seeded_graph(profile: ConnectionProfile, cypher: str | None = None) -> Iterator[None]:
     with GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver:
         with driver.session(database=profile.database) as session:
+            _reset_schema(session)
             session.run("MATCH (n) DETACH DELETE n").consume()
             if cypher is not None:
                 session.run(cypher).consume()
@@ -130,6 +138,7 @@ def _seeded_graph(profile: ConnectionProfile, cypher: str | None = None) -> Iter
             yield
         finally:
             with driver.session(database=profile.database) as session:
+                _reset_schema(session)
                 session.run("MATCH (n) DETACH DELETE n").consume()
 
 
