@@ -119,27 +119,32 @@ def _run_payload(root: Path) -> dict[str, object]:
     )
 
 
-def _reset_schema(session) -> None:
-    for record in session.run("SHOW CONSTRAINTS YIELD name RETURN name").data():
-        session.run(f"DROP CONSTRAINT `{record['name']}` IF EXISTS").consume()
-    for record in session.run("SHOW INDEXES YIELD name RETURN name").data():
-        session.run(f"DROP INDEX `{record['name']}` IF EXISTS").consume()
+def _schema_object_names(session, show_command: str) -> set[str]:
+    return {
+        record["name"] for record in session.run(f"{show_command} YIELD name RETURN name").data()
+    }
 
 
 @contextmanager
 def _seeded_graph(profile: ConnectionProfile, cypher: str | None = None) -> Iterator[None]:
     with GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver:
         with driver.session(database=profile.database) as session:
-            _reset_schema(session)
             session.run("MATCH (n) DETACH DELETE n").consume()
+            # Snapshot schema state so exit can drop only what this test itself introduces --
+            # never touching schema objects independently managed by other fixtures.
+            before_constraints = _schema_object_names(session, "SHOW CONSTRAINTS")
+            before_indexes = _schema_object_names(session, "SHOW INDEXES")
             if cypher is not None:
                 session.run(cypher).consume()
         try:
             yield
         finally:
             with driver.session(database=profile.database) as session:
-                _reset_schema(session)
                 session.run("MATCH (n) DETACH DELETE n").consume()
+                for name in _schema_object_names(session, "SHOW CONSTRAINTS") - before_constraints:
+                    session.run(f"DROP CONSTRAINT `{name}` IF EXISTS").consume()
+                for name in _schema_object_names(session, "SHOW INDEXES") - before_indexes:
+                    session.run(f"DROP INDEX `{name}` IF EXISTS").consume()
 
 
 def test_empty_graph_cli_matrix_is_graceful(neo4j_profile, tmp_path):
