@@ -101,7 +101,12 @@ def test_a_wholly_missing_relationship_is_a_defect(neo4j_profile, tmp_path, rela
         checks = {check["id"]: check for check in _run_payload(tmp_path)["checks"]}
         affected = "orphan_chunks" if relationship == "PART_OF" else "entity_without_provenance"
         assert checks[affected]["verdict"] == "fail"
-        assert all(check["verdict"] in {"pass", "fail"} for check in checks.values())
+        assert checks["label_explosion"]["verdict"] == "skipped"
+        assert all(
+            check["verdict"] in {"pass", "fail"}
+            for name, check in checks.items()
+            if name != "label_explosion"
+        )
 
 
 def test_wrong_label_links_do_not_supply_provenance(neo4j_profile, tmp_path):
@@ -140,7 +145,11 @@ def test_custom_reversed_model_and_multiple_documents_are_supported(neo4j_profil
       (a)-[:`from text`]->(c), (b)-[:`from text`]->(c), (a)-[:connects]->(b)"""
     with _seeded_graph(neo4j_profile, cypher):
         _assert_cli_exit(_cli(tmp_path, "run", "--suite", "graphrag"), 0)
-        assert all(check["verdict"] == "pass" for check in _run_payload(tmp_path)["checks"])
+        checks = _run_payload(tmp_path)["checks"]
+        assert next(c for c in checks if c["id"] == "label_explosion")["verdict"] == "skipped"
+        assert all(
+            check["verdict"] == "pass" for check in checks if check["id"] != "label_explosion"
+        )
 
 
 @pytest.mark.parametrize("vector", ["[1, 2]", "[0.125, -0.25]", "[1, 0.5]"])
