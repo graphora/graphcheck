@@ -59,7 +59,7 @@ checks:
     template: chunk_coverage
   label_explosion:
     catches: Labels and relationship types whose population is at or below the configured threshold, the signature of an extractor inventing one-off types.
-    does_not_catch: Whether a rare label is legitimate, near-duplicate names, or types that are frequent but wrong.
+    does_not_catch: Whether a rare label is legitimate, near-duplicate names, or types that are frequent but wrong. Graphs under min_population nodes (default 50) are not evaluated, since a small graph makes every label look like a singleton.
     requires: [read]
     sampled: false
     evidence:
