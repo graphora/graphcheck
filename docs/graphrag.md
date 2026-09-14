@@ -169,6 +169,25 @@ a violation regardless of whether it has other, unconfigured relationships. `mea
 reports the exact ratio; evidence names each entity-less Chunk's element ID, capped by the
 engine evidence limit like every other check.
 
+### Label explosion
+
+Flags labels and relationship types across the whole graph schema whose population is at or
+below `threshold` (default `1`, i.e. true singletons; configurable up to `1000` for
+near-singleton detection). This is schema-wide, not scoped to the configured model fields --
+it targets the pattern of an extractor inventing overly-specific one-off types instead of
+reusing existing ones.
+
+On graphs with fewer than `min_population` total nodes (default `50`, configurable), the
+check is not evaluated rather than run: a small graph makes almost every label look like a
+singleton, which is a property of graph size, not label explosion. This reuses the same
+graceful-absence mechanism as an unconfigured model, with an explanation naming the floor
+and the actual node count found.
+
+`measured.findings` lists each singleton or near-singleton item as `{item_kind, name, count}`
+(`item_kind` is `label` or `relationship_type`); the same names appear in the evidence
+message. Evidence elements are real node pointers, one example node per flagged item, since a
+label or relationship type itself has no element id.
+
 ## Verification
 
 Unit tests cover configuration, metadata/schema parity, escaping, missing models, failure isolation,
