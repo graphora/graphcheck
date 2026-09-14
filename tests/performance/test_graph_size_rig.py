@@ -118,7 +118,7 @@ def test_supervisor_preserves_failure_artifact_if_worker_does_not_finish(
 
 
 def test_published_measurements_contain_every_selected_check():
-    paths = list((ROOT / "tools" / "graph-size-results").glob("*-run*.json"))
+    paths = list((ROOT / "tools" / "graph-size-benchmark-results").glob("*-run*.json"))
     assert paths
     for path in paths:
         record = json.loads(path.read_text())

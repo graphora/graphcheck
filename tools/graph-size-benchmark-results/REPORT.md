@@ -95,8 +95,8 @@ The two 100k columns show the initial observation and repeat, respectively.
 
 [Per-check CSV](checks.csv) retains verdicts, exact millisecond durations, observed
 populations, sample sizes, errors and skip reasons. Complete result JSON also retains
-compiled queries, parameters, measurements, estimates and evidence. Adjacent JSONL
-files contain per-query and per-stage telemetry. Result `estimate` is authoritative
+compiled queries, parameters, measurements, estimates and evidence. The rig generates
+JSONL query/stage telemetry, but those logs are not retained here. Result `estimate` is authoritative
 for actual sampling; integrated sampling can differ from telemetry's sampled flag.
 
 ## Sampling and coverage

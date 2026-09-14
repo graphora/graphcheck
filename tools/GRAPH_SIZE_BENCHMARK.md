@@ -36,7 +36,7 @@ another dataset while measuring. Example:
 
 ```console
 uv run python tools/generate_graph_size.py --nodes 100000
-uv run python tools/benchmark_graph_size.py --nodes 100000 --database graphcheck-benchmark-100000 --output tools/graph-size-results/100000-run1.json
+uv run python tools/benchmark_graph_size.py --nodes 100000 --database graphcheck-benchmark-100000 --output tools/graph-size-benchmark-results/100000-run1.json
 ```
 
 Repeat with `1000000` and `10000000`. The loader creates only databases named
@@ -84,7 +84,7 @@ operating systems, collect server memory separately; a missing metric stays null
   13 executable checks to finish without execution errors or deadline skips. The
   known unsupported `dangling_rels` makes full-pack coverage partial at every size.
 
-Raw measurements and the Markdown report live in [`graph-size-results/`](graph-size-results/).
+Raw measurements and the Markdown report live in [`graph-size-benchmark-results/`](graph-size-benchmark-results/).
 Keep exploratory and failed runs as well as published measurements; identify cache
 conditions and repetitions in the report rather than presenting a single run as a
 statistical latency guarantee.

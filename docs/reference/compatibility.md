@@ -114,9 +114,9 @@ artifact creation and the `Fix:` line. In-limit expensive runs retain the 295-se
 budget and timeout diagnostics; passing the size gate does not guarantee completion.
 The rig additionally has a 330-second process watchdog, which is not a CLI feature.
 
-See the [raw Markdown report](../../tools/graph-size-results/REPORT.md),
-[per-check CSV](../../tools/graph-size-results/checks.csv),
-[raw JSON and event logs](../../tools/graph-size-results/), and
+See the [raw Markdown report](../../tools/graph-size-benchmark-results/REPORT.md),
+[per-check CSV](../../tools/graph-size-benchmark-results/checks.csv),
+[raw JSON](../../tools/graph-size-benchmark-results/), and
 [reproduction instructions](../../tools/GRAPH_SIZE_BENCHMARK.md).
 
 ## Neo4j 4.4 policy
