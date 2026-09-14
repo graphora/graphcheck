@@ -7,9 +7,18 @@ the real command boundary in a subprocess and rejects Python tracebacks.
 - `llm-kg-builder.cypher` is a sanitized fixture based on the Neo4j LLM Graph Builder's documented
   `Document`, `Chunk`, `__Entity__`, multi-label entity, and lexical relationship shapes. It adds
   inconsistent runtime property types and escaped identifiers seen in unconstrained extraction.
+- `graphrag-planted` and `graphrag-clean` run `graphrag.yml` against the planted and clean builder
+  fixtures, expecting run exits 1 and 0. The planted fixture includes orphan provenance, a dangling
+  extraction relationship, duplicate names, and missing/wrong-dimension/zero/NaN embeddings.
+  Tests assert the exact element IDs; singleton labels and uncovered chunks remain fixture-only
+  assertions. The copyable example suite is kept identical by a repository test.
 - `public-scale` downloads Stanford SNAP's anonymized EU email graph. The source artifact and
   SHA-256 are pinned in `cases.yml`; the published graph contains 265,214 nodes and 420,045
   directed relationships.
+  It also runs all five GraphRAG checks with a 60-second CLI ceiling, bounded duplicate-name
+  sampling, and exact embedding counts with four planted defects. Runtime and graph sizes are
+  recorded as JUnit suite properties in the scale lane's artifact; executing that lane verifies
+  the budget.
 - `neo4j-4.4-cluster.yml` starts three Neo4j 4.4 Enterprise core members. GraphCheck intentionally
   rejects this legacy server line with `neo4j.unsupported_version`. Docker assigns the host Bolt
   ports, and the test requires `dbms.cluster.overview()` to report all three members with exactly

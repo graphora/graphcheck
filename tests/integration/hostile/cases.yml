@@ -6,6 +6,20 @@ cases:
     fixture: llm-kg-builder.cypher
     suite: llm-kg-builder.yml
     expected_exit_codes: {debug: 0, profile: 0, run: 0}
+  graphrag-planted:
+    pytest_test: test_graphrag_hostile_pack_finds_every_planted_defect
+    lane: fast
+    server: neo4j:5.26.28
+    fixture: llm-kg-builder.cypher
+    suite: graphrag.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 1}
+  graphrag-clean:
+    pytest_test: test_graphrag_hostile_clean_pack_passes
+    lane: fast
+    server: neo4j:5.26.28
+    fixture: llm-kg-builder-clean.cypher
+    suite: graphrag.yml
+    expected_exit_codes: {debug: 0, profile: 0, run: 0}
   public-scale:
     pytest_test: test_public_scale_cli_matrix_is_bounded_and_graceful
     lane: scale
@@ -17,6 +31,9 @@ cases:
     relationships: 420045
     suite: public-scale.yml
     expected_exit_codes: {debug: 0, profile: 0, run: 0}
+    pack_suite: graphrag.yml
+    pack_expected_exit_code: 1
+    pack_timeout_seconds: 60
   neo4j-4.4-cluster:
     pytest_test: test_neo4j_44_cluster_cli_matrix_rejects_legacy_server
     lane: legacy

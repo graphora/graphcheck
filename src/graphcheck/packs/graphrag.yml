@@ -39,3 +39,12 @@ checks:
       elements: [node]
       id_fields: [node_ids]
     template: near_duplicate_entities
+  embedding_consistency:
+    catches: Chunks with missing, nonnumeric, empty, zero, NaN-containing, or inconsistent-dimension embedding lists.
+    does_not_catch: Semantic quality, mixed embedding models with equal dimensions, or a uniformly incorrect dimension. Native VECTOR properties are unsupported.
+    requires: [read]
+    sampled: false
+    evidence:
+      elements: [node]
+      id_fields: [node_id]
+    template: embedding_consistency

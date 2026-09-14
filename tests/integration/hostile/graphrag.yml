@@ -1,0 +1,28 @@
+suite: hostile-graphrag
+defaults:
+  tags: [graphrag]
+conformance:
+  - id: orphan_chunks
+    check: orphan_chunks
+    with: &model
+      document_label: Document
+      chunk_label: Chunk
+      entity_label: __Entity__
+      document_chunk_rel: PART_OF
+      document_chunk_direction: out
+      chunk_entity_rel: HAS_ENTITY
+      chunk_entity_direction: out
+      embedding_property: embedding
+      name_property: name
+  - id: entity_without_provenance
+    check: entity_without_provenance
+    with: *model
+  - id: dangling_extraction_relationships
+    check: dangling_extraction_relationships
+    with: *model
+  - id: near_duplicate_entities
+    check: near_duplicate_entities
+    with: *model
+  - id: embedding_consistency
+    check: embedding_consistency
+    with: *model
