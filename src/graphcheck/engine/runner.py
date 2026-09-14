@@ -47,6 +47,7 @@ from graphcheck.engine.compiler import (
 )
 from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
 from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor, _accepts_parameter
+from graphcheck.engine.limits import require_supported_size
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
     ParameterTokenResolver,
@@ -136,6 +137,7 @@ class EngineConfig:
     result_row_limit: int = 100_000
     eager_competency_evaluation: bool = False
     max_concurrency: int = 2
+    enforce_size_limit: bool = True
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,
@@ -172,6 +174,8 @@ class EngineConfig:
             raise ValueError("result_row_limit must be a positive integer")
         if not isinstance(self.eager_competency_evaluation, bool):
             raise ValueError("eager_competency_evaluation must be boolean")
+        if not isinstance(self.enforce_size_limit, bool):
+            raise ValueError("enforce_size_limit must be boolean")
 
 
 @dataclass
@@ -445,6 +449,8 @@ class Engine:
         self._telemetry_stage = EngineStage.PROBE
         try:
             resolved_target = self._resolve_target_with_events(target, deadline)
+            if self.config.enforce_size_limit:
+                require_supported_size(resolved_target)
         except GraphCheckError as exc:
             return self._failed_run(
                 run_id,

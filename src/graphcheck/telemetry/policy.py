@@ -275,6 +275,7 @@ _ERROR_CODE_MAP.update(
         "neo4j.write_rejected": SafeErrorCode.READ_GUARD_REJECTED,
         "neo4j.read_guard_unavailable": SafeErrorCode.READ_GUARD_REJECTED,
         "engine.timeout": SafeErrorCode.NEO4J_QUERY_FAILED,
+        "engine.graph_size_exceeded": SafeErrorCode.CONFIG_INVALID,
         "generate.config_missing": SafeErrorCode.CONFIG_INVALID,
         "generate.config_invalid": SafeErrorCode.CONFIG_INVALID,
         "generate.api_key_missing": SafeErrorCode.CONFIG_INVALID,

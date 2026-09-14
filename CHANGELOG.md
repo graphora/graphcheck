@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Published a 10-million-node audit ceiling with full core/PII benchmark results and sampling
+  thresholds. Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
+  `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.
+
 - After a comparable previous run, `summary.json` includes a compact `changes` block with new
   failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
   at most 20 entries each and report omitted counts; first runs and unavailable comparisons

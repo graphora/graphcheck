@@ -56,7 +56,7 @@ def test_thirty_check_run_on_ten_million_nodes_records_measurement_baseline(tmp_
     )
     client = Neo4jClient(profile, max_concurrency=concurrency)
     collector = TelemetryCollector()
-    config = EngineConfig(max_concurrency=concurrency)
+    config = EngineConfig(max_concurrency=concurrency, enforce_size_limit=False)
     try:
         target, visibility, counts = client.probe()
         assert visibility.can_read is True
