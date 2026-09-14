@@ -485,6 +485,8 @@ def test_embedding_malformed_results_are_errors(patch):
                 }
             ],
         )
+
+
 def test_label_explosion_names_singleton_labels_and_relationship_types():
     finding_label = {"item_kind": "label", "name": "Person", "count": 1}
     finding_type = {"item_kind": "relationship_type", "name": "WORKED-WITH", "count": 1}
@@ -532,9 +534,7 @@ def test_label_explosion_skips_below_the_population_floor():
 
 
 def test_label_explosion_runs_when_population_meets_the_floor():
-    client = Client(
-        row={"schema_ok": True, "population": 0, "violation_count": 0}, node_count=20
-    )
+    client = Client(row={"schema_ok": True, "population": 0, "violation_count": 0}, node_count=20)
     results = Engine(client).run_suite(
         suite(names=("label_explosion",), min_population=20), target=TARGET
     )

@@ -169,9 +169,7 @@ def _assert_graphrag_fixture(profile, checks, *, clean, label_explosion_min_popu
         GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver,
         driver.session(database=profile.database) as session,
     ):
-        node_count = session.run("MATCH (n) RETURN count(n) AS count").single(strict=True)[
-            "count"
-        ]
+        node_count = session.run("MATCH (n) RETURN count(n) AS count").single(strict=True)["count"]
         min_population = label_explosion_min_population
         # This fixture family always carries singleton case/slash-variant labels (Person,
         # person, Machine / Concept, etc.), clean or planted, so label_explosion always
@@ -260,8 +258,7 @@ def _assert_graphrag_fixture(profile, checks, *, clean, label_explosion_min_popu
         assert chunk_coverage["violation_count"] == 5
         assert chunk_coverage["coverage"] == pytest.approx(2 / 7)
         uncovered_ids = {
-            node_ids[element["id"]]
-            for element in checks["chunk_coverage"]["evidence"]["elements"]
+            node_ids[element["id"]] for element in checks["chunk_coverage"]["evidence"]["elements"]
         }
         assert uncovered_ids == {
             "chunk-orphan",

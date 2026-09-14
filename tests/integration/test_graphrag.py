@@ -237,6 +237,8 @@ def test_embedding_dimension_ties_and_capped_evidence(neo4j_profile, tmp_path):
         assert result["measured"]["expected_dimension"] == 2
         assert result["measured"]["violations"] == 120
         assert len(result["measured"]["findings"]) == 100 and result["evidence"]["truncated"]
+
+
 def test_chunk_coverage_reports_percentage_and_names_entity_less_chunks(neo4j_profile, tmp_path):
     _project(tmp_path, neo4j_profile, "chunk-coverage.yml")
     cypher = """CREATE (d:Document {embedding: null}),
