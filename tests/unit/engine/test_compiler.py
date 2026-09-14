@@ -302,3 +302,11 @@ def test_schema_inventory_compiler_emits_labels_query():
         "required_labels": [],
         "required_relationship_types": [],
     }
+
+
+def test_schema_inventory_compiler_isolates_each_collection_in_its_own_subquery():
+    compiled = CypherCompiler(evidence_cap=9).compile(_drift("schema_inventory", {}))
+    assert compiled.query.count("CALL {") == 3
+    assert "RETURN collect(label) AS labels" in compiled.query
+    assert "RETURN collect(relationshipType) AS relationship_types" in compiled.query
+    assert "AS properties" in compiled.query

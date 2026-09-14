@@ -509,3 +509,53 @@ drift:
     assert check.verdict is Verdict.FAIL
     assert check.measured["current"] == 3
     assert any(element.kind == "node" for element in check.evidence.elements)
+
+
+@pytest.fixture
+def bare_label_graph(neo4j_profile):
+    with (
+        GraphDatabase.driver(
+            neo4j_profile.uri,
+            auth=(neo4j_profile.user, neo4j_profile.password),
+        ) as driver,
+        driver.session(database=neo4j_profile.database) as session,
+    ):
+        session.run("CREATE (:GraphCheckBareLabel)").consume()
+        try:
+            yield
+        finally:
+            session.run("MATCH (n:GraphCheckBareLabel) DETACH DELETE n").consume()
+
+
+def test_schema_inventory_survives_a_propertyless_relationshipless_label(
+    neo4j_profile, bare_label_graph
+):
+    client = Neo4jClient(neo4j_profile)
+    try:
+        results = Engine(
+            client,
+            baselines={
+                "latest": {
+                    "status": "complete",
+                    "schema": {
+                        "labels": [{"name": "GraphCheckBareLabel", "properties": []}],
+                        "relationship_types": [],
+                    },
+                }
+            },
+        ).run_yaml(
+            """
+suite: bare-label-schema-inventory
+drift:
+  - id: schema-inventory
+    metric: schema_inventory
+    target: {}
+    baseline: latest
+    tolerance: {max: 0}
+"""
+        )
+    finally:
+        client.close()
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.PASS

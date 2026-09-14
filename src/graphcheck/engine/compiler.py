@@ -583,17 +583,21 @@ class CypherCompiler:
             raise _unknown_target(spec.metric, unknown)
         query = dedent(
             """
-            CALL db.labels() YIELD label
-            WITH collect(label) AS labels
-            CALL db.relationshipTypes() YIELD relationshipType
-            WITH labels, collect(relationshipType) AS relationship_types
-            CALL db.schema.nodeTypeProperties()
-            YIELD nodeLabels, propertyName
-            WITH labels, relationship_types, nodeLabels, propertyName
-            WHERE propertyName IS NOT NULL
-            UNWIND nodeLabels AS owner
-            WITH labels, relationship_types,
-                 collect(DISTINCT owner + '.' + propertyName) AS properties
+            CALL {
+              CALL db.labels() YIELD label
+              RETURN collect(label) AS labels
+            }
+            CALL {
+              CALL db.relationshipTypes() YIELD relationshipType
+              RETURN collect(relationshipType) AS relationship_types
+            }
+            CALL {
+              CALL db.schema.nodeTypeProperties()
+              YIELD nodeLabels, propertyName
+              WHERE propertyName IS NOT NULL
+              UNWIND nodeLabels AS owner
+              RETURN collect(DISTINCT owner + '.' + propertyName) AS properties
+            }
             RETURN true AS schema_ok, labels, relationship_types, properties
             """
         ).strip()

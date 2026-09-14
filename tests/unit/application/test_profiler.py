@@ -962,6 +962,7 @@ def test_percentile_from_histogram_empty_returns_zero():
 class _CappingFakeClient:
     def __init__(self):
         self.histogram_queries = 0
+        self.histogram_query_allowed_types = []
 
     def run_read(self, query, params=None, *, timeout_s=None):
         if "edge_count" in query:
@@ -972,10 +973,12 @@ class _CappingFakeClient:
             ]
         if "OPTIONAL MATCH" in query:
             self.histogram_queries += 1
+            allowed = frozenset((params or {}).get("allowed_types", []))
+            self.histogram_query_allowed_types.append(allowed)
             return [
-                {"relType": "TypeA", "degree": 10, "nodes_at_degree": 10},
-                {"relType": "TypeB", "degree": 5, "nodes_at_degree": 10},
-                {"relType": "TypeC", "degree": 1, "nodes_at_degree": 10},
+                {"relType": rel_type, "degree": 10, "nodes_at_degree": 10}
+                for rel_type in ("TypeA", "TypeB", "TypeC")
+                if rel_type in allowed
             ]
         return [{"degree": 1, "nodes_at_degree": 10}]
 
@@ -1007,3 +1010,18 @@ def test_collect_degree_distribution_targets_bounds_pairs_before_collecting_hist
     )
 
     assert client.histogram_queries == 0
+
+
+def test_collect_degree_distribution_targets_filters_types_server_side_when_capped():
+    """One label with three types and _pair_cap=1 must only query the kept type in Cypher,
+    not fetch every type's histogram and discard the rest in Python."""
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+    client = _CappingFakeClient()
+
+    profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, client), labels, [], _pair_cap=1
+    )
+
+    assert client.histogram_queries == 3
+    for allowed in client.histogram_query_allowed_types:
+        assert allowed == frozenset({"TypeA"})

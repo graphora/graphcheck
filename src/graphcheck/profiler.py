@@ -880,8 +880,14 @@ def _collect_total_degree_histogram(
 
 
 def _collect_per_type_degree_histograms(
-    client: Neo4jClient, label: str, direction: str, deadline: float | None
+    client: Neo4jClient,
+    label: str,
+    direction: str,
+    deadline: float | None,
+    allowed_types: frozenset[str],
 ) -> dict[str, list[tuple[int, int]]]:
+    if not allowed_types:
+        return {}
     label_ref = _cypher_identifier(label)
     pattern = _direction_pattern(direction, "r")
     rows = _run_read(
@@ -889,9 +895,11 @@ def _collect_per_type_degree_histograms(
         f"MATCH (n:{label_ref})\n"
         f"OPTIONAL MATCH {pattern}\n"
         "WITH n, type(r) AS relType\n"
+        "WHERE relType IN $allowed_types\n"
         "WITH n, relType, count(*) AS degree\n"
         "WITH relType, degree, count(n) AS nodes_at_degree\n"
         "RETURN relType, degree, nodes_at_degree ORDER BY relType, degree",
+        params={"allowed_types": sorted(allowed_types)},
         deadline=deadline,
     )
     histograms: dict[str, list[tuple[int, int]]] = {}
@@ -974,6 +982,11 @@ def collect_degree_distribution_targets(
     kept_pairs = {(label_name, rel_type) for label_name, rel_type, _ in edge_counts[:_pair_cap]}
     partial_reason_code = "degree_incomplete" if len(edge_counts) > _pair_cap else None
     kept_labels = {label_name for label_name, _ in kept_pairs}
+    kept_types_by_label: dict[str, frozenset[str]] = {}
+    for label_name, rel_type in kept_pairs:
+        kept_types_by_label[label_name] = kept_types_by_label.get(label_name, frozenset()) | {
+            rel_type
+        }
 
     per_label_type_data: dict[str, dict[str, dict[str, list[tuple[int, int]]]]] = {}
     for label in labels:
@@ -991,7 +1004,13 @@ def collect_degree_distribution_targets(
                 )
             if label.name not in kept_labels:
                 continue
-            per_type = _collect_per_type_degree_histograms(client, label.name, direction, deadline)
+            per_type = _collect_per_type_degree_histograms(
+                client,
+                label.name,
+                direction,
+                deadline,
+                kept_types_by_label.get(label.name, frozenset()),
+            )
             per_label_type_data.setdefault(label.name, {})[direction] = {
                 rel_type: histogram
                 for rel_type, histogram in per_type.items()
