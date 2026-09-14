@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Published the [artifact compatibility policy](docs/reference/artifact-compatibility.md), with
+  committed results fixtures for schemas 1.0, 1.1, 1.2, and 2.0 and archived 1.x JSON Schemas.
+  The policy includes a tested transformer that writes a validated 2.0 copy. Migration of 1.0/1.1
+  requires trusted historical inventory because those schemas did not record it.
 - After a comparable previous run, `summary.json` includes a compact `changes` block with new
   failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
   at most 20 entries each and report omitted counts; first runs and unavailable comparisons
@@ -53,6 +57,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Reading pre-2.0 results emits one `results.schema_deprecated` warning on stderr per artifact
+  read. Removal is planned for CLI 0.5.0, postponed while the current/previous-schema guarantee
+  requires support. The warning must ship at least one release before removal. Migrate saved
+  artifacts with the transformer above; current 2.0 reads and model revalidation stay quiet.
 - GraphRAG checks report `skipped:model_absent` with an explicit reason when the model is
   unconfigured or any configured role label has no nodes. Completed runs containing only these
   skips exit 0 with a null score and incomplete report coverage. Missing relationship types remain
@@ -74,6 +82,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Re-exporting original 1.0/1.1 results no longer adds null graph-count fields absent from their
+  historical contract. Recorded counts are preserved.
 - Run configuration hashes include the authenticated username so permission changes between
   users have distinct provenance, while passwords and password environment variables stay excluded.
 - Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,

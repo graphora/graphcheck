@@ -18,6 +18,8 @@ from pydantic import (
 from graphcheck.scoring import SEVERITY_WEIGHTS, calculate_score, calculate_suite_scores
 
 SCHEMA_VERSION = "2.0"
+DEPRECATED_SCHEMA_VERSIONS = frozenset({"1.0", "1.1", "1.2"})
+SCHEMA_REMOVAL_RELEASE = "0.5.0"
 
 
 class Verdict(StrEnum):

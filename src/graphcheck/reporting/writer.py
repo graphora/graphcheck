@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from graphcheck.contracts.results import SCHEMA_VERSION, Results
+from graphcheck.contracts.results import (
+    DEPRECATED_SCHEMA_VERSIONS,
+    SCHEMA_REMOVAL_RELEASE,
+    SCHEMA_VERSION,
+    Results,
+)
 
 _JSON_VALUE = TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
 
@@ -31,6 +37,9 @@ def json_compatible(value: object) -> Any:
                 if target is not None:
                     target.pop("labels")
                     target.pop("relationship_types")
+                    for field in ("nodes", "relationships"):
+                        if target[field] is None:
+                            target.pop(field)  # Original 1.0/1.1 targets did not record counts.
     if isinstance(value, Mapping):
         return {str(key): json_compatible(item) for key, item in value.items()}
     if isinstance(value, (set, frozenset)):
@@ -50,6 +59,8 @@ def json_compatible(value: object) -> Any:
 
 
 def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
+    """Normalize supported artifacts, warning once per legacy read, not model revalidation."""
+
     historical_schema_version = None
     if isinstance(data, Results):
         # Pydantic models are mutable and model_copy(update=...) does not validate updates.
@@ -60,7 +71,10 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
     if isinstance(data, Path):
         data = data.read_text(encoding="utf-8")
     payload = json.loads(data) if isinstance(data, str) else data
-    if isinstance(payload, dict) and payload.get("schema_version") in {"1.0", "1.1", "1.2"}:
+    legacy_read = (
+        isinstance(payload, dict) and payload.get("schema_version") in DEPRECATED_SCHEMA_VERSIONS
+    )
+    if legacy_read:
         historical_schema_version = str(payload["schema_version"])
         run = payload.get("run")
         if isinstance(run, dict):
@@ -80,6 +94,14 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
     )
     model = Results.model_validate(payload, context=context)
     model._historical_schema_version = historical_schema_version
+    if legacy_read:
+        print(
+            f"results.schema_deprecated: Reading results schema {historical_schema_version} is "
+            f"deprecated; removal is planned for GraphCheck {SCHEMA_REMOVAL_RELEASE}, postponed "
+            "while required by the current/previous-schema guarantee. "
+            "Use the transformer in docs/reference/artifact-compatibility.md to migrate to 2.0.",
+            file=sys.stderr,
+        )
     return model
 
 
