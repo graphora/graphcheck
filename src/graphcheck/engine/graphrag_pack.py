@@ -89,6 +89,10 @@ def model_presence_query(model: GraphRAGModel) -> tuple[str, dict]:
     }
 
 
+def graph_population_query() -> tuple[str, dict]:
+    return "MATCH (n) RETURN count(n) AS node_count", {}
+
+
 def _reverse(direction: str) -> str:
     return {"out": "in", "in": "out", "any": "any"}[direction]
 

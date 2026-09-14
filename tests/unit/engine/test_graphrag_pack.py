@@ -65,8 +65,9 @@ def suite(names=GRAPHRAG_CHECK_NAMES, model=MODEL, **options):
 
 
 class Client:
-    def __init__(self, *, missing=(), row=None, evidence=(), error=None):
+    def __init__(self, *, missing=(), row=None, evidence=(), error=None, node_count=1000):
         self.missing, self.row, self.evidence, self.error = missing, row, evidence, error
+        self.node_count = node_count
         self.calls = []
 
     def run_read(self, query, params, *, timeout_s=None, allow_missing_schema=False):
@@ -75,6 +76,8 @@ class Client:
             raise self.error
         if "count_0" in query:
             return [{"missing_labels": list(self.missing)}]
+        if "node_count" in query:
+            return [{"node_count": self.node_count}]
         if "violation_count" not in query and "candidates" not in query:
             return [{"evidence": list(self.evidence)}]
         return [self.row]
@@ -512,4 +515,27 @@ def test_label_explosion_names_singleton_labels_and_relationship_types():
 def test_label_explosion_passes_when_no_near_singletons():
     client = Client(row={"schema_ok": True, "population": 0, "violation_count": 0})
     results = Engine(client).run_suite(suite(names=("label_explosion",)), target=TARGET)
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_label_explosion_skips_below_the_population_floor():
+    client = Client(node_count=10)
+    results = Engine(client).run_suite(
+        suite(names=("label_explosion",), min_population=20), target=TARGET
+    )
+    check = results.checks[0]
+    assert check.verdict is Verdict.SKIPPED and check.skip_reason is SkipReason.MODEL_ABSENT
+    assert check.error is None and check.measured is None
+    explanation = present_check(check).skip_reason.explanation
+    assert "20" in explanation and "10" in explanation
+    assert present_check(check).evaluation_label == "Not evaluated"
+
+
+def test_label_explosion_runs_when_population_meets_the_floor():
+    client = Client(
+        row={"schema_ok": True, "population": 0, "violation_count": 0}, node_count=20
+    )
+    results = Engine(client).run_suite(
+        suite(names=("label_explosion",), min_population=20), target=TARGET
+    )
     assert results.checks[0].verdict is Verdict.PASS

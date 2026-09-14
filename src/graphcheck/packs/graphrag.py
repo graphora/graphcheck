@@ -89,6 +89,7 @@ class ChunkCoverageWith(GraphRAGWith, ChunkCoverageOptions):
 
 class LabelExplosionOptions(_WithBase):
     threshold: Annotated[PositiveJsonSchemaInteger, Field(le=1000)] = 1
+    min_population: Annotated[PositiveJsonSchemaInteger, Field(le=1000000)] = 50
 
 
 @register("label_explosion")

@@ -1322,6 +1322,13 @@
                   "default": null,
                   "title": "Extraction Rel Types"
                 },
+                "min_population": {
+                  "default": 50,
+                  "exclusiveMinimum": 0,
+                  "le": 1000000,
+                  "title": "Min Population",
+                  "type": "integer"
+                },
                 "name_property": {
                   "default": "name",
                   "minLength": 1,
