@@ -10,7 +10,7 @@ from graphcheck.engine.compiler import (
     register_conformance_compiler,
 )
 from graphcheck.engine.core_pack import _compile_no_orphans, _node_pointer, _relationship_path
-from graphcheck.engine.identifiers import node_pattern, property_access
+from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.engine.sampling import (
     CYPHER_SAMPLE_MODULUS,
     cypher_hash_expression,
@@ -87,6 +87,10 @@ def model_presence_query(model: GraphRAGModel) -> tuple[str, dict]:
     return f"{counts}\nRETURN [label IN [{missing}] WHERE label IS NOT NULL] AS missing_labels", {
         "labels": labels
     }
+
+
+def graph_population_query() -> tuple[str, dict]:
+    return "MATCH (n) RETURN count(n) AS node_count", {}
 
 
 def _reverse(direction: str) -> str:
@@ -337,3 +341,109 @@ def duplicate_groups(candidates: list[dict], threshold: float) -> list[dict]:
         for group in grouped.values()
         if sum(len(by_key[key]) for key in group) > 1
     ]
+
+
+@register_conformance_compiler("chunk_coverage")
+def _compile_chunk_coverage(config: dict, evidence_cap: int, sample_seed: int) -> ConformancePlan:
+    del sample_seed
+    model = GraphRAGModel.model_validate({key: config[key] for key in GraphRAGModel.model_fields})
+    threshold = float(config.get("threshold", 0.95))
+    chunk = node_pattern("n", model.chunk_label)
+    entity = node_pattern("", model.entity_label)
+    relationship = relationship_pattern("", model.chunk_entity_rel)
+    if model.chunk_entity_direction == "out":
+        path = f"(n)-{relationship}->{entity}"
+    elif model.chunk_entity_direction == "in":
+        path = f"(n)<-{relationship}-{entity}"
+    else:
+        path = f"(n)-{relationship}-{entity}"
+    linked = f"EXISTS {{ {path} }}"
+    query = (
+        f"MATCH {chunk}\n"
+        f"RETURN true AS schema_ok, count(n) AS population, "
+        f"sum(CASE WHEN {linked} THEN 1 ELSE 0 END) AS conforming_count, "
+        f"sum(CASE WHEN NOT {linked} THEN 1 ELSE 0 END) AS violation_count, "
+        "CASE WHEN count(n) = 0 THEN 1.0 "
+        f"ELSE toFloat(sum(CASE WHEN {linked} THEN 1 ELSE 0 END)) / count(n) END AS coverage, "
+        "[] AS evidence"
+    )
+    evidence_query = (
+        f"MATCH {chunk}\n"
+        f"WHERE NOT {linked}\n"
+        "WITH n ORDER BY elementId(n) LIMIT $evidence_cap\n"
+        f"RETURN collect({_node_pointer('n')}) AS evidence"
+    )
+    params = {
+        "evidence_cap": evidence_cap,
+        "required_labels": [],
+        "required_relationship_types": [],
+    }
+    return ConformancePlan(
+        query=query,
+        params=params,
+        expected={"threshold": threshold},
+        name="Chunks mention at least one entity",
+        evidence_query=evidence_query,
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("coverage", "lt", threshold),
+    )
+
+
+@register_conformance_compiler("label_explosion")
+def _compile_label_explosion(config: dict, evidence_cap: int, sample_seed: int) -> ConformancePlan:
+    del sample_seed
+    GraphRAGModel.model_validate({key: config[key] for key in GraphRAGModel.model_fields})
+    threshold = int(config.get("threshold", 1))
+    # Aggregate counts only -- never collect the matching nodes/relationships themselves,
+    # so cost scales with the number of distinct labels/types, not the size of the largest
+    # common one. Rare/offending items (by definition few, since threshold filters them)
+    # get a sample resolved separately, only for evidence, only for the bounded survivors.
+    scan = (
+        "CALL {\n"
+        "  MATCH (n)\n"
+        "  UNWIND labels(n) AS name\n"
+        "  WITH name, count(*) AS item_count, min(elementId(n)) AS sample_id\n"
+        "  WHERE item_count <= $label_explosion_threshold\n"
+        "  RETURN 'label' AS kind, name, item_count, sample_id\n"
+        "  UNION ALL\n"
+        "  MATCH ()-[r]->()\n"
+        "  WITH type(r) AS name, count(*) AS item_count,\n"
+        "       min(elementId(startNode(r))) AS sample_id\n"
+        "  WHERE item_count <= $label_explosion_threshold\n"
+        "  RETURN 'relationship_type' AS kind, name, item_count, sample_id\n"
+        "}\n"
+    )
+    sample_lookup = (
+        "CALL {\n"
+        "  WITH sample_id\n"
+        "  MATCH (sample) WHERE elementId(sample) = sample_id\n"
+        "  RETURN sample\n"
+        "}\n"
+    )
+    params = {
+        "evidence_cap": evidence_cap,
+        "label_explosion_threshold": threshold,
+        "required_labels": [],
+        "required_relationship_types": [],
+    }
+    return ConformancePlan(
+        query=(
+            f"{scan}"
+            "RETURN true AS schema_ok, count(*) AS violation_count, "
+            "count(*) AS population, [] AS evidence"
+        ),
+        params=params,
+        expected={"singletons": 0},
+        name="Labels and relationship types are not near-singletons",
+        evidence_query=(
+            f"{scan}"
+            "WITH kind, name, item_count, sample_id ORDER BY kind, name LIMIT $evidence_cap\n"
+            f"{sample_lookup}"
+            "RETURN collect({"
+            "kind: 'node', id: elementId(sample), labels: labels(sample), "
+            f"finding: {{item_kind: kind, name: name, count: item_count}}"
+            "}) AS evidence"
+        ),
+        evidence_params=params,
+        evidence_condition=EvidenceCondition("violation_count", "gt", 0),
+    )

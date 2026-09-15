@@ -101,7 +101,12 @@ def test_a_wholly_missing_relationship_is_a_defect(neo4j_profile, tmp_path, rela
         checks = {check["id"]: check for check in _run_payload(tmp_path)["checks"]}
         affected = "orphan_chunks" if relationship == "PART_OF" else "entity_without_provenance"
         assert checks[affected]["verdict"] == "fail"
-        assert all(check["verdict"] in {"pass", "fail"} for check in checks.values())
+        assert checks["label_explosion"]["verdict"] == "skipped"
+        assert all(
+            check["verdict"] in {"pass", "fail"}
+            for name, check in checks.items()
+            if name != "label_explosion"
+        )
 
 
 def test_wrong_label_links_do_not_supply_provenance(neo4j_profile, tmp_path):
@@ -140,7 +145,11 @@ def test_custom_reversed_model_and_multiple_documents_are_supported(neo4j_profil
       (a)-[:`from text`]->(c), (b)-[:`from text`]->(c), (a)-[:connects]->(b)"""
     with _seeded_graph(neo4j_profile, cypher):
         _assert_cli_exit(_cli(tmp_path, "run", "--suite", "graphrag"), 0)
-        assert all(check["verdict"] == "pass" for check in _run_payload(tmp_path)["checks"])
+        checks = _run_payload(tmp_path)["checks"]
+        assert next(c for c in checks if c["id"] == "label_explosion")["verdict"] == "skipped"
+        assert all(
+            check["verdict"] == "pass" for check in checks if check["id"] != "label_explosion"
+        )
 
 
 @pytest.mark.parametrize("vector", ["[1, 2]", "[0.125, -0.25]", "[1, 0.5]"])
@@ -228,3 +237,34 @@ def test_embedding_dimension_ties_and_capped_evidence(neo4j_profile, tmp_path):
         assert result["measured"]["expected_dimension"] == 2
         assert result["measured"]["violations"] == 120
         assert len(result["measured"]["findings"]) == 100 and result["evidence"]["truncated"]
+
+
+def test_chunk_coverage_reports_percentage_and_names_entity_less_chunks(neo4j_profile, tmp_path):
+    _project(tmp_path, neo4j_profile, "chunk-coverage.yml")
+    cypher = """CREATE (d:Document {embedding: null}),
+      (c1:Chunk {embedding: null}), (c2:Chunk {embedding: null}),
+      (c3:Chunk {embedding: null}), (c4:Chunk {embedding: null}),
+      (e1:`__Entity__` {embedding: null}), (e2:`__Entity__` {embedding: null}),
+      (d)-[:PART_OF]->(c1), (d)-[:PART_OF]->(c2), (d)-[:PART_OF]->(c3), (d)-[:PART_OF]->(c4),
+      (c1)-[:HAS_ENTITY]->(e1), (c2)-[:HAS_ENTITY]->(e2)"""
+    with _seeded_graph(neo4j_profile, cypher):
+        run = _cli(tmp_path, "run", "--suite", "hostile-chunk-coverage")
+        _assert_cli_exit(run, 1)
+        check = _run_payload(tmp_path)["checks"][0]
+        assert check["verdict"] == "fail"
+        assert check["measured"]["coverage"] == 0.5
+        assert check["measured"]["violation_count"] == 2
+        pointer_ids = {element["id"] for element in check["evidence"]["elements"]}
+        assert len(pointer_ids) == 2
+
+
+def test_chunk_coverage_passes_when_every_chunk_has_an_entity(neo4j_profile, tmp_path):
+    _project(tmp_path, neo4j_profile, "chunk-coverage.yml")
+    cypher = """CREATE (d:Document {embedding: null}),
+      (c1:Chunk {embedding: null}), (c2:Chunk {embedding: null}),
+      (e1:`__Entity__` {embedding: null}),
+      (d)-[:PART_OF]->(c1), (d)-[:PART_OF]->(c2),
+      (c1)-[:HAS_ENTITY]->(e1), (c2)-[:HAS_ENTITY]->(e1)"""
+    with _seeded_graph(neo4j_profile, cypher):
+        _assert_cli_exit(_cli(tmp_path, "run", "--suite", "hostile-chunk-coverage"), 0)
+        assert _run_payload(tmp_path)["checks"][0]["verdict"] == "pass"
