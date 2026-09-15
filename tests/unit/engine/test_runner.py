@@ -309,6 +309,53 @@ def test_supplied_target_without_inventory_fails_before_checks():
     assert results.run.error.code == "engine.target_inventory_missing"
 
 
+@pytest.mark.parametrize("supplied", [False, True])
+@pytest.mark.parametrize("nodes,relationships", [(10_000_001, 0), (10_000_001, 9_500_001)])
+def test_oversize_target_stops_before_dispatch_with_actionable_diagnostic(
+    supplied, nodes, relationships
+):
+    target = TARGET.model_copy(update={"nodes": nodes, "relationships": relationships})
+    client = RichClient([], probe_result=target)
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target if supplied else None)
+    assert result.run.run_status is RunStatus.FAILED
+    assert result.run.exit_code == 3
+    assert result.run.error.code == "engine.graph_size_exceeded"
+    assert "smaller database or partition" in result.run.error.fix
+    assert not client.read_calls
+    assert not result.checks
+
+
+def test_supported_size_boundary_is_inclusive():
+    target = TARGET.model_copy(update={"nodes": 10_000_000, "relationships": 9_500_000})
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target)
+    assert result.run.run_status is RunStatus.COMPLETE
+    assert len(client.read_calls) == 1
+
+
+def test_relationship_count_is_workload_context_not_a_second_hard_limit():
+    target = TARGET.model_copy(update={"nodes": 100, "relationships": 10_000_001})
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target)
+    assert result.run.run_status is RunStatus.COMPLETE
+
+
+def test_benchmark_can_explicitly_bypass_size_guard_without_changing_workers_or_budget():
+    target = TARGET.model_copy(update={"nodes": 10_000_001, "relationships": 9_500_001})
+    client = RichClient([_passing_conformance_result()])
+    config = EngineConfig(enforce_size_limit=False)
+    result = Engine(client, config=config).run_yaml(PASSING_SUITE, target=target)
+    assert config.max_concurrency == 2
+    assert config.time_budget_s == 295
+    assert result.run.run_status is RunStatus.COMPLETE
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false"])
+def test_size_guard_setting_must_be_boolean(invalid):
+    with pytest.raises(ValueError, match="enforce_size_limit"):
+        EngineConfig(enforce_size_limit=invalid)
+
+
 def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():
     measurement = RichResult(
         [

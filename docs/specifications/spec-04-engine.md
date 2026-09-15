@@ -640,6 +640,7 @@ All structured errors contain `{code,message,fix}`. Principal engine/command cod
 | `engine.sampling_invalid` | Population/sample plan is malformed |
 | `engine.check_unobservable` | Requested rule cannot be observed accurately in Cypher |
 | `engine.timeout` | Shared run deadline is exhausted |
+| `engine.graph_size_exceeded` | Probed graph exceeds the published node ceiling; no checks are dispatched; exit 3 with a `Fix:` diagnostic |
 | `engine.internal_error` | Unexpected component exception was isolated |
 | `neo4j.write_rejected` | Server planner classified a submitted statement as write-capable |
 | `neo4j.read_guard_unavailable` | Server/driver could not prove that a statement is read-only |

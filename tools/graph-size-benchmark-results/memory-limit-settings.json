@@ -1,0 +1,22 @@
+[
+  {
+    "name": "db.memory.transaction.max",
+    "value": "0B"
+  },
+  {
+    "name": "db.memory.transaction.total.max",
+    "value": "0B"
+  },
+  {
+    "name": "dbms.memory.transaction.total.max",
+    "value": "2.00GiB"
+  },
+  {
+    "name": "server.memory.heap.max_size",
+    "value": "2.00GiB"
+  },
+  {
+    "name": "server.memory.pagecache.size",
+    "value": "512.00MiB"
+  }
+]
