@@ -28,7 +28,7 @@ hard-coded into a query. Identifiers are escaped, including spaces and backticks
 are `out`, `in`, or `any`, relative to Document for the document/chunk link and Chunk for the
 chunk/entity link. Omit `extraction_rel_types` to inspect all relationships whose endpoints
 both have the configured entity label. An explicit list must be nonempty and unique.
-`embedding_property` is reserved model configuration; these checks do not inspect embeddings.
+`embedding_property` selects the numeric list `embedding_consistency` inspects on every configured chunk.
 
 Enabling the pack adds a virtual `graphrag` suite containing all seven checks, tagged `graphrag`.
 Its effective configuration contributes to the suite hash and sampling seed. Setting
