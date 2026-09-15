@@ -165,6 +165,8 @@ class VerdictEvaluator:
 
         if spec.check in {"pii_name_match", "pii_value_match"}:
             return self._pii(compiled, row, spec.check)
+        if spec.check == "label_explosion":
+            return self._label_explosion(compiled, row)
         if spec.check == "near_duplicate_entities":
             return self._near_duplicate_entities(compiled, row)
         if spec.check == "embedding_consistency":
@@ -182,22 +184,25 @@ class VerdictEvaluator:
             conforming = _integer(row, "conforming_count", compiled)
             violations = _integer(row, "violation_count", compiled)
             threshold = float(spec.with_.get("threshold", 1.0))
-            expected_coverage = 1.0 if population == 0 else conforming / population
-            if (
-                conforming + violations != population
-                or not 0.0 <= coverage <= 1.0
-                or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
-            ):
-                raise _bad_result(
-                    compiled,
-                    "population, conforming_count, violation_count, and coverage disagree",
-                )
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
             measured: dict[str, object] = {
                 "coverage": coverage,
                 "population": population,
                 "conforming": conforming,
                 "violations": violations,
             }
+            passed = coverage >= threshold
+        elif spec.check == "chunk_coverage":
+            violations = _integer(row, "violation_count", compiled)
+            population = _integer(row, "population", compiled, default=violations)
+            conforming = _integer(row, "conforming_count", compiled)
+            coverage = _number(row, "coverage", compiled)
+            threshold = float(spec.with_.get("threshold", 0.95))
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
+            measured = {"violations": violations, "population": population}
+            for key, value in row.items():
+                if key not in _SUMMARY_INTERNAL_FIELDS and _is_measurement(value):
+                    measured.setdefault(key, value)
             passed = coverage >= threshold
         else:
             violations = _integer(row, "violation_count", compiled)
@@ -276,6 +281,31 @@ class VerdictEvaluator:
         evidence = _build_evidence(
             f"{compiled.name}: {violations} violation(s); reference dimension {dimension}. "
             f"Findings: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _label_explosion(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        violations = _integer(row, "violation_count", compiled)
+        measured: dict[str, object] = {"violations": violations, "population": violations}
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records:
+            raise _bad_result(compiled, "label explosion evidence must contain findings")
+        findings = [
+            record["finding"]
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("finding"), dict)
+        ]
+        if len(findings) != len(records):
+            raise _bad_result(compiled, "label explosion finding omitted its name and count")
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} near-singleton(s). "
+            f"{json.dumps(findings, ensure_ascii=False)}",
             compiled,
             rows=records,
             total_count=violations,
@@ -748,6 +778,21 @@ def _bad_result(compiled: CompiledCheck, detail: str) -> GraphCheckError:
         f"Check {compiled.check.id!r} cannot be evaluated: {detail}.",
         "Fix the compiler/query so it returns the documented C1 result shape.",
     )
+
+
+def _validate_coverage_summary(
+    compiled: CompiledCheck, population: int, conforming: int, violations: int, coverage: float
+) -> None:
+    expected_coverage = 1.0 if population == 0 else conforming / population
+    if (
+        conforming + violations != population
+        or not 0.0 <= coverage <= 1.0
+        or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        raise _bad_result(
+            compiled,
+            "population, conforming_count, violation_count, and coverage disagree",
+        )
 
 
 def _pii_matches(
