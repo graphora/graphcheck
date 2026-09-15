@@ -394,19 +394,38 @@ def _compile_label_explosion(config: dict, evidence_cap: int, sample_seed: int) 
     del sample_seed
     GraphRAGModel.model_validate({key: config[key] for key in GraphRAGModel.model_fields})
     threshold = int(config.get("threshold", 1))
+    # Aggregate counts only -- never collect the matching nodes/relationships themselves,
+    # so cost scales with the number of distinct labels/types, not the size of the largest
+    # common one. Rare/offending items (by definition few, since threshold filters them)
+    # get a sample resolved separately, only for evidence, only for the bounded survivors.
     scan = (
         "CALL {\n"
         "  MATCH (n)\n"
         "  UNWIND labels(n) AS name\n"
-        "  WITH name, count(*) AS item_count, collect(n)[0] AS sample\n"
-        "  RETURN 'label' AS kind, name, item_count, sample\n"
+        "  WITH name, count(*) AS item_count\n"
+        "  WHERE item_count <= $label_explosion_threshold\n"
+        "  RETURN 'label' AS kind, name, item_count\n"
         "  UNION ALL\n"
         "  MATCH ()-[r]->()\n"
-        "  WITH type(r) AS name, count(*) AS item_count, collect(startNode(r))[0] AS sample\n"
-        "  RETURN 'relationship_type' AS kind, name, item_count, sample\n"
+        "  WITH type(r) AS name, count(*) AS item_count\n"
+        "  WHERE item_count <= $label_explosion_threshold\n"
+        "  RETURN 'relationship_type' AS kind, name, item_count\n"
         "}\n"
-        "WITH kind, name, item_count, sample\n"
-        "WHERE item_count <= $label_explosion_threshold\n"
+    )
+    sample_lookup = (
+        "CALL {\n"
+        "  WITH kind, name\n"
+        "  WITH kind, name WHERE kind = 'label'\n"
+        "  MATCH (candidate) WHERE name IN labels(candidate)\n"
+        "  RETURN candidate AS sample\n"
+        "  LIMIT 1\n"
+        "  UNION\n"
+        "  WITH kind, name\n"
+        "  WITH kind, name WHERE kind = 'relationship_type'\n"
+        "  MATCH (candidate)-[r]->() WHERE type(r) = name\n"
+        "  RETURN candidate AS sample\n"
+        "  LIMIT 1\n"
+        "}\n"
     )
     params = {
         "evidence_cap": evidence_cap,
@@ -425,7 +444,8 @@ def _compile_label_explosion(config: dict, evidence_cap: int, sample_seed: int) 
         name="Labels and relationship types are not near-singletons",
         evidence_query=(
             f"{scan}"
-            "WITH kind, name, item_count, sample ORDER BY kind, name LIMIT $evidence_cap\n"
+            "WITH kind, name, item_count ORDER BY kind, name LIMIT $evidence_cap\n"
+            f"{sample_lookup}"
             "RETURN collect({"
             "kind: 'node', id: elementId(sample), labels: labels(sample), "
             f"finding: {{item_kind: kind, name: name, count: item_count}}"
