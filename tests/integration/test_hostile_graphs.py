@@ -178,13 +178,25 @@ def test_llm_kg_builder_cli_matrix_handles_noisy_schema(neo4j_profile, tmp_path)
     assert _run_payload(tmp_path)["run"]["run_status"] == "complete"
 
 
-def _assert_graphrag_fixture(profile, checks, *, clean):
+def _assert_graphrag_fixture(profile, checks, *, clean, label_explosion_min_population=50):
     assert set(checks) == set(GRAPHRAG_CHECK_NAMES)
-    assert all(check["verdict"] == ("pass" if clean else "fail") for check in checks.values())
     with (
         GraphDatabase.driver(profile.uri, auth=(profile.user, profile.password)) as driver,
         driver.session(database=profile.database) as session,
     ):
+        node_count = session.run("MATCH (n) RETURN count(n) AS count").single(strict=True)["count"]
+        min_population = label_explosion_min_population
+        # This fixture family always carries singleton case/slash-variant labels (Person,
+        # person, Machine / Concept, etc.), clean or planted, so label_explosion always
+        # fails once the population floor is cleared -- never "pass" on this fixture.
+        label_explosion_expected = "skipped" if node_count < min_population else "fail"
+        for name, check in checks.items():
+            if name == "label_explosion":
+                assert check["verdict"] == label_explosion_expected
+                if label_explosion_expected == "skipped":
+                    assert check["error"] is None and check["measured"] is None
+                continue
+            assert check["verdict"] == ("pass" if clean else "fail")
         # These two features remain fixture assertions, not additional pack checks.
         singleton = session.run(
             "MATCH (n:__Entity__:SingletonTopic) RETURN count(n) AS count"
@@ -206,6 +218,13 @@ def _assert_graphrag_fixture(profile, checks, *, clean):
             }
         )
         if clean:
+            assert checks["chunk_coverage"]["measured"] == {
+                "population": 2,
+                "conforming_count": 2,
+                "violation_count": 0,
+                "violations": 0,
+                "coverage": 1.0,
+            }
             return
         node_ids = dict(
             session.run(
@@ -248,7 +267,47 @@ def _assert_graphrag_fixture(profile, checks, *, clean):
             "chunk-zero-embedding": ("zero", 4),
             "chunk-nan-embedding": ("nan", 4),
         }
-        assert all(check["evidence"]["elements"] for check in checks.values())
+        chunk_coverage = checks["chunk_coverage"]["measured"]
+        assert chunk_coverage["population"] == 7
+        assert chunk_coverage["conforming_count"] == 2
+        assert chunk_coverage["violation_count"] == 5
+        assert chunk_coverage["coverage"] == pytest.approx(2 / 7)
+        uncovered_ids = {
+            node_ids[element["id"]] for element in checks["chunk_coverage"]["evidence"]["elements"]
+        }
+        assert uncovered_ids == {
+            "chunk-orphan",
+            "chunk-missing-embedding",
+            "chunk-wrong-dimension",
+            "chunk-zero-embedding",
+            "chunk-nan-embedding",
+        }
+        if label_explosion_expected == "fail":
+            label_explosion = checks["label_explosion"]["measured"]
+            assert label_explosion["violations"] == 13
+            findings = {
+                (finding["item_kind"], finding["name"]) for finding in label_explosion["findings"]
+            }
+            assert findings == {
+                ("label", "Person"),
+                ("label", "person"),
+                ("label", "Machine / Concept"),
+                ("label", "Country"),
+                ("label", "Country / Region"),
+                ("label", "SingletonTopic"),
+                ("label", "Odd`Label"),
+                ("relationship_type", "FIRST_CHUNK"),
+                ("relationship_type", "NEXT_CHUNK"),
+                ("relationship_type", "WORKED-WITH"),
+                ("relationship_type", "LOCATED_IN"),
+                ("relationship_type", "MENTORED"),
+                ("relationship_type", "points to"),
+            }
+        assert all(
+            check["evidence"]["elements"]
+            for name, check in checks.items()
+            if check["verdict"] != "skipped"
+        )
 
 
 def _graphrag_case(root, profile, name, *, clean):
@@ -257,7 +316,7 @@ def _graphrag_case(root, profile, name, *, clean):
     with _seeded_graph(profile, fixture):
         _case_matrix(root, name)
         checks = {check["id"]: check for check in _run_payload(root)["checks"]}
-        _assert_graphrag_fixture(profile, checks, clean=clean)
+        _assert_graphrag_fixture(profile, checks, clean=clean, label_explosion_min_population=15)
 
 
 def test_graphrag_hostile_pack_finds_every_planted_defect(neo4j_profile, tmp_path):

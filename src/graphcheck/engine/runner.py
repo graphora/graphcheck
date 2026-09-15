@@ -1158,7 +1158,11 @@ class Engine:
         )
 
     def _graphrag_absence(self, check, deadline: float) -> str | None:
-        from graphcheck.engine.graphrag_pack import configured_model, model_presence_query
+        from graphcheck.engine.graphrag_pack import (
+            configured_model,
+            graph_population_query,
+            model_presence_query,
+        )
 
         model = configured_model(check.spec.with_)
         if model is None:
@@ -1185,12 +1189,36 @@ class Engine:
                 "Fix the connector's model preflight result.",
             )
         missing = result.rows[0]["missing_labels"]
-        return (
-            "GraphRAG model is absent: no nodes with configured label(s) "
-            f"{', '.join(map(repr, missing))}."
-            if missing
-            else None
-        )
+        if missing:
+            return (
+                "GraphRAG model is absent: no nodes with configured label(s) "
+                f"{', '.join(map(repr, missing))}."
+            )
+        if check.spec.check == "label_explosion":
+            min_population = int(check.spec.with_.get("min_population", 50))
+            pop_query, pop_params = graph_population_query()
+            pop_result = self._execute_query_with_event(
+                pop_query,
+                pop_params,
+                role=QueryRole.TARGET_PROBE,
+                timeout_s=_remaining(deadline, self._monotonic()),
+                allow_missing_schema=True,
+            )
+            if len(pop_result.rows) != 1 or not isinstance(
+                pop_result.rows[0].get("node_count"), int
+            ):
+                raise GraphCheckError(
+                    "engine.invalid_query_result",
+                    "GraphRAG label_explosion population preflight returned an invalid count.",
+                    "Fix the connector's node-count preflight result.",
+                )
+            node_count = pop_result.rows[0]["node_count"]
+            if node_count < min_population:
+                return (
+                    f"label_explosion needs at least {min_population} nodes to distinguish "
+                    f"genuine label explosion from a small graph; found {node_count}."
+                )
+        return None
 
     def _reset_telemetry_state(self) -> None:
         self._telemetry = None

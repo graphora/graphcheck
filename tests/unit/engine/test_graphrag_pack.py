@@ -65,8 +65,9 @@ def suite(names=GRAPHRAG_CHECK_NAMES, model=MODEL, **options):
 
 
 class Client:
-    def __init__(self, *, missing=(), row=None, evidence=(), error=None):
+    def __init__(self, *, missing=(), row=None, evidence=(), error=None, node_count=1000):
         self.missing, self.row, self.evidence, self.error = missing, row, evidence, error
+        self.node_count = node_count
         self.calls = []
 
     def run_read(self, query, params, *, timeout_s=None, allow_missing_schema=False):
@@ -75,6 +76,8 @@ class Client:
             raise self.error
         if "count_0" in query:
             return [{"missing_labels": list(self.missing)}]
+        if "node_count" in query:
+            return [{"node_count": self.node_count}]
         if "violation_count" not in query and "candidates" not in query:
             return [{"evidence": list(self.evidence)}]
         return [self.row]
@@ -482,3 +485,123 @@ def test_embedding_malformed_results_are_errors(patch):
                 }
             ],
         )
+
+
+def test_label_explosion_names_singleton_labels_and_relationship_types():
+    finding_label = {"item_kind": "label", "name": "Person", "count": 1}
+    finding_type = {"item_kind": "relationship_type", "name": "WORKED-WITH", "count": 1}
+    client = Client(
+        row={"schema_ok": True, "population": 2, "violation_count": 2},
+        evidence=[
+            {
+                "node_id": "4:g:1",
+                "pointer": {"kind": "node", "id": "4:g:1"},
+                "finding": finding_label,
+            },
+            {
+                "node_id": "4:g:2",
+                "pointer": {"kind": "node", "id": "4:g:2"},
+                "finding": finding_type,
+            },
+        ],
+    )
+    results = Engine(client).run_suite(suite(names=("label_explosion",)), target=TARGET)
+
+    check = results.checks[0]
+    assert check.verdict is Verdict.FAIL
+    assert check.measured["findings"] == [finding_label, finding_type]
+    assert "WORKED-WITH" in check.evidence.message
+    assert "Person" in check.evidence.message
+
+
+def test_label_explosion_passes_when_no_near_singletons():
+    client = Client(row={"schema_ok": True, "population": 0, "violation_count": 0})
+    results = Engine(client).run_suite(suite(names=("label_explosion",)), target=TARGET)
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_label_explosion_skips_below_the_population_floor():
+    client = Client(node_count=10)
+    results = Engine(client).run_suite(
+        suite(names=("label_explosion",), min_population=20), target=TARGET
+    )
+    check = results.checks[0]
+    assert check.verdict is Verdict.SKIPPED and check.skip_reason is SkipReason.MODEL_ABSENT
+    assert check.error is None and check.measured is None
+    explanation = present_check(check).skip_reason.explanation
+    assert "20" in explanation and "10" in explanation
+    assert present_check(check).evaluation_label == "Not evaluated"
+
+
+def test_label_explosion_runs_when_population_meets_the_floor():
+    client = Client(row={"schema_ok": True, "population": 0, "violation_count": 0}, node_count=20)
+    results = Engine(client).run_suite(
+        suite(names=("label_explosion",), min_population=20), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_passes_above_threshold_despite_nonzero_violations():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 99,
+            "violation_count": 1,
+            "coverage": 0.99,
+        }
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_passes_exactly_at_threshold_boundary():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 95,
+            "violation_count": 5,
+            "coverage": 0.95,
+        }
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_fails_below_threshold_with_nonzero_violations():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 90,
+            "violation_count": 10,
+            "coverage": 0.90,
+        },
+        evidence=[{"kind": "node", "id": "chunk-uncovered"}],
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.FAIL
+
+
+def test_chunk_coverage_errors_on_internally_inconsistent_summary():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 0,
+            "violation_count": 100,
+            "coverage": 0.99,
+        },
+        evidence=[{"kind": "node", "id": "chunk-x"}],
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.ERRORED

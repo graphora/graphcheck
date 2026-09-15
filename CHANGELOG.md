@@ -10,6 +10,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
   thresholds. Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
   `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.
 
+- GraphRAG `chunk_coverage` reports the share of Chunks linked to at least one Entity against
+  a configurable threshold (default 0.95), naming entity-less Chunks in evidence.
+  `label_explosion` flags labels and relationship types across the whole schema at or below
+  a configurable threshold (default 1), reporting findings and node evidence; graphs under a
+  configurable minimum node count (default 50) are not evaluated rather than flagged, since a
+  small graph makes almost every label look like a singleton.
 - After a comparable previous run, `summary.json` includes a compact `changes` block with new
   failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
   at most 20 entries each and report omitted counts; first runs and unavailable comparisons
