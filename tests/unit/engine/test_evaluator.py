@@ -1172,3 +1172,28 @@ def test_schema_inventory_detects_property_change_when_labels_and_types_are_unch
     assert evaluation.measured["current"] == 2
     ids = {element.id for element in evaluation.evidence.elements}
     assert ids == {"property_added:Account.currency", "property_removed:Account.balance"}
+
+
+def test_schema_inventory_distinguishes_labels_and_properties_containing_dots():
+    # Under a naive owner + "." + property join, label "A.B" property "c" and label
+    # "A" property "B.c" would both flatten to "A.B.c", silently hiding a real change
+    # for these (valid, if unusual) Neo4j identifiers. Escaping keeps them distinct.
+    baseline = BaselineValue(
+        0,
+        evidence=(EvidenceElement(kind="aggregate", id="property:A\\.B.c"),),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": [],
+                "relationship_types": [],
+                "properties": ["A.B\\.c"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    ids = {element.id for element in evaluation.evidence.elements}
+    assert ids == {"property_added:A.B\\.c", "property_removed:A\\.B.c"}

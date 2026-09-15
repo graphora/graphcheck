@@ -461,3 +461,21 @@ def test_c4_schema_inventory_includes_label_scoped_property_evidence():
         "property:Account.id",
         "property:Account.balance",
     }
+
+
+def test_c4_schema_inventory_escapes_dots_in_label_and_property_names():
+    # A naive owner + "." + property join would flatten label "A.B" property "c" to the
+    # same string as label "A" property "B.c" ("A.B.c" either way), hiding a real schema
+    # change for these (valid, if unusual) Neo4j identifiers. Escaping keeps them distinct.
+    profile = _c4_profile()
+    profile["schema"]["labels"] = [
+        {"name": "A.B", "count": 1, "properties": [{"name": "c", "type": "STRING"}]},
+    ]
+    profile["schema"]["relationship_types"] = []
+
+    value = MappingBaselineProvider({"latest": profile}).resolve("latest", "schema_inventory", {})
+
+    assert {e.id for e in value.evidence} == {
+        "label:A.B",
+        "property:A\\.B.c",
+    }

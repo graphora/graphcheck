@@ -596,7 +596,10 @@ class CypherCompiler:
               YIELD nodeLabels, propertyName
               WHERE propertyName IS NOT NULL
               UNWIND nodeLabels AS owner
-              RETURN collect(DISTINCT owner + '.' + propertyName) AS properties
+              WITH DISTINCT
+                replace(replace(owner, '\\', '\\\\'), '.', '\\.') AS owner_key,
+                replace(replace(propertyName, '\\', '\\\\'), '.', '\\.') AS property_key
+              RETURN collect(owner_key + '.' + property_key) AS properties
             }
             RETURN true AS schema_ok, labels, relationship_types, properties
             """

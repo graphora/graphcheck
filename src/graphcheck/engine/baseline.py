@@ -227,6 +227,13 @@ def _relationship_count(raw: Mapping[str, object], rel_type: str) -> object | No
     return None
 
 
+def _escape_schema_component(value: str) -> str:
+    # Matches the live query's escaping (compiler._compile_schema_inventory) so a label
+    # or property name containing a literal "." can never collide with a different
+    # owner/property split that happens to produce the same joined string.
+    return value.replace("\\", "\\\\").replace(".", "\\.")
+
+
 def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | None:
     schema = raw.get("schema", raw.get("graph_schema"))
     if not isinstance(schema, Mapping):
@@ -246,7 +253,13 @@ def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | No
         if isinstance(item, Mapping) and isinstance(item.get("name"), str)
     )
     evidence.extend(
-        {"kind": "aggregate", "id": f"property:{item['name']}.{prop['name']}"}
+        {
+            "kind": "aggregate",
+            "id": (
+                f"property:{_escape_schema_component(item['name'])}."
+                f"{_escape_schema_component(prop['name'])}"
+            ),
+        }
         for item in labels
         if isinstance(item, Mapping) and isinstance(item.get("name"), str)
         for prop in (item.get("properties") or [])
