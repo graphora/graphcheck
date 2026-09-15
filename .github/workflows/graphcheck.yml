@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install GraphCheck from source
-        run: pip install .
+        run: PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 python3 -m pip install --disable-pip-version-check .
       - name: Stage the fraud-ring project for the Action
         run: cp -R examples/fraud-ring/graphcheck.yml examples/fraud-ring/checks .
       - uses: graphora/graphcheck-action@v1
