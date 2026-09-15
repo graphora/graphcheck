@@ -146,3 +146,23 @@ jobs:
       - run: .wheel-venv/bin/graphcheck --help
       - name: Verify installed package resources
         run: .wheel-venv/bin/python -c "from importlib.resources import files; assert files('graphcheck').joinpath('packs/core.yml').is_file(); assert files('graphcheck').joinpath('packs/pii.yml').is_file()"
+      - name: Verify installed historical results contracts
+        run: |
+          .wheel-venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from pydantic import ValidationError
+          from graphcheck.reporting.writer import load_results
+
+          for version in ("1.0", "1.1", "1.2"):
+              path = Path("tests/unit/contracts/fixtures/historical") / version / "results.json"
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              assert load_results(payload).schema_version == "2.0"
+              payload["run"]["previous_run_id"] = "later-schema-field"
+              try:
+                  load_results(payload)
+              except ValidationError:
+                  pass
+              else:
+                  raise AssertionError(f"Installed reader accepted invalid schema {version}")
+          PY

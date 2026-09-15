@@ -326,6 +326,8 @@ def test_report_history_reads_schema_1_0_artifacts(tmp_path, monkeypatch):
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     payload["schema_version"] = "1.0"
     payload["run"]["status"] = payload["run"].pop("run_status")
+    for field in ("nodes", "relationships", "labels", "relationship_types"):
+        payload["run"]["target"].pop(field)
     results_path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = runner.invoke(app, ["report", "--list"])
