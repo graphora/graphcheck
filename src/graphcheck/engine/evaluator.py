@@ -201,6 +201,16 @@ class VerdictEvaluator:
                 "violations": violations,
             }
             passed = coverage >= threshold
+        elif spec.check == "chunk_coverage":
+            violations = _integer(row, "violation_count", compiled)
+            population = _integer(row, "population", compiled, default=violations)
+            measured = {"violations": violations, "population": population}
+            for key, value in row.items():
+                if key not in _SUMMARY_INTERNAL_FIELDS and _is_measurement(value):
+                    measured.setdefault(key, value)
+            coverage = _number(row, "coverage", compiled)
+            threshold = float(spec.with_.get("threshold", 0.95))
+            passed = coverage >= threshold
         else:
             violations = _integer(row, "violation_count", compiled)
             population = _integer(row, "population", compiled, default=violations)

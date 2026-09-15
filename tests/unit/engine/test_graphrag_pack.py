@@ -539,3 +539,52 @@ def test_label_explosion_runs_when_population_meets_the_floor():
         suite(names=("label_explosion",), min_population=20), target=TARGET
     )
     assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_passes_above_threshold_despite_nonzero_violations():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 99,
+            "violation_count": 1,
+            "coverage": 0.99,
+        }
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_passes_exactly_at_threshold_boundary():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 95,
+            "violation_count": 5,
+            "coverage": 0.95,
+        }
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.PASS
+
+
+def test_chunk_coverage_fails_below_threshold_with_nonzero_violations():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 90,
+            "violation_count": 10,
+            "coverage": 0.90,
+        },
+        evidence=[{"kind": "node", "id": "chunk-uncovered"}],
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.FAIL
