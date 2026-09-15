@@ -92,6 +92,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - Historical results are validated against their declared archived JSON Schema before
   normalization, rejecting fields and enum values introduced by later schemas. Installed wheels
   include the same contracts.
+- Historical exports also validate the final payload before serialization, rejecting incompatible
+  model mutations such as aggregate evidence in schema 1.0 before writing any output file.
 - Schema 1.0 exports always omit graph counts, even if a loaded model was subsequently populated.
   Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
 - Run configuration hashes include the authenticated username so permission changes between

@@ -1,4 +1,4 @@
-"""Validate legacy input against the archived contract before upgrading its shape."""
+"""Validate legacy input and output against their archived contracts."""
 
 import json
 from functools import cache

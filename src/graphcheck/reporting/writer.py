@@ -114,7 +114,7 @@ def results_json(results: Results | dict[str, Any]) -> str:
 
 
 def validated_results_json(results: Results | dict[str, Any]) -> tuple[Results, str]:
-    """Validate once and return both the canonical model and serialized JSON."""
+    """Validate the model and final payload before returning serialized JSON."""
 
     model = load_results(results)
     if model.run.redaction.policy.value == "mask" or model.run.redaction.applied:
@@ -122,6 +122,10 @@ def validated_results_json(results: Results | dict[str, Any]) -> tuple[Results, 
 
         verify_redacted_results(model)
     payload = json_compatible(model)
+    if model._historical_schema_version is not None:
+        from graphcheck.contracts.historical_results import validate_historical_results
+
+        validate_historical_results(payload, model._historical_schema_version)
     return model, json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 

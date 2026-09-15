@@ -13,7 +13,12 @@ from pydantic import ValidationError
 from graphcheck.contracts.results import Results
 from graphcheck.contracts.schemas import SCHEMAS_DIR
 from graphcheck.reporting.html import render_html_report
-from graphcheck.reporting.writer import load_results, results_json
+from graphcheck.reporting.writer import (
+    load_results,
+    results_json,
+    validated_results_json,
+    write_results,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "historical"
 VERSIONS = ("1.0", "1.1", "1.2", "2.0")
@@ -155,6 +160,41 @@ def test_schema_1_0_rejects_aggregate_evidence(capsys):
     raw["checks"][0]["evidence"]["elements"][0]["kind"] = "aggregate"
     with pytest.raises(ValidationError, match="aggregate"):
         load_results(raw)
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("writer", [results_json, validated_results_json, write_results])
+def test_schema_1_0_export_rejects_mutated_aggregate_evidence(writer, tmp_path, capsys):
+    model = load_results(FIXTURES / "1.0" / "results.json")
+    assert capsys.readouterr() == ("", _warning("1.0"))
+    model.checks[0].evidence.elements[0].kind = "aggregate"
+    original = model.model_dump(mode="json", by_alias=True)
+    destination = tmp_path / "results.json"
+    destination.write_text("previous report", encoding="utf-8")
+    args = (model, destination) if writer is write_results else (model,)
+
+    with pytest.raises(ValidationError, match="results schema 1.0:.*aggregate"):
+        writer(*args)
+
+    assert destination.read_text(encoding="utf-8") == "previous report"
+    assert model.model_dump(mode="json", by_alias=True) == original
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("version", ["1.1", "1.2", "2.0"])
+def test_newer_schema_exports_allow_mutated_aggregate_evidence(version, capsys):
+    model = load_results(FIXTURES / version / "results.json")
+    assert capsys.readouterr() == ("", _warning(version))
+    model.checks[0].evidence.elements[0].kind = "aggregate"
+
+    exported = json.loads(results_json(model))
+
+    schema_name = "results.schema.json" if version == "2.0" else f"results-{version}.schema.json"
+    jsonschema.validate(
+        exported, json.loads((SCHEMAS_DIR / schema_name).read_text(encoding="utf-8"))
+    )
+    assert exported["schema_version"] == version
+    assert exported["checks"][0]["evidence"]["elements"][0]["kind"] == "aggregate"
     assert capsys.readouterr() == ("", "")
 
 

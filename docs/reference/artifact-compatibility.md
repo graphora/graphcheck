@@ -61,6 +61,9 @@ remain null. It does not modify the source. Normal exports through `results_json
 explicitly upgrade it.
 Schema 1.0 exports always omit graph counts, including counts subsequently set on a mutable
 model. Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
+Before serialization, the final historical payload is validated against its archived schema.
+Mutations that cannot be represented in that schema, such as aggregate evidence in 1.0, raise a
+validation error before any output file is written.
 
 ## Migrate results to 2.0
 
