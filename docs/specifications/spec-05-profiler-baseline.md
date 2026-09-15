@@ -270,6 +270,10 @@ node_count
 relationship_count
 
 property_coverage
+
+degree_distribution (drift statistics)
+
+schema_inventory
 ```
 
 ---
@@ -298,6 +302,31 @@ maximum
 
 Degree distribution is recorded per label. It MAY be `null` in a partial baseline when the
 degree probe exceeds the wall-clock budget or fails after core counts have been collected.
+
+---
+
+## Degree Distribution Coverage (drift statistics)
+
+This is distinct from the per-label "Degree Distribution" section above, which predates this
+feature and serves the diff report only. This section describes `statistics.degree_distribution`,
+a list of per-target records used to resolve `degree_distribution` drift-check baselines.
+
+Each record has `label` (nullable), `type` (nullable), `quantile` (`p50`/`p95`/`max`), `direction`
+(`in`/`out`/`both`), and `value`. The profiler precomputes this list exhaustively for every label
+and direction, using one Cypher pass per (label, direction) to build a degree histogram grouped by
+relationship type, so cost scales with labels times directions rather than labels times types.
+(Label, type) pairs are ranked by edge count and capped; the profile is marked partial with reason
+`degree_incomplete` when the cap trips or the collection budget is exceeded.
+
+---
+
+## Schema Inventory
+
+Schema inventory has no dedicated statistics field. Its baseline is resolved directly from the
+existing `schema.labels` and `schema.relationship_types` already collected for every baseline,
+so no new profiler collection is required. The resolver builds one evidence pointer per label and
+relationship type name known at baseline time; the evaluator compares this against the live schema
+to compute the count of items added plus removed.
 
 Statistics are descriptive only.
 
