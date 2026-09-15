@@ -114,6 +114,77 @@ def test_later_1_1_artifacts_preserve_recorded_counts(counts):
     assert {field: exported["run"]["target"][field] for field in counts} == counts
 
 
+@pytest.mark.parametrize("version", ["1.0", "1.1", "1.2"])
+@pytest.mark.parametrize("field", ["previous_run_id", "baseline_ref", "config_hash", "run_status"])
+@pytest.mark.parametrize("input_kind", ["dict", "json", "path"])
+def test_historical_inputs_reject_later_run_fields(version, field, input_kind, tmp_path, capsys):
+    raw = json.loads((FIXTURES / version / "results.json").read_text(encoding="utf-8"))
+    raw["run"][field] = "complete" if field == "run_status" else "later-schema-value"
+    original = deepcopy(raw)
+    schema = json.loads(
+        (SCHEMAS_DIR / f"results-{version}.schema.json").read_text(encoding="utf-8")
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(raw, schema)
+    source = tmp_path / "results.json"
+    source.write_text(json.dumps(raw), encoding="utf-8")
+    data = {"dict": raw, "json": json.dumps(raw), "path": source}[input_kind]
+
+    with pytest.raises(ValidationError, match=field):
+        load_results(data)
+
+    assert raw == json.loads(source.read_text(encoding="utf-8")) == original
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("version", "field", "value"),
+    [("1.0", "nodes", 1), ("1.0", "relationships", 1)]
+    + [(version, field, []) for version in ("1.0", "1.1") for field in INVENTORY],
+)
+def test_historical_inputs_reject_later_target_fields(version, field, value, capsys):
+    raw = json.loads((FIXTURES / version / "results.json").read_text(encoding="utf-8"))
+    raw["run"]["target"][field] = value
+    with pytest.raises(ValidationError, match=field):
+        load_results(raw)
+    assert capsys.readouterr() == ("", "")
+
+
+def test_schema_1_0_rejects_aggregate_evidence(capsys):
+    raw = json.loads((FIXTURES / "1.0" / "results.json").read_text(encoding="utf-8"))
+    raw["checks"][0]["evidence"]["elements"][0]["kind"] = "aggregate"
+    with pytest.raises(ValidationError, match="aggregate"):
+        load_results(raw)
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("count", [0, 1250])
+def test_mutated_historical_count_exports_obey_declared_schema(version, count, capsys):
+    model = load_results(FIXTURES / version / "results.json")
+    assert capsys.readouterr() == ("", _warning(version))
+    model.run.target.nodes = count
+    model.run.target.relationships = count
+
+    exported = json.loads(results_json(model))
+
+    assert capsys.readouterr() == ("", "")
+    schema = json.loads(
+        (SCHEMAS_DIR / f"results-{version}.schema.json").read_text(encoding="utf-8")
+    )
+    jsonschema.validate(exported, schema)
+    for field in ("nodes", "relationships"):
+        if version == "1.0":
+            assert field not in exported["run"]["target"]
+        else:
+            assert exported["run"]["target"][field] == count
+        assert getattr(model.run.target, field) == count
+    reloaded = load_results(exported)
+    assert reloaded.run.target.nodes == (None if version == "1.0" else count)
+    assert reloaded.run.target.relationships == (None if version == "1.0" else count)
+    assert capsys.readouterr() == ("", _warning(version))
+
+
 @pytest.mark.parametrize("version", VERSIONS)
 def test_documented_transformer_migrates_historical_fixtures(version, transformer_path, capsys):
     source = FIXTURES / version / "results.json"

@@ -38,8 +38,8 @@ def json_compatible(value: object) -> Any:
                     target.pop("labels")
                     target.pop("relationship_types")
                     for field in ("nodes", "relationships"):
-                        if target[field] is None:
-                            target.pop(field)  # Original 1.0/1.1 targets did not record counts.
+                        if historical_schema_version == "1.0" or target[field] is None:
+                            target.pop(field)  # Counts were first introduced in schema 1.1.
     if isinstance(value, Mapping):
         return {str(key): json_compatible(item) for key, item in value.items()}
     if isinstance(value, (set, frozenset)):
@@ -75,7 +75,10 @@ def load_results(data: Results | dict[str, Any] | str | Path) -> Results:
         isinstance(payload, dict) and payload.get("schema_version") in DEPRECATED_SCHEMA_VERSIONS
     )
     if legacy_read:
+        from graphcheck.contracts.historical_results import validate_historical_results
+
         historical_schema_version = str(payload["schema_version"])
+        validate_historical_results(payload, historical_schema_version)
         run = payload.get("run")
         if isinstance(run, dict):
             run = {**run, "run_status": run.get("status")}

@@ -75,6 +75,11 @@ path = "src/graphcheck/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/graphcheck"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"docs/schemas/results-1.0.schema.json" = "graphcheck/_schemas/results-1.0.schema.json"
+"docs/schemas/results-1.1.schema.json" = "graphcheck/_schemas/results-1.1.schema.json"
+"docs/schemas/results-1.2.schema.json" = "graphcheck/_schemas/results-1.2.schema.json"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

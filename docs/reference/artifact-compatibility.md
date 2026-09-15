@@ -50,12 +50,17 @@ The warning is emitted for each artifact read from a path, JSON string, or dicti
 the resulting `Results` model through another writer or renderer revalidates it without another
 warning. Reading a separate legacy artifact emits its own warning. Schema 2.0 reads are silent.
 Unknown schema versions and malformed artifacts fail validation rather than being guessed at.
+Before normalization, legacy input is validated against its declared archived JSON Schema,
+including in installed wheels. Fields and enum values introduced by later schemas are rejected
+even when the current model understands them.
 
 `load_results()` returns the normalized 2.0 model: `run_status` replaces `status`, missing lineage
 (`previous_run_id`, `baseline_ref`, `config_hash`) becomes null, and unrecorded counts/inventory
 remain null. It does not modify the source. Normal exports through `results_json()` or
 `write_results()` preserve a loaded artifact's historical schema; use the transformer below to
 explicitly upgrade it.
+Schema 1.0 exports always omit graph counts, including counts subsequently set on a mutable
+model. Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
 
 ## Migrate results to 2.0
 
