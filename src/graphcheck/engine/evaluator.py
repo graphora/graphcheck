@@ -184,16 +184,7 @@ class VerdictEvaluator:
             conforming = _integer(row, "conforming_count", compiled)
             violations = _integer(row, "violation_count", compiled)
             threshold = float(spec.with_.get("threshold", 1.0))
-            expected_coverage = 1.0 if population == 0 else conforming / population
-            if (
-                conforming + violations != population
-                or not 0.0 <= coverage <= 1.0
-                or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
-            ):
-                raise _bad_result(
-                    compiled,
-                    "population, conforming_count, violation_count, and coverage disagree",
-                )
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
             measured: dict[str, object] = {
                 "coverage": coverage,
                 "population": population,
@@ -204,12 +195,14 @@ class VerdictEvaluator:
         elif spec.check == "chunk_coverage":
             violations = _integer(row, "violation_count", compiled)
             population = _integer(row, "population", compiled, default=violations)
+            conforming = _integer(row, "conforming_count", compiled)
+            coverage = _number(row, "coverage", compiled)
+            threshold = float(spec.with_.get("threshold", 0.95))
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
             measured = {"violations": violations, "population": population}
             for key, value in row.items():
                 if key not in _SUMMARY_INTERNAL_FIELDS and _is_measurement(value):
                     measured.setdefault(key, value)
-            coverage = _number(row, "coverage", compiled)
-            threshold = float(spec.with_.get("threshold", 0.95))
             passed = coverage >= threshold
         else:
             violations = _integer(row, "violation_count", compiled)
@@ -785,6 +778,21 @@ def _bad_result(compiled: CompiledCheck, detail: str) -> GraphCheckError:
         f"Check {compiled.check.id!r} cannot be evaluated: {detail}.",
         "Fix the compiler/query so it returns the documented C1 result shape.",
     )
+
+
+def _validate_coverage_summary(
+    compiled: CompiledCheck, population: int, conforming: int, violations: int, coverage: float
+) -> None:
+    expected_coverage = 1.0 if population == 0 else conforming / population
+    if (
+        conforming + violations != population
+        or not 0.0 <= coverage <= 1.0
+        or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        raise _bad_result(
+            compiled,
+            "population, conforming_count, violation_count, and coverage disagree",
+        )
 
 
 def _pii_matches(

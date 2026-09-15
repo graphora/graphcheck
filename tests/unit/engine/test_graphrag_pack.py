@@ -588,3 +588,20 @@ def test_chunk_coverage_fails_below_threshold_with_nonzero_violations():
         suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
     )
     assert results.checks[0].verdict is Verdict.FAIL
+
+
+def test_chunk_coverage_errors_on_internally_inconsistent_summary():
+    client = Client(
+        row={
+            "schema_ok": True,
+            "population": 100,
+            "conforming_count": 0,
+            "violation_count": 100,
+            "coverage": 0.99,
+        },
+        evidence=[{"kind": "node", "id": "chunk-x"}],
+    )
+    results = Engine(client).run_suite(
+        suite(names=("chunk_coverage",), threshold=0.95), target=TARGET
+    )
+    assert results.checks[0].verdict is Verdict.ERRORED
