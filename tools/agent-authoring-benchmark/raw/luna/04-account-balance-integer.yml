@@ -1,0 +1,10 @@
+suite: 04-account-balance-integer
+generated: true
+conformance:
+  - id: 04-account-balance-integer
+    check: property_type
+    severity: error
+    with:
+      label: Account
+      property: balance
+      type: integer

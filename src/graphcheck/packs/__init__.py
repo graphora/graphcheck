@@ -47,7 +47,13 @@ class CompletenessWith(_WithBase):
 
 @register("cardinality")
 class CardinalityWith(_WithBase):
-    from_label: Identifier
+    from_label: Identifier = Field(
+        description=(
+            "Label of nodes whose relationship count is checked, including when direction is in. "
+            "For one sender per Transaction, use from_label=Transaction, to_label=Account, "
+            "direction=in."
+        )
+    )
     rel_type: Identifier
     to_label: Identifier
     direction: Literal["out", "in", "any"] = "out"

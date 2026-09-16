@@ -1,0 +1,112 @@
+{
+  "checks": [
+    {
+      "compiled_query": "MATCH (t:Transaction)\nOPTIONAL MATCH (a:Account)-[sent:SENT]->(t)\nWITH t, count(sent) AS sender_count\nWHERE sender_count <> 1\nRETURN t.id AS transaction_id, sender_count",
+      "duration_ms": 203,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "empty": true
+      },
+      "id": "09-transaction-single-sender",
+      "measured": {
+        "columns": [
+          "transaction_id",
+          "sender_count"
+        ],
+        "empty": true,
+        "rows": 0
+      },
+      "name": "Does every Transaction have exactly one incoming SENT relationship from an Account",
+      "params": {},
+      "pattern": "competency-shape",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:11:26.278066Z",
+      "suite_id": "09-transaction-single-sender",
+      "verdict": "pass"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:6b43f2f61c30a53a2b740a995cbc1d15f486580f6ecb32c890ddc538d7534bb0",
+    "error": null,
+    "exit_code": 0,
+    "finished_at": "2026-09-16T12:11:26.471174Z",
+    "graphcheck_version": "0.3.0",
+    "id": "abddc733-18a7-4695-bc67-cb8cf673f4b9",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "09-transaction-single-sender"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:11:26.278066Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 100,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "09-transaction-single-sender",
+      "score": 100,
+      "source_sha": "37b875ecc85549dc66982a64a4d0f27a1cca6f26482b31e88fef4d92bddf2101",
+      "totals": {
+        "checks": 1,
+        "errored": 0,
+        "fail": 0,
+        "pass": 1,
+        "skipped": 0,
+        "warn": 0
+      }
+    }
+  ],
+  "totals": {
+    "checks": 1,
+    "errored": 0,
+    "fail": 0,
+    "pass": 1,
+    "skipped": 0,
+    "warn": 0
+  }
+}

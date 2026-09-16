@@ -1,0 +1,10 @@
+suite: 03-customer-email-complete
+generated: true
+conformance:
+  - id: 03-customer-email-complete
+    check: completeness
+    severity: warn
+    with:
+      label: Customer
+      property: email
+      threshold: 1.0

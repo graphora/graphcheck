@@ -1,0 +1,118 @@
+{
+  "checks": [
+    {
+      "compiled_query": "MATCH (c:Customer {id: $customer_id})-[:CONTROLS*1..4]->(a:Account)\nRETURN DISTINCT a.id AS account_id",
+      "duration_ms": 15,
+      "error": {
+        "code": "engine.evidence_missing",
+        "fix": "Project graph entities or `*_id` columns so every finding identifies its source.",
+        "message": "Check '08-control-path-membership' failed but returned no evidence pointer."
+      },
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "contains": [
+          {
+            "account_id": "ACC-2401"
+          },
+          {
+            "account_id": "ACC-2408"
+          }
+        ]
+      },
+      "id": "08-control-path-membership",
+      "measured": null,
+      "name": "Does the ring leader control accounts ACC-2401 and ACC-2408 within four hops",
+      "params": {
+        "customer_id": "CUST-RING-LEADER-0"
+      },
+      "pattern": "competency-regression",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:11:26.257868Z",
+      "suite_id": "08-control-path-membership",
+      "verdict": "errored"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:56d9b5b7c8c4fa4fcc00920588c00ace96efcc97e0833d52977744eb3ca029ff",
+    "error": null,
+    "exit_code": 1,
+    "finished_at": "2026-09-16T12:11:26.267994Z",
+    "graphcheck_version": "0.3.0",
+    "id": "65fbd62e-4b97-4079-937e-e3045a5505e7",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "08-control-path-membership"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:11:26.257868Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 0,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "08-control-path-membership",
+      "score": 0,
+      "source_sha": "41aa2e06c1b1961209b3404edfc694f1e0c00a428f53412d3577b75d20c70cfb",
+      "totals": {
+        "checks": 1,
+        "errored": 1,
+        "fail": 0,
+        "pass": 0,
+        "skipped": 0,
+        "warn": 0
+      }
+    }
+  ],
+  "totals": {
+    "checks": 1,
+    "errored": 1,
+    "fail": 0,
+    "pass": 0,
+    "skipped": 0,
+    "warn": 0
+  }
+}

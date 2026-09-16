@@ -1,0 +1,123 @@
+{
+  "checks": [
+    {
+      "compiled_query": "CALL {\n  CALL db.labels() YIELD label\n  RETURN collect(label) AS _gc_labels\n}\nCALL {\n  CALL db.relationshipTypes() YIELD relationshipType\n  RETURN collect(relationshipType) AS _gc_rel_types\n}\n\n        CALL {\n          MATCH (n:`Account`)\n          WHERE n.`type` IS NOT NULL\n          RETURN count(n) AS population,\n                 sum(CASE WHEN NOT n.`type` IN $values THEN 1 ELSE 0 END) AS violation_count\n        }\n        RETURN \nall(name IN $required_labels WHERE name IN _gc_labels)\n  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,\n[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,\n[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]\n  AS missing_relationship_types\n,\n               population, violation_count, [] AS evidence",
+      "duration_ms": 31,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "values": [
+          "checking",
+          "savings",
+          "shell"
+        ]
+      },
+      "id": "05-account-type-allowed",
+      "measured": {
+        "population": 2504,
+        "violation_count": 0,
+        "violations": 0
+      },
+      "name": "Account.type is in the allowed value set",
+      "params": {
+        "required_labels": [
+          "Account"
+        ],
+        "required_relationship_types": [],
+        "values": [
+          "checking",
+          "savings",
+          "shell"
+        ]
+      },
+      "pattern": "conformance",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:11:25.333700Z",
+      "suite_id": "05-account-type-allowed",
+      "verdict": "pass"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:e212cc6ef0a12a151dd69632f5180ccb9105cf68485cb68ea0814256887c226b",
+    "error": null,
+    "exit_code": 0,
+    "finished_at": "2026-09-16T12:11:25.368806Z",
+    "graphcheck_version": "0.3.0",
+    "id": "2f5756ae-93d8-46bb-b124-f2385e08f954",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "05-account-type-allowed"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:11:25.333700Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 100,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "05-account-type-allowed",
+      "score": 100,
+      "source_sha": "b196e213e63e796370cba559a4855f0ab2c4b23fab626941b2ed0c7841e32860",
+      "totals": {
+        "checks": 1,
+        "errored": 0,
+        "fail": 0,
+        "pass": 1,
+        "skipped": 0,
+        "warn": 0
+      }
+    }
+  ],
+  "totals": {
+    "checks": 1,
+    "errored": 0,
+    "fail": 0,
+    "pass": 1,
+    "skipped": 0,
+    "warn": 0
+  }
+}
