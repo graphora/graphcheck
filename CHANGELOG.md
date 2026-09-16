@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Published the [artifact compatibility policy](docs/reference/artifact-compatibility.md), with
+  committed results fixtures for schemas 1.0, 1.1, 1.2, and 2.0 and archived 1.x JSON Schemas.
+  The policy includes a tested transformer that writes a validated 2.0 copy. Migration of 1.0/1.1
+  requires trusted historical inventory because those schemas did not record it.
 - GraphRAG `chunk_coverage` reports the share of Chunks linked to at least one Entity against
   a configurable threshold (default 0.95), naming entity-less Chunks in evidence.
   `label_explosion` flags labels and relationship types across the whole schema at or below
@@ -66,6 +70,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Changed
 
+- Reading pre-2.0 results emits one `results.schema_deprecated` warning on stderr per artifact
+  read. Removal is planned for CLI 0.5.0, postponed while the current/previous-schema guarantee
+  requires support. The warning must ship at least one release before removal. Migrate saved
+  artifacts with the transformer above; current 2.0 reads and model revalidation stay quiet.
 - GraphRAG checks report `skipped:model_absent` with an explicit reason when the model is
   unconfigured or any configured role label has no nodes. Completed runs containing only these
   skips exit 0 with a null score and incomplete report coverage. Missing relationship types remain
@@ -87,6 +95,15 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Redaction preserves historical results schema context: 1.0/1.1 artifacts retain unknown
+  inventory and 1.2 artifacts keep their original version when exported by `graphcheck redact`.
+- Historical results are validated against their declared archived JSON Schema before
+  normalization, rejecting fields and enum values introduced by later schemas. Installed wheels
+  include the same contracts.
+- Historical exports also validate the final payload before serialization, rejecting incompatible
+  model mutations such as aggregate evidence in schema 1.0 before writing any output file.
+- Schema 1.0 exports always omit graph counts, even if a loaded model was subsequently populated.
+  Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
 - Run configuration hashes include the authenticated username so permission changes between
   users have distinct provenance, while passwords and password environment variables stay excluded.
 - Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,

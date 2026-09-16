@@ -232,7 +232,10 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
                 if element["type"] is not None:
                     element["type"] = REDACTION_MASK
         _mask_error(check["error"])
-    redacted = Results.model_validate(payload)
+    redacted = Results.model_validate(
+        payload, context={"historical_schema_version": source._historical_schema_version}
+    )
+    redacted._historical_schema_version = source._historical_schema_version
     verify_redacted_results(redacted)
     _verify_no_sensitive_literals(
         redacted.model_dump(mode="python", by_alias=True, exclude_none=False), sensitive
