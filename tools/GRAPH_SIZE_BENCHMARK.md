@@ -85,6 +85,10 @@ operating systems, collect server memory separately; a missing metric stays null
   known unsupported `dangling_rels` makes full-pack coverage partial at every size.
 
 Raw measurements and the Markdown report live in [`graph-size-benchmark-results/`](graph-size-benchmark-results/).
+The JSON runs are authoritative. Regenerate `checks.csv` and the report's marked summary
+and tables with `uv run python tools/summarize_graph_size.py`; use `--check` to detect drift.
+The normal test suite checks that these derived sections match the JSON. Preserve recorded
+outcomes and timings; publish a successful rerun as a new JSON measurement.
 Keep exploratory and failed runs as well as published measurements; identify cache
 conditions and repetitions in the report rather than presenting a single run as a
 statistical latency guarantee.

@@ -53,5 +53,5 @@ run,nodes,relationships,check,pack,duration_ms,verdict,sampled,sample_size,popul
 10000000-run1.json,10000000,9500000,label_cooccurrence,core,4671,pass,False,,8000000,,
 10000000-run1.json,10000000,9500000,rel_direction,core,9297,pass,False,,5000000,,
 10000000-run1.json,10000000,9500000,temporal_sanity,core,2688,pass,False,,2000000,,
-10000000-run1.json,10000000,9500000,pii_name_match,pii,117797,pass,False,,,,
-10000000-run1.json,10000000,9500000,pii_value_match,pii,115188,pass,False,,,,
+10000000-run1.json,10000000,9500000,pii_name_match,pii,117797,errored,False,,,neo4j.query_failed,
+10000000-run1.json,10000000,9500000,pii_value_match,pii,115188,errored,False,,,neo4j.query_failed,

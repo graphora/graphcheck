@@ -5,12 +5,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from graphcheck.engine.compiler import CypherCompiler
 from tools.benchmark_graph_size import ROOT, checked_suite, peak_rss_bytes
 from tools.generate_graph_size import generate
+from tools.summarize_graph_size import derived_artifacts
 
 
 def test_full_pack_suite_keeps_real_sampling_defaults_and_temporal_fields():
@@ -107,8 +109,17 @@ def test_supervisor_preserves_failure_artifact_if_worker_does_not_finish(
             raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
         return subprocess.CompletedProcess(args[0], 7)
 
-    monkeypatch.setattr(rig.subprocess, "check_output", lambda *args, **kwargs: "commit")
-    monkeypatch.setattr(rig.subprocess, "run", run_worker)
+    monkeypatch.setattr(
+        rig,
+        "subprocess",
+        SimpleNamespace(
+            check_output=lambda *args, **kwargs: "commit",
+            run=run_worker,
+            TimeoutExpired=subprocess.TimeoutExpired,
+        ),
+    )
+    # platform.platform() may use this bytes-returning API on POSIX with a cold cache.
+    assert subprocess.check_output([sys.executable, "-c", "print('probe')"]).strip() == b"probe"
     assert rig.main() == 3
     payload = json.loads(output.read_text())
     assert payload["execution_status"] == ("watchdog_timeout" if timeout else "worker_failed")
@@ -129,3 +140,10 @@ def test_published_measurements_contain_every_selected_check():
         assert record["counts"]["nodes"] == record["requested_nodes"]
         for check in record["results"]["checks"]:
             assert (check["duration_ms"] is None) == (check["verdict"] == "skipped")
+
+
+def test_published_csv_and_report_match_authoritative_json():
+    for path, expected in derived_artifacts().items():
+        assert path.read_text(encoding="utf-8") == expected, (
+            f"{path.name} drifted from JSON; run python tools/summarize_graph_size.py"
+        )

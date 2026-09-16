@@ -4,8 +4,19 @@ Date: 2026-09-14. Default concurrency: **two workers**. Core + PII: **14 selecte
 
 ## Decision
 
-GraphCheck imposes **10,000,000 nodes** as an upper support boundary to demonstrably complete all executable checks.
-No unmeasured intermediate runtime or universal maximum is claimed.
+GraphCheck retains **10,000,000 nodes** as the published upper support boundary.
+This policy limit is distinct from the outcomes recorded below.
+
+<!-- BEGIN GENERATED: summary -->
+At **10,000,000 nodes**, **11 of 11 attempted core checks passed**. Skipped checks and PII outcomes are reported separately below.
+
+The largest recorded size where all executable checks completed is **1,000,000 nodes**. Findings (`fail`/`warn`) count as completed evaluations; execution errors do not.
+
+- [10000000-run1](10000000-run1.json): `pii_name_match` errored with `neo4j.query_failed`.
+- [10000000-run1](10000000-run1.json): `pii_value_match` errored with `neo4j.query_failed`.
+
+An errored run's wall time is time to return, not a successful audit runtime.
+<!-- END GENERATED: summary -->
 
 The CLI now rejects graphs above 10M before dispatching checks, with exit code 3 and
 `engine.graph_size_exceeded`, followed by a `Fix:` line. Relationships are measured
@@ -61,27 +72,30 @@ properties and 2.7 string properties per node across the fixture. See
 
 ## Total runtime and peak memory
 
+<!-- BEGIN GENERATED: totals -->
 | Raw run | Nodes | Engine seconds | Process seconds | Python peak MiB | Neo4j observed peak MiB | Outcome |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| [100000-run1](100000-run1.json) | 100,000 | 16.500 | 19.224 | 74.71 | Not collected | 13 executable checks completed |
-| [100000-run2](100000-run2.json) | 100,000 | 3.252 | 4.971 | 74.46 | 3159.41 | 13 executable checks completed |
-| [1000000-run1](1000000-run1.json) | 1,000,000 | 32.153 | 33.756 | 74.65 | 3157.69 | 13 executable checks completed |
-| [10000000-run1](10000000-run1.json) | 10,000,000 | 146.906 | 156.423 | 73.47 | 2477.83 | 13 executable checks completed |
+| [100000-run1](100000-run1.json) | 100,000 | 16.500 | 19.224 | 74.71 | Not collected | 13 completed; 0 errored; 1 skipped |
+| [100000-run2](100000-run2.json) | 100,000 | 3.252 | 4.971 | 74.46 | 3159.41 | 13 completed; 0 errored; 1 skipped |
+| [1000000-run1](1000000-run1.json) | 1,000,000 | 32.153 | 33.756 | 74.65 | 3157.69 | 13 completed; 0 errored; 1 skipped |
+| [10000000-run1](10000000-run1.json) | 10,000,000 | 146.906 | 156.423 | 73.47 | 2477.83 | 11 completed; 2 errored; 1 skipped |
+<!-- END GENERATED: totals -->
 
 All full-pack runs have partial coverage because dangling_rels
 is explicitly unsupported. **No check timed out and no watchdog terminated a run.**
 
 ## Wall-clock per check
 
-Durations in seconds. `unsupported` means not executed, not a zero-duration success.
+Durations in seconds. `not executed` is not a zero-duration success.
 The two 100k columns show the initial observation and repeat, respectively.
 
-| Check | 100k initial | 100k repeat | 1M | 10M | 10M outcome |
+<!-- BEGIN GENERATED: checks -->
+| Check | 100000-run1 | 100000-run2 | 1000000-run1 | 10000000-run1 | Last run outcome |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `completeness` | 0.579 | 0.062 | 0.484 | 5.328 | pass |
 | `cardinality` | 1.016 | 0.094 | 1.109 | 8.953 | pass |
 | `no_orphans` | 0.656 | 0.078 | 1.203 | 6.609 | pass |
-| `dangling_rels` | unsupported | unsupported | unsupported | unsupported | skipped |
+| `dangling_rels` | not executed | not executed | not executed | not executed | skipped |
 | `property_type` | 1.578 | 0.125 | 2.234 | 9.609 | pass |
 | `property_format` | 1.140 | 0.110 | 1.828 | 8.844 | pass |
 | `value_in_set` | 0.875 | 0.046 | 0.829 | 4.547 | pass |
@@ -92,6 +106,7 @@ The two 100k columns show the initial observation and repeat, respectively.
 | `temporal_sanity` | 1.094 | 0.063 | 0.828 | 2.688 | pass |
 | `pii_name_match` | 8.047 | 2.078 | 21.578 | 117.797 | errored |
 | `pii_value_match` | 8.250 | 2.718 | 24.718 | 115.188 | errored |
+<!-- END GENERATED: checks -->
 
 [Per-check CSV](checks.csv) retains verdicts, exact millisecond durations, observed
 populations, sample sizes, errors and skip reasons. Complete result JSON also retains

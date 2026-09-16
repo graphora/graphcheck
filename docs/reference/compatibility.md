@@ -63,11 +63,11 @@ flushed; the repeat demonstrates warm-up variability, not a latency guarantee.
 | 100,000 | 95,000 | 16.50 | 74.71 | Not collected | 13 executable checks completed |
 | 100,000, repeat | 95,000 | 3.25 | 74.46 | 3,159.41 | 13 executable checks completed |
 | 1,000,000 | 950,000 | 32.15 | 74.65 | 3,157.69 | 13 executable checks completed |
-| 10,000,000 | 9,500,000 | 149.91 | 73.47 | 2,477.83 | 11 core checks completed; both PII checks errored |
+| 10,000,000 | 9,500,000 | 146.91 | 73.47 | 2,477.83 | 11 core checks completed; both PII checks errored |
 
 There were **no timed-out checks** and no watchdog termination in these runs. At 10M,
 `pii_name_match` and `pii_value_match` returned `neo4j.query_failed` with Neo4j's
-`MemoryPoolOutOfMemoryError`; 149.91 seconds is time to the failed run's return, not a
+`MemoryPoolOutOfMemoryError`; 146.91 seconds is time to the failed run's return, not a
 successful audit runtime. Python memory is OS process-lifetime peak RSS. Neo4j memory
 is the whole DBMS process's working set sampled every 100 ms; it includes other loaded
 databases, can miss short spikes, and is not the transaction-memory accounting limit.
