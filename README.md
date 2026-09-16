@@ -158,11 +158,17 @@ For document/chunk/entity graphs, enable the optional [GraphRAG pack](docs/graph
 `graphcheck init --pack graphrag`. It checks provenance, embedding consistency, and sampled duplicate names using your
 configured labels, relationships, and properties.
 
-For the full contracts, see the [check YAML specification](docs/specifications/spec-02-check-yaml.md),
-[`results.json` specification](docs/specifications/spec-01-results-json.md), and
-[engine and CLI specification](docs/specifications/spec-04-engine.md). The
-[agent guide](docs/guides/agents.md), [telemetry disclosure](docs/reference/telemetry.md),
-and [contributor guide](CONTRIBUTING.md) cover integration and operational workflows.
+For authoring and execution details, see the [user guide](docs/guides/user-guide.md) and
+[JSON Schemas](docs/schemas/). The [agent guide](docs/guides/agents.md),
+[telemetry disclosure](docs/reference/telemetry.md), and [contributor guide](CONTRIBUTING.md)
+cover integration and operational workflows.
+
+## Support
+
+See the [Neo4j compatibility matrix](docs/reference/compatibility.md) for supported servers and
+the [artifact compatibility policy](docs/reference/artifact-compatibility.md) for schema support,
+deprecation deadlines, and migration of saved `results.json` files. Schema versions are independent
+of CLI versions; the current and previous schemas remain readable.
 
 ## Non-goals
 
