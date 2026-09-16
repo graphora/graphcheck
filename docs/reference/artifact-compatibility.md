@@ -59,6 +59,8 @@ even when the current model understands them.
 remain null. It does not modify the source. Normal exports through `results_json()` or
 `write_results()` preserve a loaded artifact's historical schema; use the transformer below to
 explicitly upgrade it.
+Redaction through `redact_results()` or `graphcheck redact` also preserves the source schema,
+including unknown inventory in schemas 1.0 and 1.1.
 Schema 1.0 exports always omit graph counts, including counts subsequently set on a mutable
 model. Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
 Before serialization, the final historical payload is validated against its archived schema.

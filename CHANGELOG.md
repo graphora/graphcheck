@@ -95,6 +95,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
+- Redaction preserves historical results schema context: 1.0/1.1 artifacts retain unknown
+  inventory and 1.2 artifacts keep their original version when exported by `graphcheck redact`.
 - Historical results are validated against their declared archived JSON Schema before
   normalization, rejecting fields and enum values introduced by later schemas. Installed wheels
   include the same contracts.
