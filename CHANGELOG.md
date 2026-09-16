@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Published a 10-million-node audit ceiling with full core/PII benchmark results and sampling
+  thresholds. Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
+  `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.
+
 - Published the [artifact compatibility policy](docs/reference/artifact-compatibility.md), with
   committed results fixtures for schemas 1.0, 1.1, 1.2, and 2.0 and archived 1.x JSON Schemas.
   The policy includes a tested transformer that writes a validated 2.0 copy. Migration of 1.0/1.1

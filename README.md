@@ -34,6 +34,8 @@ the **[full user guide](docs/guides/user-guide.md)**.
 
 GraphCheck requires Python 3.12, 3.13, or 3.14 and a supported Neo4j server. See the
 [compatibility matrix](docs/reference/compatibility.md) for the tested Neo4j and Cypher versions.
+The audit ceiling is **10 million nodes**, see [supported graph size](docs/reference/compatibility.md#supported-graph-size)
+for measured runtimes, sampling, and the transaction-memory limitation observed with PII at 10M.
 
 Install the published CLI and scaffold a project:
 

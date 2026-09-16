@@ -1,0 +1,1188 @@
+{
+  "pii_name_match": {
+    "args": {
+      "planner-impl": "IDP",
+      "string-representation": "Cypher 5\r\n\r\nPlanner COST\r\n\r\nRuntime PIPELINED\r\n\r\nRuntime version 2026.06.0\r\n\r\nBatch size 1024\r\n\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| Operator              | Id | Details                                                                                              | Estimated Rows | Ordered by                                         | Pipeline             |\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +ProduceResults       |  0 | schema_ok, missing_labels, missing_relationship_types, missing_properties, population, sample_size,  |              1 |                                                    |                      |\r\n| |                     |    | candidates                                                                                           |                |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| +Projection           |  1 | [name IN $required_relationship_types WHERE NOT name IN _gc_rel_types] AS missing_relationship_types |              1 |                                                    | In Pipeline 17       |\r\n| |                     |    | , size(candidates) AS sample_size,                                                                   |                |                                                    |                      |\r\n| |                     |    | [name IN $required_properties WHERE NOT name IN _gc_properties] AS missing_properties, all(name IN $ |                |                                                    |                      |\r\n| |                     |    | required_labels WHERE name IN _gc_labels) AND all(name IN $required_relationship_types WHERE name IN |                |                                                    |                      |\r\n| |                     |    |  _gc_rel_types) AND all(name IN $required_properties WHERE name IN _gc_properties) AS schema_ok,     |                |                                                    |                      |\r\n| |                     |    | [name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels                            |                |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +Apply                |  2 |                                                                                                      |              1 |                                                    |                      |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   |  3 | collect({evidence: {kind: $autostring_14, id: elementId(n), labels: labels(n)}, property: property}) |              1 |                                                    | In Pipeline 17       |\r\n| | |                   |    |  AS candidates                                                                                       |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Top                |  4 | _gc_sample_key ASC, `elementId(n)` ASC, property ASC LIMIT $sample_size                              |             75 | _gc_sample_key ASC, elementId(n) ASC, property ASC | In Pipeline 16       |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Projection         |  5 | elementId(n) AS `elementId(n)`                                                                       |       15300000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  6 | ((((($sample_hash_a * _gc_occurrence_key + $sample_hash_b) % $autoint_11) * _gc_occurrence_key + $sa |       15300000 |                                                    |                      |\r\n| | |                   |    | mple_hash_c) % $autoint_12) * _gc_occurrence_key + $sample_hash_d) % $autoint_13 AS _gc_sample_key   |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Filter             |  7 | (population <= $sample_size * $sample_gate_multiplier OR _gc_gate_key < toInteger(ceil(((toFloat($au |       15300000 |                                                    |                      |\r\n| | |                   |    | toint_10) * toFloat($sample_size)) * toFloat($sample_gate_multiplier)) / toFloat(population))))      |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  8 | ((((($sample_gate_hash_a * _gc_occurrence_key + $sample_gate_hash_b) % $autoint_7) * _gc_occurrence_ |       30000000 |                                                    |                      |\r\n| | |                   |    | key + $sample_gate_hash_c) % $autoint_8) * _gc_occurrence_key + $sample_gate_hash_d) % $autoint_9 AS |                |                                                    |                      |\r\n| | |                   |    |  _gc_gate_key                                                                                        |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  9 | ((id(n) % $autoint_4) * $autoint_5 + _gc_property_index) % $autoint_6 AS _gc_occurrence_key          |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         | 10 | occurrence.property AS property, occurrence.raw AS raw                                               |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         | 11 | _gc_node_properties[_gc_property_index] AS occurrence                                                |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Apply              | 12 |                                                                                                      |       30000000 |                                                    |                      |\r\n| | |\\                  +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Unwind           | 13 | range($autoint_2, size(_gc_node_properties) - $autoint_3) AS _gc_property_index                      |       30000000 |                                                    | Fused in Pipeline 15 |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +EagerAggregation | 14 | collect({property: property, raw: raw}) AS _gc_node_properties                                       |        3000000 |                                                    | In Pipeline 14       |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +Sort             | 15 | property ASC                                                                                         |       22500000 | property ASC                                       | In Pipeline 13       |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +Filter           | 16 | raw IS NOT NULL                                                                                      |       22500000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Projection       | 17 | n[property] AS raw                                                                                   |       30000000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Unwind           | 18 | keys(n) AS property                                                                                  |       30000000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Argument         | 19 | n                                                                                                    |        3000000 |                                                    | Fused in Pipeline 12 |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Filter             | 20 | population > $autoint_1                                                                              |        3000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +AllNodesScan       | 21 | n                                                                                                    |       10000000 |                                                    | Fused in Pipeline 11 |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 22 |                                                                                                      |              1 |                                                    | In Pipeline 10       |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Projection         | 23 | coalesce(anon_60, $autoint_0) AS population                                                          |              1 |                                                    | In Pipeline 9        |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 24 | sum(size(keys(n))) AS anon_60                                                                        |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +AllNodesScan       | 25 | n                                                                                                    |       10000000 |                                                    | Fused in Pipeline 8  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 26 |                                                                                                      |              1 |                                                    | In Pipeline 7        |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 27 | collect_distinct(propertyKey) AS _gc_properties                                                      |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +ProcedureCall      | 28 | db.propertyKeys() :: (propertyKey :: STRING)                                                         |             10 |                                                    | Fused in Pipeline 5  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 30 |                                                                                                      |              1 |                                                    | In Pipeline 4        |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 31 | collect_distinct(relationshipType) AS _gc_rel_types                                                  |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +ProcedureCall      | 32 | db.relationshipTypes() :: (relationshipType :: STRING)                                               |             10 |                                                    | Fused in Pipeline 2  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +EagerAggregation     | 34 | collect_distinct(label) AS _gc_labels                                                                |              1 |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| +ProcedureCall        | 35 | db.labels() :: (label :: STRING)                                                                     |             10 |                                                    | Fused in Pipeline 0  |\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n\r\nTotal database accesses: ?\r\n",
+      "runtime": "PIPELINED",
+      "runtime-impl": "PIPELINED",
+      "version": "5",
+      "batch-size": 1024,
+      "Details": "schema_ok, missing_labels, missing_relationship_types, missing_properties, population, sample_size, candidates",
+      "planner-version": "2026.06.0",
+      "PipelineInfo": "In Pipeline 17",
+      "runtime-version": "2026.06.0",
+      "Id": 0,
+      "EstimatedRows": 1.0,
+      "planner": "COST"
+    },
+    "children": [
+      {
+        "args": {
+          "Details": "[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types] AS missing_relationship_types, size(candidates) AS sample_size, [name IN $required_properties WHERE NOT name IN _gc_properties] AS missing_properties, all(name IN $required_labels WHERE name IN _gc_labels) AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AND all(name IN $required_properties WHERE name IN _gc_properties) AS schema_ok, [name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels",
+          "Id": 1,
+          "EstimatedRows": 1.0,
+          "PipelineInfo": "In Pipeline 17"
+        },
+        "children": [
+          {
+            "args": {
+              "EstimatedRows": 1.0,
+              "Id": 2
+            },
+            "children": [
+              {
+                "args": {
+                  "EstimatedRows": 1.0,
+                  "PipelineInfo": "In Pipeline 10",
+                  "Id": 22
+                },
+                "children": [
+                  {
+                    "args": {
+                      "EstimatedRows": 1.0,
+                      "PipelineInfo": "In Pipeline 7",
+                      "Id": 26
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "EstimatedRows": 1.0,
+                          "PipelineInfo": "In Pipeline 4",
+                          "Id": 30
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "collect_distinct(label) AS _gc_labels",
+                              "Id": 34,
+                              "EstimatedRows": 1.0,
+                              "PipelineInfo": "Fused in Pipeline 0"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "db.labels() :: (label :: STRING)",
+                                  "Id": 35,
+                                  "EstimatedRows": 10.0,
+                                  "PipelineInfo": "Fused in Pipeline 0"
+                                },
+                                "identifiers": [
+                                  "label"
+                                ],
+                                "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_labels"
+                            ],
+                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                          },
+                          {
+                            "args": {
+                              "Details": "collect_distinct(relationshipType) AS _gc_rel_types",
+                              "Id": 31,
+                              "EstimatedRows": 1.0,
+                              "PipelineInfo": "Fused in Pipeline 2"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "db.relationshipTypes() :: (relationshipType :: STRING)",
+                                  "Id": 32,
+                                  "EstimatedRows": 10.0,
+                                  "PipelineInfo": "Fused in Pipeline 2"
+                                },
+                                "identifiers": [
+                                  "relationshipType"
+                                ],
+                                "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_rel_types"
+                            ],
+                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_labels",
+                          "_gc_rel_types"
+                        ],
+                        "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+                      },
+                      {
+                        "args": {
+                          "Details": "collect_distinct(propertyKey) AS _gc_properties",
+                          "Id": 27,
+                          "EstimatedRows": 1.0,
+                          "PipelineInfo": "Fused in Pipeline 5"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "db.propertyKeys() :: (propertyKey :: STRING)",
+                              "Id": 28,
+                              "EstimatedRows": 10.0,
+                              "PipelineInfo": "Fused in Pipeline 5"
+                            },
+                            "identifiers": [
+                              "propertyKey"
+                            ],
+                            "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_properties"
+                        ],
+                        "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "_gc_labels",
+                      "_gc_rel_types",
+                      "_gc_properties"
+                    ],
+                    "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+                  },
+                  {
+                    "args": {
+                      "Details": "coalesce(anon_60, $autoint_0) AS population",
+                      "Id": 23,
+                      "EstimatedRows": 1.0,
+                      "PipelineInfo": "In Pipeline 9"
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "Details": "sum(size(keys(n))) AS anon_60",
+                          "Id": 24,
+                          "EstimatedRows": 1.0,
+                          "PipelineInfo": "Fused in Pipeline 8"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "n",
+                              "Id": 25,
+                              "EstimatedRows": 10000000.0,
+                              "PipelineInfo": "Fused in Pipeline 8"
+                            },
+                            "identifiers": [
+                              "n"
+                            ],
+                            "operatorType": "AllNodesScan@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "anon_60"
+                        ],
+                        "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "anon_60",
+                      "population"
+                    ],
+                    "operatorType": "Projection@graphcheck-benchmark-10000000"
+                  }
+                ],
+                "identifiers": [
+                  "_gc_labels",
+                  "population",
+                  "_gc_rel_types",
+                  "_gc_properties",
+                  "anon_60"
+                ],
+                "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+              },
+              {
+                "args": {
+                  "Details": "collect({evidence: {kind: $autostring_14, id: elementId(n), labels: labels(n)}, property: property}) AS candidates",
+                  "Id": 3,
+                  "EstimatedRows": 1.0,
+                  "PipelineInfo": "In Pipeline 17"
+                },
+                "children": [
+                  {
+                    "args": {
+                      "Order": "_gc_sample_key ASC, elementId(n) ASC, property ASC",
+                      "Id": 4,
+                      "Details": "_gc_sample_key ASC, `elementId(n)` ASC, property ASC LIMIT $sample_size",
+                      "EstimatedRows": 75.0,
+                      "PipelineInfo": "In Pipeline 16"
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "Details": "elementId(n) AS `elementId(n)`",
+                          "Id": 5,
+                          "EstimatedRows": 15300000.0,
+                          "PipelineInfo": "Fused in Pipeline 15"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "((((($sample_hash_a * _gc_occurrence_key + $sample_hash_b) % $autoint_11) * _gc_occurrence_key + $sample_hash_c) % $autoint_12) * _gc_occurrence_key + $sample_hash_d) % $autoint_13 AS _gc_sample_key",
+                              "Id": 6,
+                              "EstimatedRows": 15300000.0,
+                              "PipelineInfo": "Fused in Pipeline 15"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "(population <= $sample_size * $sample_gate_multiplier OR _gc_gate_key < toInteger(ceil(((toFloat($autoint_10) * toFloat($sample_size)) * toFloat($sample_gate_multiplier)) / toFloat(population))))",
+                                  "Id": 7,
+                                  "EstimatedRows": 15300000.0,
+                                  "PipelineInfo": "Fused in Pipeline 15"
+                                },
+                                "children": [
+                                  {
+                                    "args": {
+                                      "Details": "((((($sample_gate_hash_a * _gc_occurrence_key + $sample_gate_hash_b) % $autoint_7) * _gc_occurrence_key + $sample_gate_hash_c) % $autoint_8) * _gc_occurrence_key + $sample_gate_hash_d) % $autoint_9 AS _gc_gate_key",
+                                      "Id": 8,
+                                      "EstimatedRows": 30000000.0,
+                                      "PipelineInfo": "Fused in Pipeline 15"
+                                    },
+                                    "children": [
+                                      {
+                                        "args": {
+                                          "Details": "((id(n) % $autoint_4) * $autoint_5 + _gc_property_index) % $autoint_6 AS _gc_occurrence_key",
+                                          "Id": 9,
+                                          "EstimatedRows": 30000000.0,
+                                          "PipelineInfo": "Fused in Pipeline 15"
+                                        },
+                                        "children": [
+                                          {
+                                            "args": {
+                                              "Details": "occurrence.property AS property, occurrence.raw AS raw",
+                                              "Id": 10,
+                                              "EstimatedRows": 30000000.0,
+                                              "PipelineInfo": "Fused in Pipeline 15"
+                                            },
+                                            "children": [
+                                              {
+                                                "args": {
+                                                  "Details": "_gc_node_properties[_gc_property_index] AS occurrence",
+                                                  "Id": 11,
+                                                  "EstimatedRows": 30000000.0,
+                                                  "PipelineInfo": "Fused in Pipeline 15"
+                                                },
+                                                "children": [
+                                                  {
+                                                    "args": {
+                                                      "EstimatedRows": 30000000.0,
+                                                      "Id": 12
+                                                    },
+                                                    "children": [
+                                                      {
+                                                        "args": {
+                                                          "Details": "population > $autoint_1",
+                                                          "Id": 20,
+                                                          "EstimatedRows": 3000000.0,
+                                                          "PipelineInfo": "Fused in Pipeline 11"
+                                                        },
+                                                        "children": [
+                                                          {
+                                                            "args": {
+                                                              "Details": "n",
+                                                              "Id": 21,
+                                                              "EstimatedRows": 10000000.0,
+                                                              "PipelineInfo": "Fused in Pipeline 11"
+                                                            },
+                                                            "identifiers": [
+                                                              "population",
+                                                              "n"
+                                                            ],
+                                                            "operatorType": "AllNodesScan@graphcheck-benchmark-10000000"
+                                                          }
+                                                        ],
+                                                        "identifiers": [
+                                                          "population",
+                                                          "n"
+                                                        ],
+                                                        "operatorType": "Filter@graphcheck-benchmark-10000000"
+                                                      },
+                                                      {
+                                                        "args": {
+                                                          "Details": "range($autoint_2, size(_gc_node_properties) - $autoint_3) AS _gc_property_index",
+                                                          "Id": 13,
+                                                          "EstimatedRows": 30000000.0,
+                                                          "PipelineInfo": "Fused in Pipeline 15"
+                                                        },
+                                                        "children": [
+                                                          {
+                                                            "args": {
+                                                              "Details": "collect({property: property, raw: raw}) AS _gc_node_properties",
+                                                              "Id": 14,
+                                                              "EstimatedRows": 3000000.0,
+                                                              "PipelineInfo": "In Pipeline 14"
+                                                            },
+                                                            "children": [
+                                                              {
+                                                                "args": {
+                                                                  "Order": "property ASC",
+                                                                  "Id": 15,
+                                                                  "Details": "property ASC",
+                                                                  "EstimatedRows": 22500000.0,
+                                                                  "PipelineInfo": "In Pipeline 13"
+                                                                },
+                                                                "children": [
+                                                                  {
+                                                                    "args": {
+                                                                      "Details": "raw IS NOT NULL",
+                                                                      "Id": 16,
+                                                                      "EstimatedRows": 22500000.0,
+                                                                      "PipelineInfo": "Fused in Pipeline 12"
+                                                                    },
+                                                                    "children": [
+                                                                      {
+                                                                        "args": {
+                                                                          "Details": "n[property] AS raw",
+                                                                          "Id": 17,
+                                                                          "EstimatedRows": 30000000.0,
+                                                                          "PipelineInfo": "Fused in Pipeline 12"
+                                                                        },
+                                                                        "children": [
+                                                                          {
+                                                                            "args": {
+                                                                              "Details": "keys(n) AS property",
+                                                                              "Id": 18,
+                                                                              "EstimatedRows": 30000000.0,
+                                                                              "PipelineInfo": "Fused in Pipeline 12"
+                                                                            },
+                                                                            "children": [
+                                                                              {
+                                                                                "args": {
+                                                                                  "Details": "n",
+                                                                                  "Id": 19,
+                                                                                  "EstimatedRows": 3000000.0,
+                                                                                  "PipelineInfo": "Fused in Pipeline 12"
+                                                                                },
+                                                                                "identifiers": [
+                                                                                  "n"
+                                                                                ],
+                                                                                "operatorType": "Argument@graphcheck-benchmark-10000000"
+                                                                              }
+                                                                            ],
+                                                                            "identifiers": [
+                                                                              "n",
+                                                                              "property"
+                                                                            ],
+                                                                            "operatorType": "Unwind@graphcheck-benchmark-10000000"
+                                                                          }
+                                                                        ],
+                                                                        "identifiers": [
+                                                                          "n",
+                                                                          "property",
+                                                                          "raw"
+                                                                        ],
+                                                                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                                                      }
+                                                                    ],
+                                                                    "identifiers": [
+                                                                      "n",
+                                                                      "property",
+                                                                      "raw"
+                                                                    ],
+                                                                    "operatorType": "Filter@graphcheck-benchmark-10000000"
+                                                                  }
+                                                                ],
+                                                                "identifiers": [
+                                                                  "n",
+                                                                  "property",
+                                                                  "raw"
+                                                                ],
+                                                                "operatorType": "Sort@graphcheck-benchmark-10000000"
+                                                              }
+                                                            ],
+                                                            "identifiers": [
+                                                              "_gc_node_properties",
+                                                              "n"
+                                                            ],
+                                                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                                                          }
+                                                        ],
+                                                        "identifiers": [
+                                                          "_gc_node_properties",
+                                                          "_gc_property_index",
+                                                          "n"
+                                                        ],
+                                                        "operatorType": "Unwind@graphcheck-benchmark-10000000"
+                                                      }
+                                                    ],
+                                                    "identifiers": [
+                                                      "population",
+                                                      "n",
+                                                      "_gc_node_properties",
+                                                      "_gc_property_index"
+                                                    ],
+                                                    "operatorType": "Apply@graphcheck-benchmark-10000000"
+                                                  }
+                                                ],
+                                                "identifiers": [
+                                                  "n",
+                                                  "population",
+                                                  "occurrence",
+                                                  "_gc_property_index",
+                                                  "_gc_node_properties"
+                                                ],
+                                                "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                              }
+                                            ],
+                                            "identifiers": [
+                                              "n",
+                                              "population",
+                                              "occurrence",
+                                              "raw",
+                                              "property",
+                                              "_gc_property_index",
+                                              "_gc_node_properties"
+                                            ],
+                                            "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                          }
+                                        ],
+                                        "identifiers": [
+                                          "n",
+                                          "population",
+                                          "occurrence",
+                                          "raw",
+                                          "property",
+                                          "_gc_occurrence_key",
+                                          "_gc_property_index",
+                                          "_gc_node_properties"
+                                        ],
+                                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                      }
+                                    ],
+                                    "identifiers": [
+                                      "n",
+                                      "population",
+                                      "occurrence",
+                                      "raw",
+                                      "property",
+                                      "_gc_occurrence_key",
+                                      "_gc_gate_key",
+                                      "_gc_property_index",
+                                      "_gc_node_properties"
+                                    ],
+                                    "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                  }
+                                ],
+                                "identifiers": [
+                                  "n",
+                                  "population",
+                                  "occurrence",
+                                  "raw",
+                                  "property",
+                                  "_gc_occurrence_key",
+                                  "_gc_gate_key",
+                                  "_gc_property_index",
+                                  "_gc_node_properties"
+                                ],
+                                "operatorType": "Filter@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_sample_key",
+                              "n",
+                              "population",
+                              "occurrence",
+                              "raw",
+                              "property",
+                              "_gc_occurrence_key",
+                              "_gc_gate_key",
+                              "_gc_property_index",
+                              "_gc_node_properties"
+                            ],
+                            "operatorType": "Projection@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_sample_key",
+                          "n",
+                          "population",
+                          "occurrence",
+                          "raw",
+                          "`elementId(n)`",
+                          "property",
+                          "_gc_occurrence_key",
+                          "_gc_gate_key",
+                          "_gc_property_index",
+                          "_gc_node_properties"
+                        ],
+                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "_gc_sample_key",
+                      "n",
+                      "population",
+                      "occurrence",
+                      "raw",
+                      "`elementId(n)`",
+                      "property",
+                      "_gc_occurrence_key",
+                      "_gc_gate_key",
+                      "_gc_property_index",
+                      "_gc_node_properties"
+                    ],
+                    "operatorType": "Top@graphcheck-benchmark-10000000"
+                  }
+                ],
+                "identifiers": [
+                  "candidates",
+                  "population"
+                ],
+                "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+              }
+            ],
+            "identifiers": [
+              "_gc_labels",
+              "population",
+              "candidates",
+              "_gc_rel_types",
+              "_gc_properties",
+              "anon_60"
+            ],
+            "operatorType": "Apply@graphcheck-benchmark-10000000"
+          }
+        ],
+        "identifiers": [
+          "schema_ok",
+          "_gc_labels",
+          "population",
+          "candidates",
+          "missing_labels",
+          "missing_properties",
+          "_gc_properties",
+          "_gc_rel_types",
+          "sample_size",
+          "missing_relationship_types",
+          "anon_60"
+        ],
+        "operatorType": "Projection@graphcheck-benchmark-10000000"
+      }
+    ],
+    "identifiers": [
+      "schema_ok",
+      "_gc_labels",
+      "population",
+      "candidates",
+      "missing_labels",
+      "missing_properties",
+      "_gc_properties",
+      "_gc_rel_types",
+      "sample_size",
+      "missing_relationship_types",
+      "anon_60"
+    ],
+    "operatorType": "ProduceResults@graphcheck-benchmark-10000000"
+  },
+  "pii_value_match": {
+    "args": {
+      "planner-impl": "IDP",
+      "string-representation": "Cypher 5\r\n\r\nPlanner COST\r\n\r\nRuntime PIPELINED\r\n\r\nRuntime version 2026.06.0\r\n\r\nBatch size 1024\r\n\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| Operator              | Id | Details                                                                                              | Estimated Rows | Ordered by                                         | Pipeline             |\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +ProduceResults       |  0 | schema_ok, missing_labels, missing_relationship_types, missing_properties, population, sample_size,  |              1 |                                                    |                      |\r\n| |                     |    | candidates                                                                                           |                |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| +Projection           |  1 | [name IN $required_relationship_types WHERE NOT name IN _gc_rel_types] AS missing_relationship_types |              1 |                                                    | In Pipeline 17       |\r\n| |                     |    | , size(candidates) AS sample_size,                                                                   |                |                                                    |                      |\r\n| |                     |    | [name IN $required_properties WHERE NOT name IN _gc_properties] AS missing_properties, all(name IN $ |                |                                                    |                      |\r\n| |                     |    | required_labels WHERE name IN _gc_labels) AND all(name IN $required_relationship_types WHERE name IN |                |                                                    |                      |\r\n| |                     |    |  _gc_rel_types) AND all(name IN $required_properties WHERE name IN _gc_properties) AS schema_ok,     |                |                                                    |                      |\r\n| |                     |    | [name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels                            |                |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +Apply                |  2 |                                                                                                      |              1 |                                                    |                      |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   |  3 | collect({evidence: {kind: $autostring_13, id: elementId(n), labels: labels(n)}, property: property,  |              1 |                                                    | In Pipeline 17       |\r\n| | |                   |    | value: raw}) AS candidates                                                                           |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Top                |  4 | _gc_sample_key ASC, `elementId(n)` ASC, property ASC LIMIT $sample_size                              |             75 | _gc_sample_key ASC, elementId(n) ASC, property ASC | In Pipeline 16       |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Projection         |  5 | elementId(n) AS `elementId(n)`                                                                       |       15300000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  6 | ((((($sample_hash_a * _gc_occurrence_key + $sample_hash_b) % $autoint_10) * _gc_occurrence_key + $sa |       15300000 |                                                    |                      |\r\n| | |                   |    | mple_hash_c) % $autoint_11) * _gc_occurrence_key + $sample_hash_d) % $autoint_12 AS _gc_sample_key   |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Filter             |  7 | (population <= $sample_size * $sample_gate_multiplier OR _gc_gate_key < toInteger(ceil(((toFloat($au |       15300000 |                                                    |                      |\r\n| | |                   |    | toint_9) * toFloat($sample_size)) * toFloat($sample_gate_multiplier)) / toFloat(population))))       |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  8 | ((((($sample_gate_hash_a * _gc_occurrence_key + $sample_gate_hash_b) % $autoint_6) * _gc_occurrence_ |       30000000 |                                                    |                      |\r\n| | |                   |    | key + $sample_gate_hash_c) % $autoint_7) * _gc_occurrence_key + $sample_gate_hash_d) % $autoint_8 AS |                |                                                    |                      |\r\n| | |                   |    |  _gc_gate_key                                                                                        |                |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         |  9 | ((id(n) % $autoint_3) * $autoint_4 + _gc_property_index) % $autoint_5 AS _gc_occurrence_key          |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         | 10 | occurrence.property AS property, occurrence.raw AS raw                                               |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         | 11 | _gc_node_properties[_gc_property_index] AS occurrence                                                |       30000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Apply              | 12 |                                                                                                      |       30000000 |                                                    |                      |\r\n| | |\\                  +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Unwind           | 13 | range($autoint_1, size(_gc_node_properties) - $autoint_2) AS _gc_property_index                      |       30000000 |                                                    | Fused in Pipeline 15 |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +EagerAggregation | 14 | collect({property: property, raw: raw}) AS _gc_node_properties                                       |        3000000 |                                                    | In Pipeline 14       |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +Sort             | 15 | property ASC                                                                                         |       22500000 | property ASC                                       | In Pipeline 13       |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | | +Filter           | 16 | toStringOrNull(raw) = raw                                                                            |       22500000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Projection       | 17 | n[property] AS raw                                                                                   |       30000000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Unwind           | 18 | keys(n) AS property                                                                                  |       30000000 |                                                    |                      |\r\n| | | |                 +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | | +Argument         | 19 | n                                                                                                    |        3000000 |                                                    | Fused in Pipeline 12 |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +Filter             | 20 | population > $autoint_0                                                                              |        3000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +AllNodesScan       | 21 | n                                                                                                    |       10000000 |                                                    | Fused in Pipeline 11 |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 22 |                                                                                                      |              1 |                                                    | In Pipeline 10       |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 23 | count(*) AS population                                                                               |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Filter             | 24 | toStringOrNull(raw) = raw                                                                            |       75000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Projection         | 25 | n[property] AS raw                                                                                   |      100000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +Unwind             | 26 | keys(n) AS property                                                                                  |      100000000 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +AllNodesScan       | 27 | n                                                                                                    |       10000000 |                                                    | Fused in Pipeline 8  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 28 |                                                                                                      |              1 |                                                    | In Pipeline 7        |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 29 | collect_distinct(propertyKey) AS _gc_properties                                                      |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +ProcedureCall      | 30 | db.propertyKeys() :: (propertyKey :: STRING)                                                         |             10 |                                                    | Fused in Pipeline 5  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +CartesianProduct     | 32 |                                                                                                      |              1 |                                                    | In Pipeline 4        |\r\n| |\\                    +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| | +EagerAggregation   | 33 | collect_distinct(relationshipType) AS _gc_rel_types                                                  |              1 |                                                    |                      |\r\n| | |                   +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| | +ProcedureCall      | 34 | db.relationshipTypes() :: (relationshipType :: STRING)                                               |             10 |                                                    | Fused in Pipeline 2  |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n| +EagerAggregation     | 36 | collect_distinct(label) AS _gc_labels                                                                |              1 |                                                    |                      |\r\n| |                     +----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+                      |\r\n| +ProcedureCall        | 37 | db.labels() :: (label :: STRING)                                                                     |             10 |                                                    | Fused in Pipeline 0  |\r\n+-----------------------+----+------------------------------------------------------------------------------------------------------+----------------+----------------------------------------------------+----------------------+\r\n\r\nTotal database accesses: ?\r\n",
+      "runtime": "PIPELINED",
+      "runtime-impl": "PIPELINED",
+      "version": "5",
+      "batch-size": 1024,
+      "Details": "schema_ok, missing_labels, missing_relationship_types, missing_properties, population, sample_size, candidates",
+      "planner-version": "2026.06.0",
+      "PipelineInfo": "In Pipeline 17",
+      "runtime-version": "2026.06.0",
+      "Id": 0,
+      "EstimatedRows": 1.0,
+      "planner": "COST"
+    },
+    "children": [
+      {
+        "args": {
+          "Details": "[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types] AS missing_relationship_types, size(candidates) AS sample_size, [name IN $required_properties WHERE NOT name IN _gc_properties] AS missing_properties, all(name IN $required_labels WHERE name IN _gc_labels) AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AND all(name IN $required_properties WHERE name IN _gc_properties) AS schema_ok, [name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels",
+          "Id": 1,
+          "EstimatedRows": 1.0,
+          "PipelineInfo": "In Pipeline 17"
+        },
+        "children": [
+          {
+            "args": {
+              "EstimatedRows": 1.0,
+              "Id": 2
+            },
+            "children": [
+              {
+                "args": {
+                  "EstimatedRows": 1.0,
+                  "PipelineInfo": "In Pipeline 10",
+                  "Id": 22
+                },
+                "children": [
+                  {
+                    "args": {
+                      "EstimatedRows": 1.0,
+                      "PipelineInfo": "In Pipeline 7",
+                      "Id": 28
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "EstimatedRows": 1.0,
+                          "PipelineInfo": "In Pipeline 4",
+                          "Id": 32
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "collect_distinct(label) AS _gc_labels",
+                              "Id": 36,
+                              "EstimatedRows": 1.0,
+                              "PipelineInfo": "Fused in Pipeline 0"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "db.labels() :: (label :: STRING)",
+                                  "Id": 37,
+                                  "EstimatedRows": 10.0,
+                                  "PipelineInfo": "Fused in Pipeline 0"
+                                },
+                                "identifiers": [
+                                  "label"
+                                ],
+                                "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_labels"
+                            ],
+                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                          },
+                          {
+                            "args": {
+                              "Details": "collect_distinct(relationshipType) AS _gc_rel_types",
+                              "Id": 33,
+                              "EstimatedRows": 1.0,
+                              "PipelineInfo": "Fused in Pipeline 2"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "db.relationshipTypes() :: (relationshipType :: STRING)",
+                                  "Id": 34,
+                                  "EstimatedRows": 10.0,
+                                  "PipelineInfo": "Fused in Pipeline 2"
+                                },
+                                "identifiers": [
+                                  "relationshipType"
+                                ],
+                                "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_rel_types"
+                            ],
+                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_labels",
+                          "_gc_rel_types"
+                        ],
+                        "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+                      },
+                      {
+                        "args": {
+                          "Details": "collect_distinct(propertyKey) AS _gc_properties",
+                          "Id": 29,
+                          "EstimatedRows": 1.0,
+                          "PipelineInfo": "Fused in Pipeline 5"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "db.propertyKeys() :: (propertyKey :: STRING)",
+                              "Id": 30,
+                              "EstimatedRows": 10.0,
+                              "PipelineInfo": "Fused in Pipeline 5"
+                            },
+                            "identifiers": [
+                              "propertyKey"
+                            ],
+                            "operatorType": "ProcedureCall@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_properties"
+                        ],
+                        "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "_gc_labels",
+                      "_gc_rel_types",
+                      "_gc_properties"
+                    ],
+                    "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+                  },
+                  {
+                    "args": {
+                      "Details": "count(*) AS population",
+                      "Id": 23,
+                      "EstimatedRows": 1.0,
+                      "PipelineInfo": "Fused in Pipeline 8"
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "Details": "toStringOrNull(raw) = raw",
+                          "Id": 24,
+                          "EstimatedRows": 75000000.0,
+                          "PipelineInfo": "Fused in Pipeline 8"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "n[property] AS raw",
+                              "Id": 25,
+                              "EstimatedRows": 100000000.0,
+                              "PipelineInfo": "Fused in Pipeline 8"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "keys(n) AS property",
+                                  "Id": 26,
+                                  "EstimatedRows": 100000000.0,
+                                  "PipelineInfo": "Fused in Pipeline 8"
+                                },
+                                "children": [
+                                  {
+                                    "args": {
+                                      "Details": "n",
+                                      "Id": 27,
+                                      "EstimatedRows": 10000000.0,
+                                      "PipelineInfo": "Fused in Pipeline 8"
+                                    },
+                                    "identifiers": [
+                                      "n"
+                                    ],
+                                    "operatorType": "AllNodesScan@graphcheck-benchmark-10000000"
+                                  }
+                                ],
+                                "identifiers": [
+                                  "n",
+                                  "property"
+                                ],
+                                "operatorType": "Unwind@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "n",
+                              "property",
+                              "raw"
+                            ],
+                            "operatorType": "Projection@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "n",
+                          "property",
+                          "raw"
+                        ],
+                        "operatorType": "Filter@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "population"
+                    ],
+                    "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                  }
+                ],
+                "identifiers": [
+                  "_gc_labels",
+                  "_gc_rel_types",
+                  "_gc_properties",
+                  "population"
+                ],
+                "operatorType": "CartesianProduct@graphcheck-benchmark-10000000"
+              },
+              {
+                "args": {
+                  "Details": "collect({evidence: {kind: $autostring_13, id: elementId(n), labels: labels(n)}, property: property, value: raw}) AS candidates",
+                  "Id": 3,
+                  "EstimatedRows": 1.0,
+                  "PipelineInfo": "In Pipeline 17"
+                },
+                "children": [
+                  {
+                    "args": {
+                      "Order": "_gc_sample_key ASC, elementId(n) ASC, property ASC",
+                      "Id": 4,
+                      "Details": "_gc_sample_key ASC, `elementId(n)` ASC, property ASC LIMIT $sample_size",
+                      "EstimatedRows": 75.0,
+                      "PipelineInfo": "In Pipeline 16"
+                    },
+                    "children": [
+                      {
+                        "args": {
+                          "Details": "elementId(n) AS `elementId(n)`",
+                          "Id": 5,
+                          "EstimatedRows": 15300000.0,
+                          "PipelineInfo": "Fused in Pipeline 15"
+                        },
+                        "children": [
+                          {
+                            "args": {
+                              "Details": "((((($sample_hash_a * _gc_occurrence_key + $sample_hash_b) % $autoint_10) * _gc_occurrence_key + $sample_hash_c) % $autoint_11) * _gc_occurrence_key + $sample_hash_d) % $autoint_12 AS _gc_sample_key",
+                              "Id": 6,
+                              "EstimatedRows": 15300000.0,
+                              "PipelineInfo": "Fused in Pipeline 15"
+                            },
+                            "children": [
+                              {
+                                "args": {
+                                  "Details": "(population <= $sample_size * $sample_gate_multiplier OR _gc_gate_key < toInteger(ceil(((toFloat($autoint_9) * toFloat($sample_size)) * toFloat($sample_gate_multiplier)) / toFloat(population))))",
+                                  "Id": 7,
+                                  "EstimatedRows": 15300000.0,
+                                  "PipelineInfo": "Fused in Pipeline 15"
+                                },
+                                "children": [
+                                  {
+                                    "args": {
+                                      "Details": "((((($sample_gate_hash_a * _gc_occurrence_key + $sample_gate_hash_b) % $autoint_6) * _gc_occurrence_key + $sample_gate_hash_c) % $autoint_7) * _gc_occurrence_key + $sample_gate_hash_d) % $autoint_8 AS _gc_gate_key",
+                                      "Id": 8,
+                                      "EstimatedRows": 30000000.0,
+                                      "PipelineInfo": "Fused in Pipeline 15"
+                                    },
+                                    "children": [
+                                      {
+                                        "args": {
+                                          "Details": "((id(n) % $autoint_3) * $autoint_4 + _gc_property_index) % $autoint_5 AS _gc_occurrence_key",
+                                          "Id": 9,
+                                          "EstimatedRows": 30000000.0,
+                                          "PipelineInfo": "Fused in Pipeline 15"
+                                        },
+                                        "children": [
+                                          {
+                                            "args": {
+                                              "Details": "occurrence.property AS property, occurrence.raw AS raw",
+                                              "Id": 10,
+                                              "EstimatedRows": 30000000.0,
+                                              "PipelineInfo": "Fused in Pipeline 15"
+                                            },
+                                            "children": [
+                                              {
+                                                "args": {
+                                                  "Details": "_gc_node_properties[_gc_property_index] AS occurrence",
+                                                  "Id": 11,
+                                                  "EstimatedRows": 30000000.0,
+                                                  "PipelineInfo": "Fused in Pipeline 15"
+                                                },
+                                                "children": [
+                                                  {
+                                                    "args": {
+                                                      "EstimatedRows": 30000000.0,
+                                                      "Id": 12
+                                                    },
+                                                    "children": [
+                                                      {
+                                                        "args": {
+                                                          "Details": "population > $autoint_0",
+                                                          "Id": 20,
+                                                          "EstimatedRows": 3000000.0,
+                                                          "PipelineInfo": "Fused in Pipeline 11"
+                                                        },
+                                                        "children": [
+                                                          {
+                                                            "args": {
+                                                              "Details": "n",
+                                                              "Id": 21,
+                                                              "EstimatedRows": 10000000.0,
+                                                              "PipelineInfo": "Fused in Pipeline 11"
+                                                            },
+                                                            "identifiers": [
+                                                              "population",
+                                                              "n"
+                                                            ],
+                                                            "operatorType": "AllNodesScan@graphcheck-benchmark-10000000"
+                                                          }
+                                                        ],
+                                                        "identifiers": [
+                                                          "population",
+                                                          "n"
+                                                        ],
+                                                        "operatorType": "Filter@graphcheck-benchmark-10000000"
+                                                      },
+                                                      {
+                                                        "args": {
+                                                          "Details": "range($autoint_1, size(_gc_node_properties) - $autoint_2) AS _gc_property_index",
+                                                          "Id": 13,
+                                                          "EstimatedRows": 30000000.0,
+                                                          "PipelineInfo": "Fused in Pipeline 15"
+                                                        },
+                                                        "children": [
+                                                          {
+                                                            "args": {
+                                                              "Details": "collect({property: property, raw: raw}) AS _gc_node_properties",
+                                                              "Id": 14,
+                                                              "EstimatedRows": 3000000.0,
+                                                              "PipelineInfo": "In Pipeline 14"
+                                                            },
+                                                            "children": [
+                                                              {
+                                                                "args": {
+                                                                  "Order": "property ASC",
+                                                                  "Id": 15,
+                                                                  "Details": "property ASC",
+                                                                  "EstimatedRows": 22500000.0,
+                                                                  "PipelineInfo": "In Pipeline 13"
+                                                                },
+                                                                "children": [
+                                                                  {
+                                                                    "args": {
+                                                                      "Details": "toStringOrNull(raw) = raw",
+                                                                      "Id": 16,
+                                                                      "EstimatedRows": 22500000.0,
+                                                                      "PipelineInfo": "Fused in Pipeline 12"
+                                                                    },
+                                                                    "children": [
+                                                                      {
+                                                                        "args": {
+                                                                          "Details": "n[property] AS raw",
+                                                                          "Id": 17,
+                                                                          "EstimatedRows": 30000000.0,
+                                                                          "PipelineInfo": "Fused in Pipeline 12"
+                                                                        },
+                                                                        "children": [
+                                                                          {
+                                                                            "args": {
+                                                                              "Details": "keys(n) AS property",
+                                                                              "Id": 18,
+                                                                              "EstimatedRows": 30000000.0,
+                                                                              "PipelineInfo": "Fused in Pipeline 12"
+                                                                            },
+                                                                            "children": [
+                                                                              {
+                                                                                "args": {
+                                                                                  "Details": "n",
+                                                                                  "Id": 19,
+                                                                                  "EstimatedRows": 3000000.0,
+                                                                                  "PipelineInfo": "Fused in Pipeline 12"
+                                                                                },
+                                                                                "identifiers": [
+                                                                                  "n"
+                                                                                ],
+                                                                                "operatorType": "Argument@graphcheck-benchmark-10000000"
+                                                                              }
+                                                                            ],
+                                                                            "identifiers": [
+                                                                              "n",
+                                                                              "property"
+                                                                            ],
+                                                                            "operatorType": "Unwind@graphcheck-benchmark-10000000"
+                                                                          }
+                                                                        ],
+                                                                        "identifiers": [
+                                                                          "n",
+                                                                          "property",
+                                                                          "raw"
+                                                                        ],
+                                                                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                                                      }
+                                                                    ],
+                                                                    "identifiers": [
+                                                                      "n",
+                                                                      "property",
+                                                                      "raw"
+                                                                    ],
+                                                                    "operatorType": "Filter@graphcheck-benchmark-10000000"
+                                                                  }
+                                                                ],
+                                                                "identifiers": [
+                                                                  "n",
+                                                                  "property",
+                                                                  "raw"
+                                                                ],
+                                                                "operatorType": "Sort@graphcheck-benchmark-10000000"
+                                                              }
+                                                            ],
+                                                            "identifiers": [
+                                                              "_gc_node_properties",
+                                                              "n"
+                                                            ],
+                                                            "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+                                                          }
+                                                        ],
+                                                        "identifiers": [
+                                                          "_gc_node_properties",
+                                                          "_gc_property_index",
+                                                          "n"
+                                                        ],
+                                                        "operatorType": "Unwind@graphcheck-benchmark-10000000"
+                                                      }
+                                                    ],
+                                                    "identifiers": [
+                                                      "population",
+                                                      "n",
+                                                      "_gc_node_properties",
+                                                      "_gc_property_index"
+                                                    ],
+                                                    "operatorType": "Apply@graphcheck-benchmark-10000000"
+                                                  }
+                                                ],
+                                                "identifiers": [
+                                                  "n",
+                                                  "population",
+                                                  "occurrence",
+                                                  "_gc_property_index",
+                                                  "_gc_node_properties"
+                                                ],
+                                                "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                              }
+                                            ],
+                                            "identifiers": [
+                                              "n",
+                                              "population",
+                                              "occurrence",
+                                              "raw",
+                                              "property",
+                                              "_gc_property_index",
+                                              "_gc_node_properties"
+                                            ],
+                                            "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                          }
+                                        ],
+                                        "identifiers": [
+                                          "n",
+                                          "population",
+                                          "occurrence",
+                                          "raw",
+                                          "property",
+                                          "_gc_occurrence_key",
+                                          "_gc_property_index",
+                                          "_gc_node_properties"
+                                        ],
+                                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                      }
+                                    ],
+                                    "identifiers": [
+                                      "n",
+                                      "population",
+                                      "occurrence",
+                                      "raw",
+                                      "property",
+                                      "_gc_occurrence_key",
+                                      "_gc_gate_key",
+                                      "_gc_property_index",
+                                      "_gc_node_properties"
+                                    ],
+                                    "operatorType": "Projection@graphcheck-benchmark-10000000"
+                                  }
+                                ],
+                                "identifiers": [
+                                  "n",
+                                  "population",
+                                  "occurrence",
+                                  "raw",
+                                  "property",
+                                  "_gc_occurrence_key",
+                                  "_gc_gate_key",
+                                  "_gc_property_index",
+                                  "_gc_node_properties"
+                                ],
+                                "operatorType": "Filter@graphcheck-benchmark-10000000"
+                              }
+                            ],
+                            "identifiers": [
+                              "_gc_sample_key",
+                              "n",
+                              "population",
+                              "occurrence",
+                              "raw",
+                              "property",
+                              "_gc_occurrence_key",
+                              "_gc_gate_key",
+                              "_gc_property_index",
+                              "_gc_node_properties"
+                            ],
+                            "operatorType": "Projection@graphcheck-benchmark-10000000"
+                          }
+                        ],
+                        "identifiers": [
+                          "_gc_sample_key",
+                          "n",
+                          "population",
+                          "occurrence",
+                          "raw",
+                          "`elementId(n)`",
+                          "property",
+                          "_gc_occurrence_key",
+                          "_gc_gate_key",
+                          "_gc_property_index",
+                          "_gc_node_properties"
+                        ],
+                        "operatorType": "Projection@graphcheck-benchmark-10000000"
+                      }
+                    ],
+                    "identifiers": [
+                      "_gc_sample_key",
+                      "n",
+                      "population",
+                      "occurrence",
+                      "raw",
+                      "`elementId(n)`",
+                      "property",
+                      "_gc_occurrence_key",
+                      "_gc_gate_key",
+                      "_gc_property_index",
+                      "_gc_node_properties"
+                    ],
+                    "operatorType": "Top@graphcheck-benchmark-10000000"
+                  }
+                ],
+                "identifiers": [
+                  "candidates",
+                  "population"
+                ],
+                "operatorType": "EagerAggregation@graphcheck-benchmark-10000000"
+              }
+            ],
+            "identifiers": [
+              "_gc_labels",
+              "population",
+              "candidates",
+              "_gc_rel_types",
+              "_gc_properties"
+            ],
+            "operatorType": "Apply@graphcheck-benchmark-10000000"
+          }
+        ],
+        "identifiers": [
+          "schema_ok",
+          "_gc_labels",
+          "population",
+          "candidates",
+          "missing_labels",
+          "missing_properties",
+          "_gc_properties",
+          "missing_relationship_types",
+          "_gc_rel_types",
+          "sample_size"
+        ],
+        "operatorType": "Projection@graphcheck-benchmark-10000000"
+      }
+    ],
+    "identifiers": [
+      "schema_ok",
+      "_gc_labels",
+      "population",
+      "candidates",
+      "missing_labels",
+      "missing_properties",
+      "_gc_properties",
+      "missing_relationship_types",
+      "_gc_rel_types",
+      "sample_size"
+    ],
+    "operatorType": "ProduceResults@graphcheck-benchmark-10000000"
+  }
+}
