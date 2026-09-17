@@ -1,0 +1,11 @@
+suite: 10-owns-count-drift
+generated: true
+drift:
+  - id: 10-owns-count-drift
+    metric: relationship_count
+    target:
+      type: OWNS
+    baseline: latest
+    tolerance:
+      max_drop_pct: 10
+    severity: error

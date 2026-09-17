@@ -100,8 +100,22 @@ class Expect(_Strict):
     rows: RowBounds | None = None
     columns: list[str] | None = None
     unique: bool | None = None
-    contains: list | None = None
-    equals: list | None = None
+    contains: list | None = Field(
+        default=None,
+        description=(
+            "Required regression values; other returned values are allowed. For one result column, "
+            "list that column's values directly (e.g. [ACC-1]), not row maps or nested row lists. "
+            "For multiple columns, use complete column-to-value maps."
+        ),
+    )
+    equals: list | None = Field(
+        default=None,
+        description=(
+            "Complete regression result as an order-independent, duplicate-preserving bag. For one "
+            "result column, list values directly (e.g. [1500]); for multiple columns, use complete "
+            "column-to-value maps. A failed assertion still requires a real graph evidence pointer."
+        ),
+    )
     empty: bool | None = None
 
     @model_validator(mode="after")
@@ -148,7 +162,14 @@ class Expect(_Strict):
 
 class CompetencyCheck(_Envelope):
     question: str
-    query: str
+    query: str = Field(
+        description=(
+            "Read-only Cypher. Findings require a returned graph entity, typed pointer, or "
+            "explicit node_element_id, rel_element_id, or relationship_element_id alias containing "
+            "elementId(). Business IDs and arbitrary *_id columns are not evidence pointers; "
+            "a scalar count alone cannot supply evidence for a failed assertion."
+        )
+    )
     params: dict = {}
     expect: Expect
 

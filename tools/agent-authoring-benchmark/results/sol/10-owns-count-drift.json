@@ -1,0 +1,118 @@
+{
+  "checks": [
+    {
+      "compiled_query": "CALL {\n  CALL db.labels() YIELD label\n  RETURN collect(label) AS _gc_labels\n}\nCALL {\n  CALL db.relationshipTypes() YIELD relationshipType\n  RETURN collect(relationshipType) AS _gc_rel_types\n}\nWITH _gc_labels, _gc_rel_types\n\n            CALL {\n              MATCH ()-[r:`OWNS`]->()\n              RETURN count(r) AS current\n            }\n            RETURN \nall(name IN $required_labels WHERE name IN _gc_labels)\n  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,\n[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,\n[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]\n  AS missing_relationship_types\n, current, current AS population, [] AS evidence",
+      "duration_ms": 16,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "baseline": "latest",
+        "tolerance": {
+          "max_drop_pct": 10
+        }
+      },
+      "id": "10-owns-count-drift",
+      "measured": {
+        "baseline": 2502.0,
+        "change_pct": 0.0,
+        "current": 2502.0,
+        "delta": 0.0
+      },
+      "name": "relationship_count for OWNS is within tolerance",
+      "params": {
+        "required_labels": [],
+        "required_relationship_types": [
+          "OWNS"
+        ]
+      },
+      "pattern": "drift",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:11:26.480190Z",
+      "suite_id": "10-owns-count-drift",
+      "verdict": "pass"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:b78cc531b25db39acf4567d1a2144e364cbc759722425afcfd3e7bce91766a59",
+    "error": null,
+    "exit_code": 0,
+    "finished_at": "2026-09-16T12:11:26.491190Z",
+    "graphcheck_version": "0.3.0",
+    "id": "63c7f38d-26e8-4ac0-b0e6-cc6b1c71b5da",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "10-owns-count-drift"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:11:26.480190Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 100,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "10-owns-count-drift",
+      "score": 100,
+      "source_sha": "f2e2ffadd19fd19f3ec230ee8542406c6587c6d31daff4c042fa355f4eeb985d",
+      "totals": {
+        "checks": 1,
+        "errored": 0,
+        "fail": 0,
+        "pass": 1,
+        "skipped": 0,
+        "warn": 0
+      }
+    }
+  ],
+  "totals": {
+    "checks": 1,
+    "errored": 0,
+    "fail": 0,
+    "pass": 1,
+    "skipped": 0,
+    "warn": 0
+  }
+}

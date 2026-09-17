@@ -219,6 +219,62 @@ parameters, defaults, and constraints; the smaller `check.envelope.schema.json` 
 `with` opaque. Non-Python authors must also implement SPEC-02's semantic rules after JSON Schema
 validation.
 
+### Regression values follow the returned columns
+
+For **one column**, `contains` and `equals` list that column's values directly. For **multiple
+columns**, each expected item is a complete `{column: value}` mapping. Lists and maps are also
+valid scalar column values, so JSON Schema cannot infer which projection your Cypher returns.
+
+| Query result | Correct assertion shape |
+| --- | --- |
+| One `account_id` column containing strings | `contains: [ACC-2401, ACC-2408]` |
+| One `count` column containing an integer | `equals: [1500]` |
+| Two columns, `account_id` and `owner_count` | `contains: [{account_id: ACC-CARD-0001, owner_count: 2}]` |
+
+`contains` permits additional values. `equals` compares the complete result, ignores row order,
+and preserves duplicates. Neither a nested list such as `[[1500]]` nor a row map such as
+`[{count: 1500}]` matches an integer-valued single column. Also, `rows: {exactly: 1}` on
+`RETURN count(c)` asserts one result row, not the value of the count.
+
+### Design the failing path to return evidence
+
+A competency assertion that fails must still identify its source graph elements. Return a Neo4j
+node, relationship, or path, or use an explicit element identity alias such as
+`elementId(a) AS node_element_id`. Relationship aliases are `rel_element_id` and
+`relationship_element_id`. A business identifier such as `a.id AS account_id` is useful context,
+but it is **not** a graph evidence pointer. Arbitrary `*_id` aliases are not accepted.
+
+For example, this rule allows zero owners and returns the offending Account itself:
+
+```yaml
+suite: account-owners
+generated: true
+competency:
+  - id: at-most-one-owner
+    question: Does every Account have at most one owning Customer?
+    query: |
+      MATCH (a:Account)
+      OPTIONAL MATCH (:Customer)-[r:OWNS]->(a)
+      WITH a, count(r) AS owners
+      WHERE owners > 1
+      RETURN a, owners
+    expect: {empty: true}
+```
+
+An aggregate-only query such as `RETURN count(c)` has no graph pointer if its assertion fails.
+Even a correctly shaped `equals: [1500]` can therefore produce `engine.evidence_missing` instead
+of `fail`. For small graphs, returning one Customer entity per row and asserting `rows.exactly`
+checks the population count while retaining evidence. Alternatively, compare the count in Cypher
+and return a real graph witness for the mismatch; see the
+[aggregate evidence repair](../maintainers/agent-authoring-fixes/aggregate-evidence.md).
+An empty graph may provide no honest witness; keep that outcome inconclusive rather than
+inventing an element or query-supplied aggregate pointer.
+
+The built-in `cardinality` check asserts an **exact** count. Its `from_label` is the population
+being checked, including with `direction: in`. Exactly one sender per Transaction uses
+`from_label: Transaction`, `to_label: Account`, `rel_type: SENT`, `direction: in`, and `exactly: 1`.
+Use a competency violation query for an upper bound such as at most one owner.
+
 ### Programmatic authoring and validation
 
 An authoring program should construct data, serialize it with a safe YAML emitter, validate the
@@ -228,7 +284,8 @@ that validation and write:
 ```python
 from pathlib import Path
 import yaml
-from graphcheck.contracts.check import load_suite
+from graphcheck.contracts.check import load_suite, load_suite_yaml
+from graphcheck.contracts.schemas import validate_check_schema
 
 path = Path("checks/agent-proposal.yml")
 payload = {
@@ -243,6 +300,7 @@ payload = {
     ],
 }
 text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+validate_check_schema(load_suite_yaml(text))
 load_suite(text, source=str(path))
 path.write_text(text, encoding="utf-8")
 ```
@@ -250,6 +308,15 @@ path.write_text(text, encoding="utf-8")
 Do not invent graph rules, pack names, or parameters. Derive proposals from the supplied graph
 schema/profile and business documentation, prefer focused checks, parameterize competency queries,
 and omit rules that the source material does not support.
+
+Schema validation and loading do not establish that a check runs or returns the intended verdict.
+For an explicitly authorized fixture evaluation, retain the original generated YAML, activate only
+a temporary copy, run through the read-only connector, and compare the actual verdict with an
+independently established answer key. Record `valid`, `loads`, `runs`, and `correct` separately;
+`errored` and `skipped` cannot count as successful execution. Include both passing and failing
+examples so missing evidence is observable. The
+[fraud-ring authoring benchmark](../../tools/agent-authoring-benchmark/RESULTS.md) includes raw
+submissions, the complete matrix, reproducible scoring, and the fixes behind this guidance.
 
 ## Generated checks require human approval
 

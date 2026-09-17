@@ -1,0 +1,10 @@
+suite: 07-customer-count-regression
+generated: true
+competency:
+  - id: 07-customer-count-regression
+    question: Is the total Customer count exactly 1500?
+    query: MATCH (c:Customer) RETURN count(c) AS customer_count
+    expect:
+      equals:
+        - customer_count: 1500
+    severity: error

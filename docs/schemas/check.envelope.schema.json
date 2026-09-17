@@ -35,6 +35,7 @@
           "title": "Provenance"
         },
         "query": {
+          "description": "Read-only Cypher. Findings require a returned graph entity, typed pointer, or explicit node_element_id, rel_element_id, or relationship_element_id alias containing elementId(). Business IDs and arbitrary *_id columns are not evidence pointers; a scalar count alone cannot supply evidence for a failed assertion.",
           "title": "Query",
           "type": "string"
         },
@@ -231,6 +232,7 @@
             }
           ],
           "default": null,
+          "description": "Required regression values; other returned values are allowed. For one result column, list that column's values directly (e.g. [ACC-1]), not row maps or nested row lists. For multiple columns, use complete column-to-value maps.",
           "title": "Contains"
         },
         "empty": {
@@ -256,6 +258,7 @@
             }
           ],
           "default": null,
+          "description": "Complete regression result as an order-independent, duplicate-preserving bag. For one result column, list values directly (e.g. [1500]); for multiple columns, use complete column-to-value maps. A failed assertion still requires a real graph evidence pointer.",
           "title": "Equals"
         },
         "rows": {
