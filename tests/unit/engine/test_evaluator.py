@@ -378,6 +378,21 @@ def test_domain_property_ids_are_not_fabricated_into_element_pointers():
         evaluate_check(compiled, [{"account_id": "A-1"}], columns=["account_id"])
 
     assert caught.value.error.code == "engine.evidence_missing"
+    assert "result does not contain every pinned value" in caught.value.error.message
+    assert "node_element_id" in caught.value.error.fix
+    assert "Business IDs and arbitrary *_id aliases are not evidence" in caught.value.error.fix
+
+
+def test_failed_scalar_count_diagnostic_retains_assertion_and_suggests_a_graph_witness():
+    compiled = replace(_competency({"equals": [1500]}), params={})
+
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(compiled, [{"count": 1507}], columns=["count"])
+
+    assert caught.value.error.code == "engine.evidence_missing"
+    assert "result does not equal the pinned values" in caught.value.error.message
+    assert "assert rows" in caught.value.error.fix
+    assert "real graph witness" in caught.value.error.fix
 
 
 def test_query_rows_cannot_claim_aggregate_evidence_for_row_level_findings():

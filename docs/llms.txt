@@ -1,94 +1,45 @@
 # GraphCheck
 
-> GraphCheck is a read-only validation framework for property graphs, currently supporting Neo4j, providing both a command-line interface (CLI) and a Model Context Protocol (MCP) server. It helps engineers validate the semantic correctness of graphs used by GraphRAG systems, AI agents, analytics platforms, and enterprise applications through deterministic, rule-based validation.
+> GraphCheck validates property graphs through a CLI and MCP server. Checks run read-only and
+> produce deterministic verdicts, JSON results, HTML reports, and evidence for findings.
 
-GraphCheck executes declarative validation suites and produces:
+## Start here
 
-- Machine-readable JSON results
-- Self-contained HTML reports
-- Evidence for every fail/warn finding
-- CI-friendly exit codes
+- [Agent guide](guides/agents.md): Discovery, authoring, validation, evidence, generated approval, and result consumption.
+- [User guide](guides/user-guide.md): Configuration, credentials, profiling, baselines, and execution.
+- [Check schema](schemas/check.schema.json): Full structural contract, including pack parameters and authoring descriptions.
+- [Check reference](reference/checks.md): Installed checks and their scope.
+- [README](../README.md): Installation and quickstart.
 
-GraphCheck never modifies customer graphs.
+## Authoring rules
 
-**Version Scope:** This document applies to GraphCheck v0.2.0.
+- Write one or more `conformance`, `competency`, or `drift` collections in each suite. All agent proposals retain `generated: true` until human approval.
+- Validate the emitted YAML against `check.schema.json`, then call `graphcheck.contracts.check.load_suite`. A valid, loadable file is not proof of execution or correctness.
+- Conformance arguments belong under `with`; use exact installed names and parameter types. Completeness thresholds are ratios (`1.0` means 100%).
+- Competency checks require `question`, read-only `query`, and nonempty `expect`. With one result column, `contains`/`equals` list its values directly: `contains: [ACC-1]` or `equals: [1500]`. Multiple columns require complete row maps. Nested lists or row maps do not match a single scalar column.
+- Every failed competency assertion needs a real graph evidence pointer. Return a node/relationship/path or `elementId(n) AS node_element_id` (`rel_element_id` / `relationship_element_id` for relationships). Business identifiers such as `account_id` and arbitrary `*_id` aliases are not evidence.
+- A failed scalar count assertion has no evidence by itself. Return graph entities and assert their row count, or retain a real graph witness for an aggregate mismatch. Do not invent evidence when the graph is empty.
+- `cardinality` counts from the nodes named by `from_label`, even with `direction: in`, and requires an exact count. At-most constraints need a competency query. For a Transaction's incoming sender, use `from_label: Transaction`, `to_label: Account`, `rel_type: SENT`, `direction: in`.
+- Drift requires an existing baseline. `node_count` uses `target: {label: Customer}`; `relationship_count` uses `target: {type: OWNS}`. `max_drop_pct: 10` means ten percent.
 
----
+## Execution and results
 
-## Overview
+- MCP exposes `list_checks`, `run_suite`, and `get_results`; it does not create or approve checks. Use returned suite/run IDs rather than guessed paths.
+- `run_status: complete` does not mean checks passed. Inspect each verdict and the stored exit code: `0` clean, `1` error-level finding/error, `2` warning/partial/inconclusive, `3` failed setup/run.
+- `errored` is not `fail`; `skipped` proves nothing about the graph. Generated checks are skipped without submitting their queries. A selection containing only generated checks exits `2`.
+- For explicitly authorized fixture evaluation, preserve raw generated YAML and activate a temporary copy. Score schema validity, loading, read-only execution, and expected verdict independently.
+- [Authoring benchmark results](../tools/agent-authoring-benchmark/RESULTS.md): Luna, Terra, and Sol at max effort, ten fixed fraud-ring intents, raw submissions, and all four scores.
+- [Recurring authoring fixes](maintainers/agent-authoring-findings.md): Measured failures, implemented documentation/schema/diagnostic changes, and remaining model mistakes.
 
-- [README](../README.md): Project overview, goals, installation, and quickstart.
-- [User Guide](user-guide.md): Credentials, check authoring, execution, artifacts, baselines, generated suggestions, safety, telemetry, and configuration.
-- [CI/CD Guide](ci-cd.md): Copy-paste GitHub Actions workflows for pull requests, scheduled audits, staging, and production.
+## Contracts and operations
 
----
-
-## Specifications
-
-- [Check YAML Specification](specs/SPEC-02-check-yaml.md): Validation suite format, supported check types, and YAML schema.
-- [Results Specification](specs/SPEC-01-results-json.md): `results.json` schema, verdicts, evidence, scoring, and exit codes.
-- [Connector Specification](specs/SPEC-03-connector.md): Project initialization, connection profiles, capability probing, and read-only execution.
-- [Engine Specification](specs/SPEC-04%20Engine.md): Validation pipeline, execution model, and run orchestration.
-- [Profiler & Baseline Specification](specs/SPEC-05-profiler-baseline.md): Graph profiling, baseline generation, and drift detection inputs.
-- [Pack Specification](specs/SPEC-09-packs.md): Built-in packs, supported checks, and pack metadata.
-- [HTML Report Specification](specs/SPEC-06-scorer-html-report.md): Report generation and rendering.
-- [Telemetry Specification](specs/SPEC-10-telemetry-events.md): Telemetry events, privacy, and opt-in behavior.
-- [Telemetry Guide](telemetry.md): User-facing telemetry overview and collected events.
-- [Agent Guide](agents.md): Guidance for AI agents generating GraphCheck validation suites.
-
----
-
-## Features
-
-- Semantic Validation
-- Competency Question Testing
-- Conformance Library
-- Drift Detection
-- Graph Profiling
-- PII Detection
-- HTML Reporting
-- MCP Integration
-
----
-
-## CLI
-
-- [CLI Quickstart](../README.md#quickstart): Installation and the first `init`, `debug`, and `run` workflow.
-- [CLI User Guide](user-guide.md): Detailed project setup, run selection, redaction, profiling, and generated suggestions.
-
----
-
-## Architecture
-
-- [Core Engine](specs/SPEC-04%20Engine.md): Executes validation suites.
-- [Neo4j Connector](specs/SPEC-03-connector.md): Read-only graph access.
-- [Graph Profiler](specs/SPEC-05-profiler-baseline.md): Collects graph schema and statistical metadata.
-- [Check Packs](specs/SPEC-09-packs.md): Reusable validation rules.
-- [Results & Reports](specs/SPEC-01-results-json.md): JSON and HTML outputs.
-- [MCP Server](#): Model Context Protocol integration.
-
----
-
-## Important Invariants
-
-- [Read-only Execution](specs/SPEC-03-connector.md): Never modify customer graph data.
-- [Deterministic Validation](specs/SPEC-04%20Engine.md): Same inputs produce the same results.
-- [Thin Adapters](specs/SPEC-04%20Engine.md): CLI and MCP wrap existing engine logic.
-- [Connector Abstraction](specs/SPEC-03-connector.md): All graph access goes through connectors.
-
----
-
-## Accuracy Guarantees
-
-- [Evidence](specs/SPEC-01-results-json.md): Every `fail` and `warn` result includes supporting evidence.
-- [No LLM-as-Judge](../README.md): Validation is rule-based.
-- [Offline Reports](specs/SPEC-06-scorer-html-report.md): HTML reports require no network connection.
-- [Opt-in Telemetry](specs/SPEC-10-telemetry-events.md): Telemetry is disabled by default.
-
----
-
-## Development
-
-- [CONTRIBUTING](../CONTRIBUTING.md): Contribution guidelines.
-- [CHANGELOG](../CHANGELOG.md): Release history.
-- [LICENSE](../LICENSE): Licensing information.
+- [Check YAML / SPEC-02](specifications/spec-02-check-yaml.md): Strict suite syntax and semantic invariants.
+- [Results / SPEC-01](specifications/spec-01-results-json.md): Verdicts, evidence, derived totals, and exit codes.
+- [Connector / SPEC-03](specifications/spec-03-connector.md): Credentials, capabilities, and read-only guarantees.
+- [Engine / SPEC-04](specifications/spec-04-engine.md): Regression projection, evidence rules, and drift targets.
+- [Profiler / SPEC-05](specifications/spec-05-profiler-baseline.md): Schema and statistics for baseline comparisons.
+- [Generate / SPEC-11](specifications/spec-11-generate.md): Provider abstraction and generated proposals.
+- [Artifact compatibility](reference/artifact-compatibility.md): Supported artifact versions and migration. Artifact schema versions are independent of the GraphCheck release.
+- [CI/CD](guides/ci-cd.md): Automation and exit-code handling.
+- [Telemetry](reference/telemetry.md): Optional telemetry and privacy.
+- [Contributing](../CONTRIBUTING.md): Repository workflow, tests, and lint.

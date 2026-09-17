@@ -1,0 +1,178 @@
+{
+  "checks": [
+    {
+      "compiled_query": "CALL {\n  CALL db.labels() YIELD label\n  RETURN collect(label) AS _gc_labels\n}\nCALL {\n  CALL db.relationshipTypes() YIELD relationshipType\n  RETURN collect(relationshipType) AS _gc_rel_types\n}\nWITH _gc_labels, _gc_rel_types\n\n        CALL {\n          MATCH (n:`Customer`)\n          RETURN count(n) AS population,\n                 sum(CASE WHEN n.`email` IS NOT NULL THEN 1 ELSE 0 END)\n                   AS conforming_count,\n                 sum(CASE WHEN n.`email` IS NULL THEN 1 ELSE 0 END)\n                   AS violation_count\n        }\n        RETURN \nall(name IN $required_labels WHERE name IN _gc_labels)\n  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,\n[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,\n[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]\n  AS missing_relationship_types\n,\n               population,\n               conforming_count,\n               violation_count,\n               CASE WHEN population = 0 THEN 1.0\n                    ELSE toFloat(conforming_count) / population END AS coverage,\n               [] AS evidence",
+      "duration_ms": 32,
+      "error": null,
+      "estimate": false,
+      "evidence": {
+        "cap": 100,
+        "elements": [
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5000",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5001",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5002",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5003",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5004",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5009",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          },
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5010",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          }
+        ],
+        "message": "Customer.email is present found 7 violating graph element(s).",
+        "total_count": 7,
+        "truncated": false
+      },
+      "expected": {
+        "threshold": 1.0
+      },
+      "id": "03-customer-email-complete",
+      "measured": {
+        "conforming": 1500,
+        "coverage": 0.9953550099535501,
+        "population": 1507,
+        "violations": 7
+      },
+      "name": "Customer.email is present",
+      "params": {
+        "required_labels": [
+          "Customer"
+        ],
+        "required_relationship_types": []
+      },
+      "pattern": "conformance",
+      "provenance": null,
+      "severity": "warn",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:11:26.020648Z",
+      "suite_id": "03-customer-email-complete",
+      "verdict": "warn"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:19e2b892f0c08dc3fb335307c5c8ae1740126a917d961d97aebdbd0c88686cb9",
+    "error": null,
+    "exit_code": 2,
+    "finished_at": "2026-09-16T12:11:26.050136Z",
+    "graphcheck_version": "0.3.0",
+    "id": "ce10caa6-abd6-4d64-a58e-3010f09a3919",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "03-customer-email-complete"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:11:26.020648Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 0,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "03-customer-email-complete",
+      "score": 0,
+      "source_sha": "63b30394948baa93183f2d16dc4a7bea73a6dc928a84d67da6f314d0e4f0b4a4",
+      "totals": {
+        "checks": 1,
+        "errored": 0,
+        "fail": 0,
+        "pass": 0,
+        "skipped": 0,
+        "warn": 1
+      }
+    }
+  ],
+  "totals": {
+    "checks": 1,
+    "errored": 0,
+    "fail": 0,
+    "pass": 0,
+    "skipped": 0,
+    "warn": 1
+  }
+}

@@ -1,0 +1,9 @@
+suite: 06-account-id-unique
+generated: true
+conformance:
+  - id: 06-account-id-unique
+    check: uniqueness
+    severity: error
+    with:
+      label: Account
+      property: id

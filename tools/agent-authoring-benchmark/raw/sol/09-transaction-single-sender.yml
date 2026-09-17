@@ -1,0 +1,14 @@
+suite: 09-transaction-single-sender
+generated: true
+competency:
+  - id: 09-transaction-single-sender
+    question: Does every Transaction have exactly one incoming SENT relationship from an Account?
+    query: |
+      MATCH (t:Transaction)
+      OPTIONAL MATCH (a:Account)-[sent:SENT]->(t)
+      WITH t, count(sent) AS sender_count
+      WHERE sender_count <> 1
+      RETURN t.id AS transaction_id, sender_count
+    expect:
+      empty: true
+    severity: error
