@@ -93,7 +93,7 @@ We aim to give every new issue a first response within one business day: an
 acknowledgment, a label (`bug`, `enhancement`, or `question`), an assignee, and,
 where relevant, a request for `graphcheck debug --json` output. File issues in the
 [issue tracker](https://github.com/graphora/graphcheck/issues). First responder:
-**@ezhilvendhan** (no backup assigned yet - single-responder team for now).
+**@ezhilvendhan** (no backup assigned yet, single-responder team for now).
 
 ## PR flow
 
