@@ -1,9 +1,0 @@
-suite: 01-account-no-orphans
-generated: true
-conformance:
-  - id: 01-account-no-orphans
-    check: no_orphans
-    severity: error
-    with:
-      label: Account
-      direction: any

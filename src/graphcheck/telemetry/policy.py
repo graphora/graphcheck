@@ -703,22 +703,6 @@ def version_major_minor(version: object | None) -> tuple[int | None, int | None]
     return major, minor
 
 
-def count_band(value: int | None) -> str:
-    """Return the fixed dashboard bucket without exposing a new payload dimension by default."""
-
-    if value is None:
-        return "unknown"
-    if value == 0:
-        return "0"
-    if value <= 5:
-        return "1-5"
-    if value <= 20:
-        return "6-20"
-    if value <= 100:
-        return "21-100"
-    return "101+"
-
-
 def assert_private_payload(
     payload: Mapping[str, object],
     *,

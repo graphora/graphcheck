@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 from pydantic import TypeAdapter
 
 from graphcheck.contracts.check import _SuiteFile
@@ -9,7 +6,6 @@ from graphcheck.contracts.results import Results
 from graphcheck.packs import PACK_VERSION, REGISTRY
 from graphcheck.packs.metadata import PackMetadata
 
-SCHEMAS_DIR = Path(__file__).resolve().parents[3] / "docs" / "schemas"
 JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 _CHECK_SCHEMA_COMMENT = (
     "Portable structural contract. Consumers must additionally enforce the semantic "
@@ -25,20 +21,6 @@ def results_schema() -> dict:
 
 def profile_schema() -> dict:
     return BaselineProfile.model_json_schema()
-
-
-def write_profile_schema() -> Path:
-    SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
-    path = SCHEMAS_DIR / "profile.schema.json"
-    path.write_text(json.dumps(profile_schema(), indent=2, sort_keys=True) + "\n")
-    return path
-
-
-def write_results_schema() -> Path:
-    SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
-    path = SCHEMAS_DIR / "results.schema.json"
-    path.write_text(json.dumps(results_schema(), indent=2, sort_keys=True) + "\n")
-    return path
 
 
 def pack_metadata_schema() -> dict:
@@ -59,13 +41,6 @@ def validate_pack_metadata_schema(instance: object) -> None:
         format_checker=FormatChecker(),
     )
     validator.validate(instance)
-
-
-def write_pack_metadata_schema() -> Path:
-    SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
-    path = SCHEMAS_DIR / "pack.schema.json"
-    path.write_text(json.dumps(pack_metadata_schema(), indent=2, sort_keys=True) + "\n")
-    return path
 
 
 def check_envelope_schema() -> dict:
@@ -128,13 +103,3 @@ def validate_check_schema(instance: object) -> None:
         format_checker=FormatChecker(),
     )
     validator.validate(instance)
-
-
-def write_check_schemas() -> None:
-    SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
-    (SCHEMAS_DIR / "check.envelope.schema.json").write_text(
-        json.dumps(check_envelope_schema(), indent=2, sort_keys=True) + "\n"
-    )
-    (SCHEMAS_DIR / "check.schema.json").write_text(
-        json.dumps(check_combined_schema(), indent=2, sort_keys=True) + "\n"
-    )
