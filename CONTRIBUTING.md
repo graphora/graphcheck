@@ -87,6 +87,14 @@ uv run python tools/run_hostile_graphs.py --case all
 Each distinct product defect found by this matrix must receive its own issue and focused regression
 test; link those issues from the hostile-graph parent issue.
 
+## Support
+
+We aim to give every new issue a first response within one business day: an
+acknowledgment, a label (`bug`, `enhancement`, or `question`), and - where
+relevant - a request for `graphcheck debug --json` output. Issues are filed at
+https://github.com/graphora/graphcheck/issues. First responder: **Ezhil**
+(backup: TBD).
+
 ## PR flow
 
 1. Branch off `development` (never off `main`, and never push directly to either).
