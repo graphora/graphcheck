@@ -1,0 +1,16 @@
+suite: 07-customer-count-regression
+generated: true
+competency:
+  - id: 07-customer-count-regression
+    question: Are there exactly 1500 Customer nodes?
+    query: |
+      MATCH (c:Customer)
+      RETURN count(c) AS count
+    expect:
+      rows:
+        exactly: 1
+      columns:
+        - count
+      equals:
+        - [1500]
+    severity: error

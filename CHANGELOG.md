@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
+- Added a reproducible fraud-ring agent-authoring benchmark with raw Luna, Terra, and Sol
+  submissions and separate validity, loading, execution, and verdict scores. The agent guide and
+  schema descriptions now explain regression value shapes, evidence identities, and count scope;
+  missing-evidence diagnostics identify accepted element aliases and retain the failed assertion.
+
 - Published a 10-million-node audit ceiling with full core/PII benchmark results and sampling
   thresholds. Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
   `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.

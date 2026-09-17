@@ -1033,8 +1033,11 @@ def _build_evidence(
     if not unique:
         raise GraphCheckError(
             "engine.evidence_missing",
-            f"Check {compiled.check.id!r} failed but returned no evidence pointer.",
-            "Project graph entities or `*_id` columns so every finding identifies its source.",
+            f"Check {compiled.check.id!r} failed but returned no evidence pointer. {message}",
+            "Return a graph entity or elementId() AS node_element_id, rel_element_id, or "
+            "relationship_element_id. Business IDs and arbitrary *_id aliases are not evidence. "
+            "For count assertions, return graph entities and assert rows, or retain a real "
+            "graph witness for the failing aggregate.",
         )
     total = max(total_count, unique_count)
     return Evidence(

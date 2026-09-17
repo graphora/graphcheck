@@ -1,0 +1,239 @@
+{
+  "checks": [
+    {
+      "compiled_query": "CALL {\n  CALL db.labels() YIELD label\n  RETURN collect(label) AS _gc_labels\n}\nCALL {\n  CALL db.relationshipTypes() YIELD relationshipType\n  RETURN collect(relationshipType) AS _gc_rel_types\n}\n\n        CALL {\n          MATCH (n:`Transaction`)\n          OPTIONAL MATCH (n)<-[r:`SENT`]-(other:`Account`)\n          WITH n, count(r) AS degree\n          RETURN count(n) AS population,\n                 sum(CASE WHEN degree <> $exactly THEN 1 ELSE 0 END) AS violation_count\n        }\n        RETURN \nall(name IN $required_labels WHERE name IN _gc_labels)\n  AND all(name IN $required_relationship_types WHERE name IN _gc_rel_types) AS schema_ok,\n[name IN $required_labels WHERE NOT name IN _gc_labels] AS missing_labels,\n[name IN $required_relationship_types WHERE NOT name IN _gc_rel_types]\n  AS missing_relationship_types\n,\n               population, violation_count, [] AS evidence",
+      "duration_ms": 16,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "exactly": 1
+      },
+      "id": "incoming-sender-scope",
+      "measured": {
+        "population": 1000,
+        "violation_count": 0,
+        "violations": 0
+      },
+      "name": "Transaction has exactly 1 SENT relationship(s) to Account",
+      "params": {
+        "exactly": 1,
+        "required_labels": [
+          "Transaction",
+          "Account"
+        ],
+        "required_relationship_types": [
+          "SENT"
+        ]
+      },
+      "pattern": "conformance",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:28:32.164135Z",
+      "suite_id": "benchmark-remediations",
+      "verdict": "pass"
+    },
+    {
+      "compiled_query": "MATCH (a:Account)\nOPTIONAL MATCH (:Customer)-[r:OWNS]->(a)\nWITH a, count(r) AS owners\nWHERE owners > 1\nRETURN a, owners",
+      "duration_ms": 16,
+      "error": null,
+      "estimate": false,
+      "evidence": {
+        "cap": 100,
+        "elements": [
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:5008",
+            "kind": "node",
+            "labels": [
+              "Account"
+            ],
+            "type": null
+          }
+        ],
+        "message": "Does each Account have at most one incoming OWNS relationship: empty is not True",
+        "total_count": 1,
+        "truncated": false
+      },
+      "expected": {
+        "empty": true
+      },
+      "id": "owner-evidence",
+      "measured": {
+        "columns": [
+          "a",
+          "owners"
+        ],
+        "empty": false,
+        "observed_rows_at_least": 1
+      },
+      "name": "Does each Account have at most one incoming OWNS relationship",
+      "params": {},
+      "pattern": "competency-shape",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:28:32.166132Z",
+      "suite_id": "benchmark-remediations",
+      "verdict": "fail"
+    },
+    {
+      "compiled_query": "MATCH (:Customer {id: $customer_id})-[:CONTROLS*1..4]->(a:Account)\nRETURN DISTINCT a.id AS account_id",
+      "duration_ms": 15,
+      "error": null,
+      "estimate": false,
+      "evidence": null,
+      "expected": {
+        "contains": [
+          "ACC-2401",
+          "ACC-2408"
+        ]
+      },
+      "id": "regression-projection",
+      "measured": {
+        "columns": [
+          "account_id"
+        ],
+        "contains": true,
+        "empty": false,
+        "observed_rows_at_least": 5
+      },
+      "name": "Does the leader reach both required Account IDs",
+      "params": {
+        "customer_id": "CUST-RING-LEADER-0"
+      },
+      "pattern": "competency-regression",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:28:32.180743Z",
+      "suite_id": "benchmark-remediations",
+      "verdict": "pass"
+    },
+    {
+      "compiled_query": "MATCH (c:Customer)\nWITH count(c) AS actual_count\nWHERE actual_count <> $expected_count\nOPTIONAL MATCH (witness:Customer)\nRETURN witness, actual_count\nLIMIT 1",
+      "duration_ms": 15,
+      "error": null,
+      "estimate": false,
+      "evidence": {
+        "cap": 100,
+        "elements": [
+          {
+            "id": "4:b7428348-e603-47e6-8b2e-a87266cd0374:0",
+            "kind": "node",
+            "labels": [
+              "Customer"
+            ],
+            "type": null
+          }
+        ],
+        "message": "Is the total Customer count exactly 1500: empty is not True",
+        "total_count": 1,
+        "truncated": false
+      },
+      "expected": {
+        "empty": true
+      },
+      "id": "aggregate-witness",
+      "measured": {
+        "columns": [
+          "witness",
+          "actual_count"
+        ],
+        "empty": false,
+        "observed_rows_at_least": 1
+      },
+      "name": "Is the total Customer count exactly 1500",
+      "params": {
+        "expected_count": 1500
+      },
+      "pattern": "competency-shape",
+      "provenance": null,
+      "severity": "error",
+      "skip_reason": null,
+      "started_at": "2026-09-16T12:28:32.182750Z",
+      "suite_id": "benchmark-remediations",
+      "verdict": "fail"
+    }
+  ],
+  "run": {
+    "baseline_ref": null,
+    "config_hash": "sha256:dfd8abb9ab1d95fff1923164e202e6dade80fbbe60f03fd10323d74b0ab3f8cc",
+    "error": null,
+    "exit_code": 1,
+    "finished_at": "2026-09-16T12:28:32.190751Z",
+    "graphcheck_version": "0.3.0",
+    "id": "66c54e9a-ec37-4af6-acd8-64526d986346",
+    "pack_version": "0.1.0",
+    "partial_reason": null,
+    "previous_run_id": null,
+    "redaction": {
+      "applied": false,
+      "policy": "none"
+    },
+    "run_status": "complete",
+    "selection": {
+      "fail_fast": false,
+      "suites": [
+        "benchmark-remediations"
+      ],
+      "tags": []
+    },
+    "started_at": "2026-09-16T12:28:32.138538Z",
+    "target": {
+      "capabilities": {
+        "apoc": false,
+        "count_store": true
+      },
+      "database": "neo4j",
+      "edition": "community",
+      "fingerprint": "sha256:173abd09599f8c799d642a90af4147e3f441cdb36af3c1540866c5b81a34a495",
+      "labels": [
+        "Account",
+        "Customer",
+        "Transaction"
+      ],
+      "nodes": 5011,
+      "relationship_types": [
+        "CONTROLS",
+        "OWNS",
+        "RECEIVED_BY",
+        "SENT"
+      ],
+      "relationships": 5872,
+      "server_version": "5.26.28"
+    }
+  },
+  "schema_version": "2.0",
+  "score": {
+    "method": "weighted-by-severity",
+    "value": 50,
+    "weights": {
+      "error": 3,
+      "warn": 1
+    }
+  },
+  "suites": [
+    {
+      "id": "benchmark-remediations",
+      "score": 50,
+      "source_sha": "65cb7cccfc8725d1de1297d362a33478743f76eeeed082151bfc01279f726858",
+      "totals": {
+        "checks": 4,
+        "errored": 0,
+        "fail": 2,
+        "pass": 2,
+        "skipped": 0,
+        "warn": 0
+      }
+    }
+  ],
+  "totals": {
+    "checks": 4,
+    "errored": 0,
+    "fail": 2,
+    "pass": 2,
+    "skipped": 0,
+    "warn": 0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "created_at": "2026-09-16T10:37:45.606531+00:00",
+  "source_commit": "adbd53f2270ce611d0c2637db4fd7285dfe5e45a",
+  "fixture_commit": "5dc14f81dd6f834f166a102b65e9866a240fa035",
+  "neo4j_version": "5.26.28",
+  "graph_digest": "fc514365f3d9243de6cb50fa2b1f8cd6e9c854384e306fd6a147b915b00d43da",
+  "sha256": {
+    "tools/agent-authoring-benchmark/task-set.json": "2f7871f4dcad37883c7cbd36ead8ff9c22a97574b9b88de50c58f97859b7d835",
+    "tools/agent-authoring-benchmark/PROMPT.md": "777cb59abc341ed84a14c96819247d165d6736aaa081dc228d6e67928285b4d4",
+    "tools/agent-authoring-benchmark/context/agents.md": "5b63154a0658b73b91c0deec48a524fbc84e76a307bef35ec6de0b89eeefc8d8",
+    "tools/agent-authoring-benchmark/context/check.schema.json": "fbfe9f757cbd0f2c0fe5a86edc918cd46fbb234892de9a34788d6b036cb4e843",
+    "tools/agent-authoring-benchmark/context/intents.json": "937456289c1af603eebd88edf81a14e756f389d421636312a3080e7f9d301949",
+    "tools/agent-authoring-benchmark/context/llms.txt": "5df98ccdb216bb0f553b33511b03cb23f32f3040c2dad427ae64e8bf7b0d33b8",
+    "tools/agent-authoring-benchmark/context/profile.json": "4be90c22f197677890444a2acaf214d5ed570996c7baa935152882bb698291c5",
+    "tools/agent-authoring-benchmark/context/schema.md": "67ab4ca9c68713588b117d28efcb61e138def7b1a8d490def9e69cf301246356"
+  },
+  "models": {
+    "luna": "gpt-5.6-luna",
+    "terra": "gpt-5.6-terra",
+    "sol": "gpt-5.6-sol"
+  },
+  "reasoning_effort": "max",
+  "original_fixture_sha256": {
+    "tests/fixtures/external/fraud-ring/fixtures/fraud-ring/seed.cypher": "c654ba0ee2e2917976cd4c88deb91fc1f6f4ff07d002ddeb2ce6b59b4a10416e",
+    "tests/fixtures/external/fraud-ring/fixtures/fraud-ring/schema.md": "67ab4ca9c68713588b117d28efcb61e138def7b1a8d490def9e69cf301246356"
+  },
+  "fixture_sha256_lf": {
+    "tests/fixtures/external/fraud-ring/fixtures/fraud-ring/seed.cypher": "b97864007fd0fdbcb7f7a3d569710ac2c01d5aba98bcfc01fd03b1c5ebf6bbd1",
+    "tests/fixtures/external/fraud-ring/fixtures/fraud-ring/schema.md": "4e3402b46d72ee65d67eb7891c2c2b3d48619e4cef4564e60f8e925a5eb33096"
+  }
+}
