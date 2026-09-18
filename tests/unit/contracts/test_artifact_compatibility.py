@@ -11,7 +11,6 @@ import pytest
 from pydantic import ValidationError
 
 from graphcheck.contracts.results import Results
-from graphcheck.contracts.schemas import SCHEMAS_DIR
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.writer import (
     load_results,
@@ -19,6 +18,7 @@ from graphcheck.reporting.writer import (
     validated_results_json,
     write_results,
 )
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parent / "fixtures" / "historical"
 VERSIONS = ("1.0", "1.1", "1.2", "2.0")

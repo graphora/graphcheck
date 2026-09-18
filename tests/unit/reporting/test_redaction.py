@@ -7,10 +7,10 @@ import pytest
 from typer.testing import CliRunner
 
 from graphcheck.cli import app
-from graphcheck.contracts.schemas import SCHEMAS_DIR
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.redaction import REDACTION_MASK, redact_results, verify_redacted_results
 from graphcheck.reporting.writer import load_results, results_json
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
 runner = CliRunner()

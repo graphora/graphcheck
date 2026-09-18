@@ -27,7 +27,8 @@ from graphcheck.contracts.results import (
     score_value,
     totals,
 )
-from graphcheck.contracts.schemas import SCHEMAS_DIR, results_schema
+from graphcheck.contracts.schemas import results_schema
+from tests import SCHEMAS_DIR
 
 
 def test_verdict_values():

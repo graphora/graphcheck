@@ -46,20 +46,6 @@ class ProfilesFile(BaseModel):
     profiles: dict[str, ConnectionProfile]
 
 
-def default_profiles() -> ProfilesFile:
-    return ProfilesFile(
-        default="local",
-        profiles={
-            "local": ConnectionProfile(
-                uri="bolt://localhost:7687",
-                user="neo4j",
-                password="graphora",
-                database="neo4j",
-            )
-        },
-    )
-
-
 def write_default_profiles(root: Path) -> None:
     (root / PROFILES_FILE).write_text(
         """# Edit the inline password below for the fastest local setup.

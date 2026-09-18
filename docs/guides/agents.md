@@ -265,10 +265,28 @@ An aggregate-only query such as `RETURN count(c)` has no graph pointer if its as
 Even a correctly shaped `equals: [1500]` can therefore produce `engine.evidence_missing` instead
 of `fail`. For small graphs, returning one Customer entity per row and asserting `rows.exactly`
 checks the population count while retaining evidence. Alternatively, compare the count in Cypher
-and return a real graph witness for the mismatch; see the
-[aggregate evidence repair](../maintainers/agent-authoring-fixes/aggregate-evidence.md).
-An empty graph may provide no honest witness; keep that outcome inconclusive rather than
-inventing an element or query-supplied aggregate pointer.
+and return a real graph witness for the mismatch:
+
+```yaml
+suite: customer-population
+generated: true
+competency:
+  - id: expected-customer-count
+    question: Is the total Customer count exactly 1500?
+    query: |
+      MATCH (c:Customer)
+      WITH count(c) AS actual_count
+      WHERE actual_count <> $expected_count
+      OPTIONAL MATCH (witness:Customer)
+      RETURN witness, actual_count
+      LIMIT 1
+    params: {expected_count: 1500}
+    expect: {empty: true}
+```
+
+The witness belongs to the measured population; it does not necessarily cause the mismatch.
+An empty Customer population returns a null witness and produces `engine.evidence_missing`.
+Keep that outcome inconclusive rather than inventing an element or query-supplied aggregate pointer.
 
 The built-in `cardinality` check asserts an **exact** count. Its `from_label` is the population
 being checked, including with `direction: in`. Exactly one sender per Transaction uses
@@ -314,9 +332,7 @@ For an explicitly authorized fixture evaluation, retain the original generated Y
 a temporary copy, run through the read-only connector, and compare the actual verdict with an
 independently established answer key. Record `valid`, `loads`, `runs`, and `correct` separately;
 `errored` and `skipped` cannot count as successful execution. Include both passing and failing
-examples so missing evidence is observable. The
-[fraud-ring authoring benchmark](../../tools/agent-authoring-benchmark/RESULTS.md) includes raw
-submissions, the complete matrix, reproducible scoring, and the fixes behind this guidance.
+examples so missing evidence is observable.
 
 ## Generated checks require human approval
 

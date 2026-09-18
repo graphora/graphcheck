@@ -28,8 +28,6 @@
 - `run_status: complete` does not mean checks passed. Inspect each verdict and the stored exit code: `0` clean, `1` error-level finding/error, `2` warning/partial/inconclusive, `3` failed setup/run.
 - `errored` is not `fail`; `skipped` proves nothing about the graph. Generated checks are skipped without submitting their queries. A selection containing only generated checks exits `2`.
 - For explicitly authorized fixture evaluation, preserve raw generated YAML and activate a temporary copy. Score schema validity, loading, read-only execution, and expected verdict independently.
-- [Authoring benchmark results](../tools/agent-authoring-benchmark/RESULTS.md): Luna, Terra, and Sol at max effort, ten fixed fraud-ring intents, raw submissions, and all four scores.
-- [Recurring authoring fixes](maintainers/agent-authoring-findings.md): Measured failures, implemented documentation/schema/diagnostic changes, and remaining model mistakes.
 
 ## Contracts and operations
 

@@ -13,13 +13,14 @@ import pytest
 from pydantic import ValidationError
 
 from graphcheck.contracts.results import Results, Verdict
-from graphcheck.contracts.schemas import SCHEMAS_DIR, results_schema
+from graphcheck.contracts.schemas import results_schema
 from graphcheck.reporting.html import (
     _score_badge,
     render_html_report,
     render_validated_html_report_fragments,
 )
 from graphcheck.reporting.writer import load_results, results_json, write_results
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
 

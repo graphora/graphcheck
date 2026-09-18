@@ -694,10 +694,6 @@ def _identity(check: CheckResult) -> tuple[str, str]:
     return (check.suite_id, check.id)
 
 
-def _display_identity(identity: tuple[str, str]) -> str:
-    return f"{identity[0]}::{identity[1]}"
-
-
 def _outcome_rank(check: CheckResult) -> int:
     if check.verdict is Verdict.PASS:
         return 0

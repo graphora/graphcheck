@@ -13,7 +13,8 @@ from graphcheck.contracts.profile import (
     ProfileStatus,
     profile_fingerprint,
 )
-from graphcheck.contracts.schemas import SCHEMAS_DIR, profile_schema
+from graphcheck.contracts.schemas import profile_schema
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
