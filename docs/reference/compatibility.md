@@ -31,6 +31,52 @@ Cypher 25 lanes. See Neo4j's
 [driver API](https://neo4j.com/docs/api/python-driver/current/), and
 [Cypher version configuration](https://neo4j.com/docs/operations-manual/current/configuration/cypher-version-configuration/).
 
+## Supported graph size
+
+**The published audit ceiling is 10,000,000 nodes.** `graphcheck run` rejects a larger
+database before dispatching checks. Relationship counts have no separate hard limit.
+Density, properties, indexes, server memory and check selection still affect whether
+an audit can finish within its budget.
+
+The ceiling is an upper support boundary, **not a claim that the full PII pack completes
+at 10M with a 2 GiB transaction-memory limit**. Both PII checks can exceed that shared
+limit and return `neo4j.query_failed`. Size eligibility does not guarantee completion or
+establish a minimum server-memory configuration. Use the default two workers and
+295-second execution budget as starting points when sizing your own workload.
+
+`dangling_rels` requires the separate `store_consistency` capability, which the standard
+adapter does not expose. Selecting it still produces `skipped: unsupported` and partial
+coverage. Count-store support provides counts rather than verification of broken
+relationship records; the diagnostic points to Neo4j's offline consistency checker.
+
+### Which checks sample
+
+| Check | Default transition | Default sample |
+| --- | --- | ---: |
+| `hub_outlier` | More than 100,000 nodes with its configured label | 1,000 nodes |
+| `pii_name_match` | More than 1,000 node-property occurrences in scope | 1,000 occurrences |
+| `pii_value_match` | More than 1,000 eligible string-property occurrences in scope | 1,000 occurrences |
+| Other executable core checks | Always exhaustive | None |
+
+Explicit check-level sample sizes can lower the transition/sample size. The global 10,000-sample
+cap does not override the packs' smaller default. Sampling bounds evaluated evidence;
+these Cypher plans still scan the population and do not promise constant runtime or
+server memory. PII findings remain heuristic, not proof of complete PII discovery.
+
+### Beyond the ceiling
+
+After the bounded target probe, a count above 10,000,000 produces a failed run with exit
+code `3`, no dispatched checks, and this actionable diagnostic:
+
+```text
+engine.graph_size_exceeded: Graph size (10000005 nodes, 9500000 relationships) exceeds the supported ceiling of 10,000,000 nodes.
+Fix: Audit a smaller database or partition within the node limit. Selecting fewer checks or enabling sampling does not bypass the graph-size ceiling. See docs/reference/compatibility.md#supported-graph-size.
+```
+
+The boundary is inclusive: exactly 10,000,000 nodes is permitted. This is a database
+count limit, not a per-label or selected-check limit. In-limit expensive runs retain the
+295-second budget and timeout diagnostics; passing the size gate does not guarantee completion.
+
 ## Neo4j 4.4 policy
 
 Neo4j 4.4 is legacy and unsupported by GraphCheck 0.1. A dedicated hostile-graph lane starts a

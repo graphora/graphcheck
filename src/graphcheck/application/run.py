@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -13,6 +12,7 @@ from graphcheck.application.artifacts import (
 )
 from graphcheck.application.paths import project_path
 from graphcheck.application.suites import load_suite_inputs
+from graphcheck.baselines import latest_baseline
 from graphcheck.connection_profiles import (
     load_profiles,
     select_profile,
@@ -24,12 +24,15 @@ from graphcheck.engine import (
     EngineConfig,
     failed_results,
 )
+from graphcheck.engine.executor import _accepts_parameter
+from graphcheck.engine.runner import _remaining
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Neo4jClient
 from graphcheck.project import (
     find_project_root,
     load_project_config,
 )
+from graphcheck.provenance import config_hash
 from graphcheck.telemetry.events import EngineEventSink
 
 
@@ -66,28 +69,42 @@ def execute_run(
     client_factory: Callable[[object, int], Neo4jClient] | None = None,
     artifact_writer: Callable[..., tuple[Path, Path]] = write_run_artifacts,
     target_observer: Callable[[object], None] | None = None,
+    stage_observer: Callable[[str, int | None], None] | None = None,
 ) -> RunOutcome:
     """
     Execute a GraphCheck run independently of the CLI or MCP.
     """
+    if stage_observer is not None:
+        stage_observer("Loading checks", None)
     root = find_project_root()
     config = load_project_config(root)
     artifacts = project_path(root, config.artifacts)
     runs_dir = artifacts / "runs"
 
     checks_dir = project_path(root, config.checks)
-    profiles = load_profiles(root)
-    _, selected_profile = select_profile(
-        profiles,
-        request.profile,
-    )
-
+    baseline = None
+    profile_name, selected_profile = request.profile, None
     client: Neo4jClient | None = None
     setup_done_perf: float | None = None
     engine_started = False
 
     try:
+        profiles = load_profiles(root)
+        profile_name, selected_profile = select_profile(profiles, request.profile)
+        baseline = latest_baseline(root, config.artifacts)
         max_concurrency = request.concurrency or int(config.concurrency)
+        engine_config = EngineConfig(
+            max_concurrency=max_concurrency, result_row_limit=config.engine.result_row_limit
+        )
+        deadline = time.monotonic() + engine_config.time_budget_s
+        suite_inputs = load_suite_inputs(checks_dir, request.suite_ids, config.packs)
+        check_count = sum(
+            not request.tags or any(tag in check.tags for tag in request.tags)
+            for item in suite_inputs
+            for check in item.suite.checks
+        )
+        if stage_observer is not None:
+            stage_observer("Connecting", check_count)
 
         factory = client_factory or _new_neo4j_client
         client = factory(
@@ -96,30 +113,30 @@ def execute_run(
         )
 
         if request.verify_read_only_credential:
-            target = _verify_cli_audit_credential(client)
+            target = _verify_cli_audit_credential(client, deadline=deadline)
             if target_observer is not None:
                 target_observer(target)
 
-        suite_inputs = load_suite_inputs(
-            checks_dir,
-            request.suite_ids,
-        )
         setup_done_perf = time.monotonic()
+        if stage_observer is not None:
+            stage_observer("Running checks", check_count)
         engine = Engine(
             client,
             baselines=DirectoryBaselineProvider(
                 artifacts / "baselines",
             ),
-            config=EngineConfig(max_concurrency=max_concurrency),
+            config=engine_config,
             progress_callback=progress_callback,
             event_sink=event_sink,
         )
+        _remaining(deadline, time.monotonic())
         engine_started = True
         results = engine.run(
             suite_inputs,
             tags=request.tags,
             fail_fast=request.fail_fast,
             selection_suites=request.suite_ids or None,
+            deadline=deadline,
         )
 
     except GraphCheckError as exc:
@@ -167,7 +184,26 @@ def execute_run(
     # artifact_error with the real artifact-write timing boundary — never a retried write
     # nor a re-labelled run.configuration result.
     artifact_started_perf = time.monotonic()
+    results.run.baseline_ref = baseline.name if baseline is not None else None
+    results.run.config_hash = config_hash(
+        {
+            "engine": results.run.config_hash,
+            "project": config.model_dump(mode="json", exclude={"generate", "concurrency"}),
+            "concurrency": request.concurrency or config.concurrency,
+            "profile": profile_name,
+            "connection": {
+                "uri": selected_profile.uri,
+                "database": selected_profile.database,
+                "user": selected_profile.user,
+            }
+            if selected_profile is not None
+            else None,
+            "verify_read_only_credential": request.verify_read_only_credential,
+        }
+    )
     try:
+        if stage_observer is not None:
+            stage_observer("Writing reports", None)
         results_path, report_path = artifact_writer(
             results,
             runs_dir,
@@ -193,20 +229,10 @@ def execute_run(
 
 
 def _new_neo4j_client(profile, max_concurrency: int):
-    """Construct the workload-aware Neo4j client while retaining simple test doubles."""
-    parameters = inspect.signature(Neo4jClient).parameters.values()
-    accepts_setting = any(
-        parameter.name == "max_concurrency" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-    return (
-        Neo4jClient(profile, max_concurrency=max_concurrency)
-        if accepts_setting
-        else Neo4jClient(profile)
-    )
+    return Neo4jClient(profile, max_concurrency=max_concurrency)
 
 
-def _verify_cli_audit_credential(client: object) -> object | None:
+def _verify_cli_audit_credential(client: object, *, deadline: float) -> object | None:
     """Probe the target, verify the read-only credential, and return the probed target.
 
     The returned target carries the live node/relationship counts so a caller can render a
@@ -214,9 +240,18 @@ def _verify_cli_audit_credential(client: object) -> object | None:
     """
     verify = getattr(client, "verify_read_only_credential", None)
     probe = getattr(client, "probe", None)
-    result = probe() if callable(probe) else None
-    if callable(verify):
-        verify()
+    result = None
+    for method in (probe, verify):
+        remaining = _remaining(deadline, time.monotonic())
+        if callable(method):
+            value = (
+                method(timeout_s=remaining)
+                if _accepts_parameter(method, "timeout_s", variadic=True)
+                else method()
+            )
+            if method is probe:
+                result = value
+    _remaining(deadline, time.monotonic())
     target = result[0] if isinstance(result, tuple) else result
     if isinstance(result, tuple) and len(result) > 2 and target is not None:
         counts = result[2]

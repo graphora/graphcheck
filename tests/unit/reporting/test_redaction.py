@@ -1,6 +1,8 @@
 import json
+import re
 from pathlib import Path
 
+import jsonschema
 import pytest
 from typer.testing import CliRunner
 
@@ -8,9 +10,54 @@ from graphcheck.cli import app
 from graphcheck.reporting.html import render_html_report
 from graphcheck.reporting.redaction import REDACTION_MASK, redact_results, verify_redacted_results
 from graphcheck.reporting.writer import load_results, results_json
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1", "1.2", "2.0"])
+@pytest.mark.parametrize("input_kind", ["path", "model"])
+def test_redaction_preserves_historical_schema_context(version, input_kind, capsys):
+    path = FIXTURES / "historical" / version / "results.json"
+    original = path.read_bytes()
+    source = load_results(path) if input_kind == "model" else path
+    source_payload = (
+        source.model_dump(mode="json", by_alias=True) if input_kind == "model" else None
+    )
+    capsys.readouterr()
+
+    redacted = redact_results(source)
+    exported = results_json(redacted)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if input_kind == "path" and version != "2.0":
+        assert len(captured.err.splitlines()) == 1
+        assert f"results.schema_deprecated: Reading results schema {version}" in captured.err
+    else:
+        assert captured.err == ""
+    assert redacted.schema_version == "2.0"
+    assert redacted._historical_schema_version == (None if version == "2.0" else version)
+    assert verify_redacted_results(redacted) == redacted
+    if version in {"1.0", "1.1"}:
+        assert redacted.run.target.labels is None
+        assert redacted.run.target.relationship_types is None
+    payload = json.loads(exported)
+    assert payload["schema_version"] == version
+    assert payload["totals"] == json.loads(original)["totals"]
+    assert payload["score"] == json.loads(original)["score"]
+    schema_name = "results.schema.json" if version == "2.0" else f"results-{version}.schema.json"
+    jsonschema.validate(
+        payload, json.loads((SCHEMAS_DIR / schema_name).read_text(encoding="utf-8"))
+    )
+    assert "CUST-1042" not in exported
+    assert "4:abc:12" not in exported
+    assert verify_redacted_results(exported) == redacted
+    assert path.read_bytes() == original
+    if input_kind == "model":
+        assert source.model_dump(mode="json", by_alias=True) == source_payload
+        assert source._historical_schema_version == redacted._historical_schema_version
 
 
 def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
@@ -21,7 +68,7 @@ def test_redaction_masks_every_literal_surface_and_preserves_contract_shape():
     payload = json.loads(results_json(redacted))
 
     assert payload["run"]["redaction"] == {"policy": "mask", "applied": True}
-    assert payload["run"]["id"] == "redacted_20260706T090241000000Z"
+    assert re.fullmatch(r"redacted_[0-9a-f]{32}_20260706T090241000000Z", payload["run"]["id"])
     assert payload["totals"] == source_payload["totals"]
     assert payload["score"] == source_payload["score"]
     assert [suite["totals"] for suite in payload["suites"]] == [
@@ -87,8 +134,8 @@ def test_redaction_avoids_deterministic_run_id_collision_in_json_and_html():
     exported = results_json(redacted)
     html = render_html_report(redacted)
 
-    assert redacted.run.id == "redacted_collision1_20260706T090241000000Z"
-    assert redact_results(payload).run.id == redacted.run.id
+    assert re.fullmatch(r"redacted_[0-9a-f]{32}_20260706T090241000000Z", redacted.run.id)
+    assert redact_results(payload).run.id != redacted.run.id
     assert verify_redacted_results(redacted) == redacted
     assert sensitive not in exported
     assert sensitive not in html
@@ -249,3 +296,35 @@ def test_redact_command_writes_verified_sidecar(tmp_path):
     exported = destination.read_text(encoding="utf-8")
     assert "CUST-1042" not in exported
     assert verify_redacted_results(exported).run.redaction.applied is True
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1", "1.2", "2.0"])
+@pytest.mark.parametrize("source_kind", ["file", "directory"])
+def test_redact_command_preserves_historical_schema(version, source_kind, tmp_path):
+    original = (FIXTURES / "historical" / version / "results.json").read_bytes()
+    source = tmp_path / "results.json"
+    source.write_bytes(original)
+
+    result = runner.invoke(app, ["redact", str(source if source_kind == "file" else tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Verified redacted export" in result.stdout
+    if version != "2.0":
+        assert len(result.stderr.splitlines()) == 1
+        assert f"results.schema_deprecated: Reading results schema {version}" in result.stderr
+    else:
+        assert result.stderr == ""
+    exported = (tmp_path / "results.redacted.json").read_text(encoding="utf-8")
+    payload = json.loads(exported)
+    assert payload["schema_version"] == version
+    assert payload["run"]["redaction"] == {"policy": "mask", "applied": True}
+    schema_name = "results.schema.json" if version == "2.0" else f"results-{version}.schema.json"
+    jsonschema.validate(
+        payload, json.loads((SCHEMAS_DIR / schema_name).read_text(encoding="utf-8"))
+    )
+    assert "CUST-1042" not in exported
+    assert "4:abc:12" not in exported
+    assert verify_redacted_results(exported)._historical_schema_version == (
+        None if version == "2.0" else version
+    )
+    assert source.read_bytes() == original

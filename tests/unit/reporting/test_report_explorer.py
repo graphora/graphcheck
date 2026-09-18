@@ -5,6 +5,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from graphcheck.reporting import explorer as explorer_module
 from graphcheck.reporting.explorer import ReportExplorerServer
 
@@ -68,6 +70,44 @@ def _authorized_headers(server: ReportExplorerServer, token: str, cookie: str) -
         "Origin": f"http://127.0.0.1:{server.server_port}",
         "X-GraphCheck-Token": token,
     }
+
+
+@pytest.mark.parametrize(
+    "path,headers",
+    [
+        ("/health", {"X-GraphCheck-Token": "\u00e9"}),
+        ("/report?token=%C3%A9", {}),
+        ("/api/reports", {"Cookie": "graphcheck_report_explorer=\u00e9"}),
+        ("/api/reports", {"Cookie": "[]=invalid"}),
+    ],
+)
+def test_invalid_authentication_returns_forbidden_without_crashing(tmp_path, path, headers):
+    with _server(tmp_path) as (server, _):
+        assert _request(server, "GET", path, headers=headers)[0] == 403
+
+
+def test_unauthorized_post_does_not_wait_for_a_missing_body(tmp_path):
+    with _server(tmp_path) as (server, _):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=1)
+        try:
+            connection.request("POST", "/api/delete", headers={"Content-Length": "1024"})
+            response = connection.getresponse()
+            assert response.status == 403
+            response.read()
+        finally:
+            connection.close()
+
+
+def test_idle_incomplete_request_is_closed(tmp_path, monkeypatch):
+    import socket
+
+    monkeypatch.setattr(explorer_module, "_REQUEST_TIMEOUT_SECONDS", 0.05)
+    with (
+        _server(tmp_path) as (server, _),
+        socket.create_connection(("127.0.0.1", server.server_port), timeout=1) as connection,
+    ):
+        connection.sendall(b"GET /health HTTP/1.0\r\n")
+        assert connection.recv(1) == b""
 
 
 def test_report_explorer_lists_switches_compares_and_deletes_only_reports(tmp_path):
@@ -284,3 +324,37 @@ def test_report_explorer_launch_serves_in_the_invoking_process(tmp_path, monkeyp
     assert "&token=" in opened_urls[0]
     assert announced_urls == [clean_url]
     assert "&token=" not in clean_url
+
+
+def test_explorer_keeps_healthy_reports_and_surfaces_corruption_warnings(tmp_path):
+    _write_run(tmp_path, "healthy", "2026-07-01T10:00:00Z")
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "results.json").write_text("{", encoding="utf-8")
+    with _server(tmp_path) as (server, token):
+        headers = _authorized_headers(server, token, f"graphcheck_report_explorer={token}")
+        assert _request(server, "GET", "/", headers=headers)[0] == 303
+        status, _, content = _request(server, "GET", "/api/reports", headers=headers)
+        assert status == 200
+        assert "broken" in json.loads(content)["warnings"][0]
+        assert _request(server, "GET", "/api/report?id=healthy", headers=headers)[0] == 200
+        assert _request(server, "GET", "/api/report?id=broken", headers=headers)[0] == 404
+        assert (
+            _request(
+                server, "POST", "/api/compare", body={"ids": ["healthy", "broken"]}, headers=headers
+            )[0]
+            == 400
+        )
+
+
+@pytest.mark.parametrize("route", ["/", "/api/reports", "/api/report?id=healthy"])
+def test_explorer_discovery_failure_returns_json(tmp_path, monkeypatch, route):
+    def fail(*args):
+        raise explorer_module.ReportHistoryError("history unavailable")
+
+    monkeypatch.setattr(explorer_module, "discover_report_runs", fail)
+    with _server(tmp_path) as (server, token):
+        headers = _authorized_headers(server, token, f"graphcheck_report_explorer={token}")
+        status, _, body = _request(server, "GET", route, headers=headers)
+        assert status in {404, 500}
+        assert json.loads(body)["error"] == "history unavailable"

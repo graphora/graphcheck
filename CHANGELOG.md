@@ -2,6 +2,160 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-18
+
+### Added
+
+- The agent guide and schema descriptions now explain regression value shapes, evidence identities,
+  and count scope, with a complete aggregate-witness example in the guide. Missing-evidence
+  diagnostics identify accepted element aliases and retain the failed assertion.
+
+- Published a 10-million-node audit ceiling and sampling thresholds.
+  Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
+  `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.
+
+- Published the [artifact compatibility policy](docs/reference/artifact-compatibility.md), with
+  committed results fixtures for schemas 1.0, 1.1, 1.2, and 2.0 and archived 1.x JSON Schemas.
+  The policy includes a tested transformer that writes a validated 2.0 copy. Migration of 1.0/1.1
+  requires trusted historical inventory because those schemas did not record it.
+- GraphRAG `chunk_coverage` reports the share of Chunks linked to at least one Entity against
+  a configurable threshold (default 0.95), naming entity-less Chunks in evidence.
+  `label_explosion` flags labels and relationship types across the whole schema at or below
+  a configurable threshold (default 1), reporting findings and node evidence; graphs under a
+  configurable minimum node count (default 50) are not evaluated rather than flagged, since a
+  small graph makes almost every label look like a singleton.
+- After a comparable previous run, `summary.json` includes a compact `changes` block with new
+  failures, fixed checks, and node/relationship count deltas from the runs. Check lists retain
+  at most 20 entries each and report omitted counts; first runs and unavailable comparisons
+  omit the block. Artifact retries preserve the original block after history is pruned.
+- Runs now include `previous_run_id`, `baseline_ref`, and `config_hash` in results schema 2.0,
+  with compatibility for older artifacts and a new lineage fixture. Profile references identify
+  the latest existing timestamped snapshot; running checks does not trigger profiling. History
+  summaries and `graphcheck report --history` show the previous-run links, assigned under the
+  publication lock for concurrent CLI and MCP runs. Redacted exports clear lineage metadata.
+- Added `graphcheck changes [--since <run-id|previous>] [--json]` to combine check outcome,
+  coverage, suite-score, and profile deltas through the existing report comparison and profile
+  diff implementations. JSON is deterministic; exit codes distinguish no regressions (`0`),
+  regressions or new failures (`1`), and invalid or unavailable comparison inputs (`2`).
+- Changes output includes appeared and disappeared evidence element IDs per check, sharing the
+  smaller input evidence cap across both directions, counting dropped deltas, and identifying
+  truncated input evidence. Added fraud-ring and public-scale hostile acceptance coverage.
+- GraphRAG `embedding_consistency` checks every chunk for missing, invalid, empty, zero,
+  NaN-containing, and inconsistent-dimension embeddings. It uses the most frequent valid
+  dimension (smallest on ties) and returns exact counts plus capped element-ID, dimension,
+  and defect evidence without transferring vectors to Python.
+- Hostile GraphRAG planted/clean cases with expected CLI exit codes, assertions identifying every
+  planted defect, and a copyable suite under `examples/graphrag/`. Singleton labels and uncovered
+  chunks remain fixture-only assertions. The public-scale hostile lane exercises all five checks
+  with a 60-second pack-run budget and verifies planted embedding defects over 265,214 nodes.
+- Drift metrics `degree_distribution` (degree quantiles `p50`/`p95`/`max` per label, relationship
+  type, and direction, using `percentileDisc` and `COUNT { }` for Cypher 5/25 compatibility) and
+  `schema_inventory` (labels, relationship types, and label-scoped property names added or
+  removed since baseline, evaluated as the count of differences rather than net inventory size
+  so a simultaneous addition and removal cannot cancel out to zero). See
+  [SPEC-04](docs/specifications/spec-04-engine.md) and
+  [SPEC-05](docs/specifications/spec-05-profiler-baseline.md) for details.
+- Optional GraphRAG pack enabled by `graphcheck init --pack graphrag`, with configurable
+  Document, Chunk, and Entity labels, relationship types/directions, extraction relationship
+  selection, and name/embedding properties in `graphcheck.yml`.
+- GraphRAG provenance checks `orphan_chunks`, `entity_without_provenance`, and
+  `dangling_extraction_relationships`, with exhaustive counts, capped element-ID evidence,
+  and missing configured paths. Chunks may have multiple documents; entity provenance requires
+  a direct chunk link, and extraction relationships are flagged when either endpoint lacks one.
+- Seeded `near_duplicate_entities` sampling with normalized-name equality or character-bigram
+  Dice similarity strictly above a configurable threshold (default 0.9). Connected duplicate
+  groups include normalized keys and element IDs. Samples default to 1,000 names, allow up to
+  2,000 subject to engine limits, and exclude non-string names and names over 256 characters.
+  Sampled results state sample size/population without inferring a population confidence interval.
+- GraphRAG metadata/schema validation, planted and clean builder fixtures, and opt-in fraud-ring
+  and public-scale acceptance coverage. [GraphRAG documentation](docs/graphrag.md) details the new
+  check semantics requiring separate approval.
+- Added `engine.result_row_limit` project configuration, shared by CLI and MCP, with a default
+  ceiling of 100,000 competency rows and strict positive-integer validation.
+- Baseline schema 1.1 preserves declared RANGE index property order while reading legacy 1.0
+  profiles with unknown order. Diff format 1.1 explains property inventory/type changes and
+  distinguishes newly available index-order metadata from known definition changes.
+
+### Changed
+
+- Source distributions now contain only application sources, runtime compatibility schemas, and
+  release metadata/documentation. Repository tooling, tests, examples, and local caches are excluded.
+- Schema file generation moves to `tools/generate_schemas.py`; runtime schema generation and
+  validation remain available. Removed unused Python helpers `default_profiles`, `print_profile`,
+  and `count_band`, plus the repository-only `SCHEMAS_DIR` constant and `write_*schema*` helpers
+  from `graphcheck.contracts.schemas`.
+
+- Reading pre-2.0 results emits one `results.schema_deprecated` warning on stderr per artifact
+  read. Removal is planned for CLI 0.5.0, postponed while the current/previous-schema guarantee
+  requires support. The warning must ship at least one release before removal. Migrate saved
+  artifacts with the transformer above; current 2.0 reads and model revalidation stay quiet.
+- GraphRAG checks report `skipped:model_absent` with an explicit reason when the model is
+  unconfigured or any configured role label has no nodes. Completed runs containing only these
+  skips exit 0 with a null score and incomplete report coverage. Missing relationship types remain
+  defects when role populations exist; actual execution errors remain errors. This new skip/exit
+  policy requires separate approval.
+- `no_orphans` accepts optional `to_label` filtering for the opposite endpoint; omitting it
+  preserves existing behavior. This additional check semantic requires separate approval.
+- Runs prepare suites once, prefer the C-backed safe YAML parser, and show loading, connecting,
+  running, and report-writing stages in interactive terminals.
+- Graph inventory uses one combined request, and built-in same-label completeness checks share
+  bounded scans while retaining individual verdicts, evidence, and executed-query provenance.
+- PII candidate selection orders eligible properties within each node while preserving its
+  deterministic sampling inputs and final sample ordering.
+- Optional telemetry delivery gets a 50 ms command-exit allowance and pending events may be dropped.
+- Report IDs include a unique component; redacted exports use independent random identifiers.
+  Existing history names remain readable, and identical artifact publication can be retried.
+- Corrected read-consistency documentation: measurement and evidence share a transaction and
+  deadline, but Neo4j read-committed isolation permits concurrent writes to change observations.
+
+### Fixed
+
+- Redaction preserves historical results schema context: 1.0/1.1 artifacts retain unknown
+  inventory and 1.2 artifacts keep their original version when exported by `graphcheck redact`.
+- Historical results are validated against their declared archived JSON Schema before
+  normalization, rejecting fields and enum values introduced by later schemas. Installed wheels
+  include the same contracts.
+- Historical exports also validate the final payload before serialization, rejecting incompatible
+  model mutations such as aggregate evidence in schema 1.0 before writing any output file.
+- Schema 1.0 exports always omit graph counts, even if a loaded model was subsequently populated.
+  Schema 1.1 exports preserve recorded counts and omit unknown (null) counts.
+- Run configuration hashes include the authenticated username so permission changes between
+  users have distinct provenance, while passwords and password environment variables stay excluded.
+- Integration CI initializes the pinned fraud-ring fixture submodule for every Neo4j target,
+  so the changes acceptance test can load its Cypher parser and seed data.
+- The fraud-ring changes acceptance test uses the explicit `node_element_id` evidence alias,
+  so its planted tax-ID finding fails with evidence and then passes after the repair.
+- GraphRAG embedding consistency accepts stored numeric arrays on Neo4j 5.26 LTS by using
+  concrete non-null integer/float list predicates. GraphRAG integration tests now run in every
+  supported CI lane, including stored integer, float, and mixed-numeric embedding regressions.
+- Drift checks retain partial run status when using present measurements from incomplete
+  baselines, without changing their measured verdict or exit-code precedence.
+- Connection and credential preflight now share the run deadline with check execution.
+- Baseline references and parsed snapshots are pinned per run, and snapshots/selection metadata
+  are published atomically so interrupted writes cannot become selectable partial files.
+- Distinct runs cannot overwrite history on timestamp collisions. Managed report readers now
+  coordinate with publication/deletion and retain access to healthy records beside corrupt ones.
+- Pruning uses compact summaries instead of retaining full historical results, and partial
+  profiles preserve successfully collected relationship counts and property coverage.
+- Equality checks stop on decisive unexpected values or excess duplicates while preserving bag
+  semantics, honest partial-stream measurements, and graph-evidence requirements.
+- Escaped Unicode-encoded backticks in schema identifiers and shared the same escaping between
+  check compilation and profiling to prevent identifiers from changing the generated Cypher.
+- Configuration errors no longer echo input values or YAML source snippets, connection profile
+  representations hide passwords, and project/profile files reject duplicate mapping keys.
+- Missing requested suites now make a run partial with an actionable diagnostic, including when
+  the other requested suites pass.
+- Read preflights now reject missing-schema warnings before bounded queries can stop early;
+  permissive empty-graph preflights cannot satisfy a stricter cached read.
+- Competency assertions compare every field of ordinary result maps, including maps resembling
+  evidence pointers, and graph properties cannot override actual Neo4j element identities.
+- Reduced `contains` assertion work from repeated scans to hash-based membership in both streaming
+  and final evaluation while preserving typed value comparisons.
+- Report deletion and pruning now share the publication lock so history mutations cannot race
+  with publication or restoration of the `latest` report.
+- The local report explorer rejects malformed authentication without crashing, responds to
+  unauthorized requests without waiting for their bodies, and limits socket inactivity.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added

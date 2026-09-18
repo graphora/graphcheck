@@ -76,6 +76,67 @@ def _competency(
     )
 
 
+@pytest.mark.parametrize("assertion", ["equals", "contains"])
+def test_regression_compares_all_fields_of_maps_that_resemble_evidence(assertion):
+    actual = {"kind": "node", "id": "same", "balance": 10}
+    pinned = {"kind": "node", "id": "same", "balance": 99}
+
+    result = evaluate_check(_competency({assertion: [pinned]}), [{"value": actual}])
+
+    assert result.passed is False
+
+
+def test_unique_compares_all_fields_of_maps_that_resemble_evidence():
+    rows = [{"kind": "node", "id": "same", "balance": value} for value in (10, 99)]
+
+    assert evaluate_check(_competency({"unique": True}), rows).passed is True
+
+
+def test_collection_valued_kind_is_an_ordinary_map_field():
+    value = {"kind": ["retail"], "id": "same"}
+
+    assert evaluate_check(_competency({"equals": [value]}), [{"value": value}]).passed is True
+    assert _pointers_from_row(value) == []
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_contains_normalizes_values_in_linear_work(monkeypatch, streaming):
+    from graphcheck.engine import evaluator as evaluator_module
+
+    count = 100
+    compiled = _competency({"contains": list(range(count))})
+    rows = [{"value": value} for value in range(count)]
+    calls = 0
+    comparisons = 0
+    original = evaluator_module._freeze
+
+    class Comparable:
+        def __init__(self, value):
+            self.value = value
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __eq__(self, other):
+            nonlocal comparisons
+            comparisons += 1
+            return self.value == other.value
+
+    def counted(value):
+        nonlocal calls
+        calls += 1
+        return Comparable(original(value))
+
+    monkeypatch.setattr(evaluator_module, "_freeze", counted)
+    if streaming:
+        consumption = evaluator_module.CompetencyConsumption(compiled, count)
+        assert [consumption.stop_when(row) for row in rows] == [False] * (count - 1) + [True]
+    else:
+        assert evaluate_check(compiled, rows).passed is True
+    assert calls <= 2 * count
+    assert comparisons <= 2 * count
+
+
 def _drift(
     tolerance: dict[str, object],
     *,
@@ -91,6 +152,61 @@ def _drift(
     )
     return CypherCompiler(evidence_cap=evidence_cap).compile(
         _loaded(spec, Pattern.DRIFT, severity=severity)
+    )
+
+
+def _degree_drift(quantile: str, tolerance: dict[str, object]):
+    spec = DriftCheck(
+        id="drift",
+        metric="degree_distribution",
+        target={"label": "Account", "quantile": quantile, "direction": "both"},
+        baseline="release-42",
+        tolerance=tolerance,
+    )
+    return CypherCompiler(evidence_cap=4).compile(_loaded(spec, Pattern.DRIFT))
+
+
+def test_degree_distribution_p50_failure_gets_aggregate_evidence_pointer():
+    evaluation = evaluate_check(
+        _degree_drift("p50", {"max_increase_pct": 1}),
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": 5,
+                "population": 5,
+                "evidence": [],
+            }
+        ],
+        baseline=BaselineValue(1),
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert any(element.kind == "aggregate" for element in evaluation.evidence.elements)
+
+
+def test_degree_distribution_max_failure_names_real_node_not_aggregate():
+    evaluation = evaluate_check(
+        _degree_drift("max", {"max_increase_pct": 1}),
+        [
+            {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": 19,
+                "population": 2504,
+                "evidence": [{"kind": "node", "id": "4:graph:1"}],
+            }
+        ],
+        baseline=BaselineValue(3),
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert all(element.kind != "aggregate" for element in evaluation.evidence.elements)
+    assert any(
+        element.kind == "node" and element.id == "4:graph:1"
+        for element in evaluation.evidence.elements
     )
 
 
@@ -204,6 +320,20 @@ def test_raw_neo4j_entities_are_preserved_as_evidence_pointers():
     }
 
 
+def test_graph_properties_cannot_override_real_entity_identity():
+    from neo4j.graph import Graph, Node
+
+    graph = Graph()
+    properties = {"kind": "node", "id": "domain-id"}
+    nodes = [Node(graph, f"4:graph:{index}", index, ["Customer"], properties) for index in (1, 2)]
+
+    assert evaluate_check(_competency({"unique": True}), [{"n": node} for node in nodes]).passed
+    assert [pointer.id for pointer in _pointers_from_row({"nodes": nodes})] == [
+        "4:graph:1",
+        "4:graph:2",
+    ]
+
+
 def test_nested_result_maps_and_path_like_values_preserve_graph_pointers():
     from neo4j.graph import Graph, Node
 
@@ -248,6 +378,21 @@ def test_domain_property_ids_are_not_fabricated_into_element_pointers():
         evaluate_check(compiled, [{"account_id": "A-1"}], columns=["account_id"])
 
     assert caught.value.error.code == "engine.evidence_missing"
+    assert "result does not contain every pinned value" in caught.value.error.message
+    assert "node_element_id" in caught.value.error.fix
+    assert "Business IDs and arbitrary *_id aliases are not evidence" in caught.value.error.fix
+
+
+def test_failed_scalar_count_diagnostic_retains_assertion_and_suggests_a_graph_witness():
+    compiled = replace(_competency({"equals": [1500]}), params={})
+
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(compiled, [{"count": 1507}], columns=["count"])
+
+    assert caught.value.error.code == "engine.evidence_missing"
+    assert "result does not equal the pinned values" in caught.value.error.message
+    assert "assert rows" in caught.value.error.fix
+    assert "real graph witness" in caught.value.error.fix
 
 
 def test_query_rows_cannot_claim_aggregate_evidence_for_row_level_findings():
@@ -865,3 +1010,205 @@ def test_evaluation_is_deterministic_and_does_not_mutate_rows(values):
 
     assert first == repeated
     assert rows == original
+
+
+@pytest.mark.parametrize(
+    "expected,values,stop",
+    [
+        ([1], [2, 1], 1),
+        ([1, 2], [1, 1, 2], 2),
+        ([1], [1, 2], 2),
+        ([], [1], 1),
+        ([1, 2], [2, 1], None),
+        ([1, 2], [1], None),
+        ([True], [1], 1),
+        ([{"a": [1, True]}], [{"a": [1, False]}], 1),
+        ([date(2026, 1, 1)], [Neo4jDate(2026, 1, 1)], None),
+    ],
+)
+def test_streaming_equality_matches_eager_bag_verdict_without_premature_success(
+    expected, values, stop
+):
+    from graphcheck.engine.evaluator import CompetencyConsumption
+
+    compiled = _competency({"equals": expected})
+    consumption = CompetencyConsumption(compiled, 100)
+    retained = []
+    stopped = None
+    for index, value in enumerate(values, 1):
+        row = {"value": value}
+        retained.append(row)
+        if consumption.stop_when(row):
+            stopped = index
+            break
+    assert stopped == stop
+    eager = evaluate_check(compiled, [{"value": value} for value in values], columns=["value"])
+    streamed = evaluate_check(compiled, retained, columns=["value"], complete=stopped is None)
+    assert streamed.passed == eager.passed
+    if stopped is not None:
+        assert streamed.measured["equals"] is False
+        assert "rows" not in streamed.measured
+
+
+def test_early_equality_mismatch_still_requires_real_graph_evidence():
+    compiled = replace(_competency({"equals": [1]}), params={})
+    with pytest.raises(GraphCheckError) as caught:
+        evaluate_check(compiled, [{"value": 2}], columns=["value"], complete=False)
+    assert caught.value.error.code == "engine.evidence_missing"
+
+
+def _schema_inventory_drift(tolerance: dict[str, object]):
+    spec = DriftCheck(
+        id="drift",
+        metric="schema_inventory",
+        target={},
+        baseline="release-42",
+        tolerance=tolerance,
+    )
+    return CypherCompiler(evidence_cap=10).compile(_loaded(spec, Pattern.DRIFT))
+
+
+def test_schema_inventory_passes_when_labels_unchanged():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Customer"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is True
+
+
+def test_schema_inventory_fails_and_names_added_label():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Customer", "Transaction"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert [e.id for e in evaluation.evidence.elements] == ["label_added:Transaction"]
+
+
+def test_schema_inventory_fails_and_names_removed_label():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.evidence is not None
+    assert [e.id for e in evaluation.evidence.elements] == ["label_removed:Customer"]
+
+
+def test_schema_inventory_detects_simultaneous_add_and_remove_despite_net_zero_size():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="label:Customer"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [{"schema_ok": True, "labels": ["Account", "Fraud"]}],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.measured["current"] == 2
+    ids = {e.id for e in evaluation.evidence.elements}
+    assert ids == {"label_added:Fraud", "label_removed:Customer"}
+
+
+def test_schema_inventory_fails_and_names_added_relationship_type():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="relationship_type:OWNS"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": ["Account"],
+                "relationship_types": ["OWNS", "CONTROLS"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert [e.id for e in evaluation.evidence.elements] == ["relationship_type_added:CONTROLS"]
+
+
+def test_schema_inventory_detects_property_change_when_labels_and_types_are_unchanged():
+    baseline = BaselineValue(
+        0,
+        evidence=(
+            EvidenceElement(kind="aggregate", id="label:Account"),
+            EvidenceElement(kind="aggregate", id="relationship_type:OWNS"),
+            EvidenceElement(kind="aggregate", id="property:Account.balance"),
+        ),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": ["Account"],
+                "relationship_types": ["OWNS"],
+                "properties": ["Account.currency"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    assert evaluation.measured["current"] == 2
+    ids = {element.id for element in evaluation.evidence.elements}
+    assert ids == {"property_added:Account.currency", "property_removed:Account.balance"}
+
+
+def test_schema_inventory_distinguishes_labels_and_properties_containing_dots():
+    # Under a naive owner + "." + property join, label "A.B" property "c" and label
+    # "A" property "B.c" would both flatten to "A.B.c", silently hiding a real change
+    # for these (valid, if unusual) Neo4j identifiers. Escaping keeps them distinct.
+    baseline = BaselineValue(
+        0,
+        evidence=(EvidenceElement(kind="aggregate", id="property:A\\.B.c"),),
+    )
+    evaluation = evaluate_check(
+        _schema_inventory_drift({"max": 0}),
+        [
+            {
+                "schema_ok": True,
+                "labels": [],
+                "relationship_types": [],
+                "properties": ["A.B\\.c"],
+            }
+        ],
+        baseline=baseline,
+    )
+    assert evaluation.passed is False
+    ids = {element.id for element in evaluation.evidence.elements}
+    assert ids == {"property_added:A.B\\.c", "property_removed:A\\.B.c"}

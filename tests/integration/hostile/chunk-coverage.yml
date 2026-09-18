@@ -1,0 +1,12 @@
+suite: hostile-chunk-coverage
+conformance:
+  - id: chunk-coverage
+    check: chunk_coverage
+    with:
+      document_label: Document
+      chunk_label: Chunk
+      entity_label: __Entity__
+      document_chunk_rel: PART_OF
+      chunk_entity_rel: HAS_ENTITY
+      embedding_property: embedding
+      threshold: 0.95

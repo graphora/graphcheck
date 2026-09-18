@@ -13,12 +13,12 @@ from graphcheck.contracts.check import (
 )
 from graphcheck.contracts.results import Pattern, Severity
 from graphcheck.contracts.schemas import (
-    SCHEMAS_DIR,
     check_combined_schema,
     check_envelope_schema,
     validate_check_schema,
 )
 from graphcheck.packs import PACK_VERSION, REGISTRY
+from tests import SCHEMAS_DIR
 
 FIX = Path(__file__).parent / "fixtures"
 

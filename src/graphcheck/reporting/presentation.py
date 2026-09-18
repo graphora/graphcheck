@@ -38,6 +38,7 @@ _SKIP_REASONS = {
         "A capability required by this check was unavailable.",
     ),
     SkipReason.NOT_RUN: ("Not run", "The run ended before this check started."),
+    SkipReason.MODEL_ABSENT: ("Model absent", "The configured GraphRAG model is absent."),
 }
 
 
@@ -79,6 +80,8 @@ def present_check(check: CheckResult) -> CheckPresentation:
     skip_reason = None
     if check.skip_reason is not None:
         label, explanation = _SKIP_REASONS[check.skip_reason]
+        if check.skip_reason is SkipReason.MODEL_ABSENT:
+            explanation = str(check.expected.get("not_evaluated_reason", explanation))
         skip_reason = SkipReasonPresentation(check.skip_reason.value, label, explanation)
     return CheckPresentation(
         verdict=check.verdict.value,

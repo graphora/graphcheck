@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, PositiveInt, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PositiveInt,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
-from graphcheck.errors import GraphCheckError, profile_invalid
+from graphcheck.errors import GraphCheckError
 from graphcheck.generation.config import GenerateConfig
+from graphcheck.packs.graphrag import GraphRAGModel, NearDuplicateOptions
+from graphcheck.yaml_loader import load_yaml_mapping
 
 PROJECT_FILE = "graphcheck.yml"
 PROFILES_FILE = "profiles.yml"
@@ -14,14 +25,36 @@ CHECKS_DIR = "checks"
 ARTIFACTS_DIR = ".graphcheck"
 
 
+class ProjectEngineConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    result_row_limit: Annotated[StrictInt, Field(gt=0)] = 100_000
+
+
+class GraphRAGPackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = True
+    model: GraphRAGModel | None = None
+    near_duplicate_entities: NearDuplicateOptions = Field(default_factory=NearDuplicateOptions)
+
+
+class ProjectPacksConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    graphrag: GraphRAGPackConfig | None = None
+
+
 class ProjectConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     project: str
     checks: str
     artifacts: str
     concurrency: PositiveInt = 2
+    engine: ProjectEngineConfig = Field(default_factory=ProjectEngineConfig)
     generate: GenerateConfig | None = None
+    packs: ProjectPacksConfig | None = None
 
     @field_validator("concurrency", mode="before")
     @classmethod
@@ -57,14 +90,36 @@ def find_project_root(start: Path | None = None) -> Path:
 def load_project_config(root: Path) -> ProjectConfig:
     path = root / PROJECT_FILE
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = load_yaml_mapping(path.read_text(encoding="utf-8"), description="graphcheck.yml")
         return ProjectConfig.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
-        raise profile_invalid(f"Invalid graphcheck.yml: {exc}") from exc
+    except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, ValidationError)
+            else "Use valid UTF-8 YAML with unique mapping keys."
+        )
+        raise GraphCheckError(
+            "profile.invalid",
+            f"Invalid graphcheck.yml: {detail}",
+            "Fix graphcheck.yml, then run `graphcheck debug` again.",
+        ) from exc if isinstance(exc, ValidationError) else None
 
 
-def write_default_project(root: Path) -> None:
+def write_default_project(root: Path, *, graphrag: bool = False) -> None:
     config = default_project_config()
+    if graphrag:
+        config.packs = ProjectPacksConfig(
+            graphrag=GraphRAGPackConfig(
+                model=GraphRAGModel(
+                    document_label="Document",
+                    chunk_label="Chunk",
+                    entity_label="__Entity__",
+                    document_chunk_rel="PART_OF",
+                    chunk_entity_rel="HAS_ENTITY",
+                    embedding_property="embedding",
+                )
+            )
+        )
     (root / PROJECT_FILE).write_text(
         yaml.safe_dump(config.model_dump(exclude_none=True), sort_keys=False),
         encoding="utf-8",

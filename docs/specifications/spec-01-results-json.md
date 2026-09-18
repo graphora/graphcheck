@@ -6,6 +6,9 @@ current `schema_version` is `"2.0"`, versioned independently of `graphcheck_vers
 
 Version history:
 
+- **2.0 additive lineage** adds nullable `run.previous_run_id`, `run.baseline_ref`, and
+  `run.config_hash`. Producers include all three fields; readers default missing fields to null
+  so historical 2.0 artifacts continue to load. The JSON Schema remains 2.0.
 - **2.0** renames the execution field from `run.status` to `run.run_status`, distinguishing it
   from the derived `coverage_status` used by report summaries and presentation surfaces.
 - **1.2** adds canonical target `labels` and `relationship_types` inventory.
@@ -77,6 +80,29 @@ The compatibility loader upgrades 1.0 and 1.1 artifacts in memory by adding
 against the current model. It does not rewrite the source artifact. A re-exposed historical result,
 including through MCP, preserves null as `not recorded by that schema version`.
 
+## Run lineage and configuration identity
+
+`previous_run_id` identifies the last published run in the configured artifacts directory, or null
+for the first run. Publication serializes link assignment with updating `latest` so concurrent runs
+form a chain. History summaries include the link without loading every full results file.
+
+`baseline_ref` is the immutable filename of the latest existing timestamped profile when the run
+was prepared, or null when no profile exists. It describes the snapshot used by `changes` and does
+not replace individual drift checks' baseline references. It never points at a mutable `latest`
+alias, and runs do not automatically profile the graph.
+
+`config_hash` is `sha256:<hex>` over canonical JSON of effective engine settings, sorted suite/tag
+selection, fail-fast, and selected suite source hashes. The application additionally includes
+project settings that affect runs, effective concurrency, the selected connection profile name,
+URI and database, and credential-verification mode. Generation settings and credentials are
+excluded. Failed runs include the configuration available before failure. Historical artifacts
+may have a null hash.
+Mask-redacted exports clear all three fields to avoid revealing source lineage or configuration.
+
+Historical 2.0 inputs remain in `tests/unit/contracts/fixtures/results.*.json` unchanged; the
+`results.lineage.json` fixture exercises the additive fields alongside them. The rendered golden
+fixture represents current producer output. Pre-2.0 exports retain their historical shape.
+
 ## Shape by run status
 
 `score` is a present-but-nullable key in every status — a number when ≥ 1 check executed, `null` when none did. `run.partial_reason` is non-null **iff** `run.run_status` is `partial`.
@@ -110,7 +136,7 @@ including through MCP, preserves null as `not recorded by that schema version`.
    | --- | --- | --- |
    | 1 | `run.run_status:failed` | **3** |
    | 2 | any `verdict:fail`, or (`errored` and `severity:error`) except an `engine.timeout` on a partial run | **1** |
-   | 3 | `run.run_status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
+   | 3 | `run.run_status:partial` (including `engine.timeout`); or nothing evaluated (empty universe, or all `skipped`, except a nonempty selection consisting only of `model_absent` skips); or any `verdict:warn`, or (`errored` and `severity:warn`) | **2** |
    | 4 | otherwise (`complete`, ≥ 1 executed, all `pass`/`skipped`) | **0** |
 
 2. **Evidence is mandatory on `fail` and `warn`.** `compiled_query` is present once compiled, `null` if the check errored before compiling; it keeps `$param` placeholders — literal values live only in `params`.
@@ -125,8 +151,8 @@ including through MCP, preserves null as `not recorded by that schema version`.
    and `measured` leaves, evidence messages and element IDs/labels/types, check names and
    provenance, partial reasons, error messages/fixes, source hashes, and target identifiers with
    `[REDACTED]`. Suite, check, and selected-tag identifiers use consistent ordered aliases that
-   preserve cross-field relationships. Redacted run IDs are target-neutral and derived only from
-   the finish timestamp. Keys, containers, error codes, verdicts, scores, and run-level counts are
+   preserve cross-field relationships. Redacted run IDs are target-neutral and formed from an independent random component and
+   the finish timestamp (legacy timestamp-only IDs remain readable). Keys, containers, error codes, verdicts, scores, and run-level counts are
    preserved. Redaction collects the original strings from every masked or aliased surface and
    rejects a final artifact that repeats one outside the explicit structural allowlist of schema
    and version metadata, timestamps, enums, server metadata, and error codes. The canonical JSON
@@ -148,6 +174,11 @@ node/relationship or property-coverage evidence.
    unique, non-null `run.target.labels` and `run.target.relationship_types`. Nullable inventory
    exists only at a compatibility boundary for pre-1.2 input. An empty array is recorded evidence
    of an empty probed category and is never interchangeable with null.
+10. **GraphRAG model absence (new semantics requiring separate approval):**
+    `skipped:model_absent` carries a nonblank `expected.not_evaluated_reason`. It does not
+    force a partial run. A completed, nonempty selection consisting only of these skips
+    exits 0 with null score and incomplete report coverage; the checks remain explicitly
+    not evaluated. See [GraphRAG semantics](../graphrag.md) for the model-presence gate.
 
 ## Downstream and MCP contract
 

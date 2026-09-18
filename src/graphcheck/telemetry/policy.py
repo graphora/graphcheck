@@ -275,6 +275,7 @@ _ERROR_CODE_MAP.update(
         "neo4j.write_rejected": SafeErrorCode.READ_GUARD_REJECTED,
         "neo4j.read_guard_unavailable": SafeErrorCode.READ_GUARD_REJECTED,
         "engine.timeout": SafeErrorCode.NEO4J_QUERY_FAILED,
+        "engine.graph_size_exceeded": SafeErrorCode.CONFIG_INVALID,
         "generate.config_missing": SafeErrorCode.CONFIG_INVALID,
         "generate.config_invalid": SafeErrorCode.CONFIG_INVALID,
         "generate.api_key_missing": SafeErrorCode.CONFIG_INVALID,
@@ -700,22 +701,6 @@ def version_major_minor(version: object | None) -> tuple[int | None, int | None]
     if minor is not None and minor < 0:
         return major, None
     return major, minor
-
-
-def count_band(value: int | None) -> str:
-    """Return the fixed dashboard bucket without exposing a new payload dimension by default."""
-
-    if value is None:
-        return "unknown"
-    if value == 0:
-        return "0"
-    if value <= 5:
-        return "1-5"
-    if value <= 20:
-        return "6-20"
-    if value <= 100:
-        return "21-100"
-    return "101+"
 
 
 def assert_private_payload(

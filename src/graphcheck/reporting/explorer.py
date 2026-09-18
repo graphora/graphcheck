@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import html
 import http.cookies
 import json
 import secrets
@@ -29,6 +30,7 @@ from graphcheck.reporting.html import (
 _COOKIE_NAME = "graphcheck_report_explorer"
 _MAX_REQUEST_BYTES = 64 * 1024
 _IDLE_SECONDS = 300.0
+_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 class ReportExplorerServer(ThreadingHTTPServer):
@@ -44,7 +46,17 @@ class ReportExplorerServer(ThreadingHTTPServer):
 class ReportExplorerHandler(BaseHTTPRequestHandler):
     server: ReportExplorerServer
 
+    def setup(self) -> None:
+        self.request.settimeout(_REQUEST_TIMEOUT_SECONDS)
+        super().setup()
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        try:
+            self._get()
+        except (ReportHistoryError, OSError) as exc:
+            self._json_error(500, str(exc))
+
+    def _get(self) -> None:
         self.server.last_activity = time.monotonic()
         parsed = urllib.parse.urlsplit(self.path)
         if not self._valid_host():
@@ -120,7 +132,7 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         self.server.last_activity = time.monotonic()
         parsed = urllib.parse.urlsplit(self.path)
         if not self._valid_host() or not self._api_authorized() or not self._same_origin():
-            self._discard_request_body()
+            self.close_connection = True
             self._json_error(403, "Report explorer authorization failed.")
             return
         try:
@@ -131,14 +143,16 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
                 self._delete(payload)
             else:
                 self._json_error(404, "Unknown report explorer route.")
-        except (ReportHistoryError, TypeError, ValueError) as exc:
+        except (ReportHistoryError, OSError, TypeError, ValueError) as exc:
             self._json_error(400, str(exc))
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
     def _records(self) -> list[ReportRun]:
-        return discover_report_runs(self.server.runs_dir)
+        records = discover_report_runs(self.server.runs_dir)
+        self._history_warnings = getattr(records, "warnings", [])
+        return records
 
     def _compare(self, payload: dict[str, Any]) -> None:
         ids = _selected_ids(payload, exactly=2)
@@ -190,16 +204,11 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
             raise ValueError("Report explorer request must be a JSON object.")
         return payload
 
-    def _discard_request_body(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            return
-        if 0 < length <= _MAX_REQUEST_BYTES:
-            self.rfile.read(length)
-
     def _authenticated(self) -> bool:
-        cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        try:
+            cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        except http.cookies.CookieError:
+            return False
         morsel = cookie.get(_COOKIE_NAME)
         return morsel is not None and self._valid_token(morsel.value)
 
@@ -213,7 +222,11 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
 
     def _valid_token(self, candidate: str | None) -> bool:
-        return candidate is not None and hmac.compare_digest(candidate, self.server.token)
+        return (
+            candidate is not None
+            and candidate.isascii()
+            and hmac.compare_digest(candidate, self.server.token)
+        )
 
     @property
     def _origin(self) -> str:
@@ -223,9 +236,16 @@ class ReportExplorerHandler(BaseHTTPRequestHandler):
         self._json(status, {"error": message})
 
     def _json(self, status: int, payload: object) -> None:
+        if isinstance(payload, dict) and getattr(self, "_history_warnings", []):
+            payload = {**payload, "warnings": self._history_warnings}
         self._send(status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
 
     def _html(self, status: int, document: str) -> None:
+        if warnings := getattr(self, "_history_warnings", []):
+            banner = (
+                '<aside role="status">' + "<br>".join(html.escape(w) for w in warnings) + "</aside>"
+            )
+            document = document.replace("<body>", "<body>" + banner, 1)
         self._send(status, document.encode("utf-8"), "text/html; charset=utf-8")
 
     def _send(self, status: int, content: bytes, content_type: str) -> None:

@@ -122,6 +122,31 @@ def test_final_flush_is_bounded_when_transport_blocks():
     release.set()
 
 
+def test_default_close_caps_delivery_and_drops_pending_events():
+    release, entered = threading.Event(), threading.Event()
+    sent = []
+
+    class Transport:
+        def send(self, event, properties):
+            sent.append(event)
+            entered.set()
+            release.wait(2)
+
+    adapter = PostHogAdapter(_session(), Transport())
+    try:
+        adapter.capture_command(_command())
+        assert entered.wait(1)
+        adapter.capture_command(_command())
+        started = time.monotonic()
+        assert adapter.close() is False
+        assert time.monotonic() - started < 0.2
+    finally:
+        release.set()
+        adapter._worker.join(timeout=1)
+    assert not adapter._worker.is_alive()
+    assert len(sent) == 1
+
+
 def test_outbound_event_requires_the_exact_reviewed_property_schema():
     with pytest.raises(ValueError, match="allowlisted schema"):
         PostHogEvent(

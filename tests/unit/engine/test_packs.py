@@ -9,12 +9,12 @@ from pydantic import ValidationError
 from graphcheck.contracts.check import load_suite
 from graphcheck.contracts.results import Pattern
 from graphcheck.contracts.schemas import (
-    SCHEMAS_DIR,
     check_combined_schema,
     pack_metadata_schema,
     validate_pack_metadata_schema,
 )
 from graphcheck.packs import PACK_REQUIREMENTS, REGISTRY
+from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
 from graphcheck.packs.metadata import (
     CORE_CHECK_NAMES,
     CorePackMetadata,
@@ -22,6 +22,7 @@ from graphcheck.packs.metadata import (
     load_pack_metadata_yaml,
 )
 from graphcheck.yaml_loader import DuplicateKeyError, load_yaml_mapping
+from tests import SCHEMAS_DIR
 
 PACKS = Path(__file__).resolve().parents[3] / "src" / "graphcheck" / "packs"
 
@@ -384,7 +385,7 @@ def test_pack_metadata_schema_uses_standard_draft_without_custom_validation_keyw
 
 def test_all_core_conformance_checks_are_registered():
     assert set(CORE_CHECKS) == set(CORE_CHECK_NAMES)
-    assert set(REGISTRY) == set(CORE_CHECKS) | set(PII_CHECKS)
+    assert set(REGISTRY) == set(CORE_CHECKS) | set(PII_CHECKS) | set(GRAPHRAG_CHECK_NAMES)
 
 
 def test_core_check_with_models_accept_representative_configs():

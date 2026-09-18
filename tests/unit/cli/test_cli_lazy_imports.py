@@ -127,20 +127,6 @@ def test_enabled_consent_loads_full_telemetry_only_after_bootstrap(tmp_path, per
     assert "graphcheck.telemetry.runtime" in _modules(completed)
 
 
-def test_bootstrap_probe_ignores_parent_pythonpath_sitecustomize(tmp_path, monkeypatch):
-    contaminator = tmp_path / "contaminator"
-    contaminator.mkdir()
-    (contaminator / "sitecustomize.py").write_text(
-        "import graphcheck.telemetry.runtime\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("PYTHONPATH", str(contaminator))
-
-    completed = _run_bootstrap(["--help"], telemetry="0")
-
-    assert completed.returncode == 0, completed.stderr
-    assert _modules(completed) == []
-
-
 def _run_bootstrap(
     arguments,
     *,

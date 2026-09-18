@@ -7,7 +7,7 @@ class DuplicateKeyError(ValueError):
     """A mapping key appeared more than once in a YAML document."""
 
 
-class _NoDuplicatesLoader(yaml.SafeLoader):
+class _NoDuplicatesLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
     pass
 
 
@@ -33,7 +33,7 @@ _NoDuplicatesLoader.add_constructor(
 
 def load_yaml_mapping(text: str, *, description: str) -> dict:
     """Safely load one YAML mapping while rejecting duplicate keys at every depth."""
-    # SAFETY: _NoDuplicatesLoader subclasses SafeLoader, so it never constructs
+    # SAFETY: _NoDuplicatesLoader subclasses a safe loader, so it never constructs
     # arbitrary Python objects. The custom constructor only adds duplicate-key checks.
     data = yaml.load(text, Loader=_NoDuplicatesLoader)  # noqa: S506 (SafeLoader subclass)
     if data is None:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ from graphcheck.reporting.coverage import calculate_coverage_status
 from graphcheck.reporting.writer import load_results
 
 SUMMARY_FILENAME = "summary.json"
+SUMMARY_CHANGES_LIMIT = 20
 
 
 class ReportHistoryError(ValueError):
@@ -32,6 +35,7 @@ class ReportSummary:
     finished_at: str
     coverage_status: CoverageStatus
     suite_scores: tuple[tuple[str, int | None], ...]
+    previous_run_id: str | None = None
 
 
 @dataclass(frozen=True, init=False)
@@ -71,11 +75,23 @@ class ReportRun:
     @property
     def results(self) -> Results:
         if self._results is None:
+            from graphcheck.application.artifacts import latest_publication_lock
+
             try:
-                loaded = load_results(self.results_path)
-                if report_summary(loaded) != self.summary:
-                    raise ValueError("results.json does not match summary.json")
-                object.__setattr__(self, "_results", loaded)
+                with latest_publication_lock(self.directory.parent):
+                    directory = self.directory
+                    if directory.name.casefold() == "latest":
+                        candidates = _discover_report_runs(directory.parent)
+                        directory = find_report_run(candidates, self.id).directory
+                    if not _safe_report_directory(directory.parent.resolve(), directory):
+                        raise ValueError("report directory was removed or is unsafe")
+                    path = directory / "results.json"
+                    if not _safe_artifact_file(directory, path):
+                        raise ValueError("report results were removed or are unsafe")
+                    loaded = load_results(path)
+                    if report_summary(loaded) != self.summary:
+                        raise ValueError("results.json does not match the selected summary")
+                    object.__setattr__(self, "_results", loaded)
             except (OSError, ValueError) as exc:
                 raise ReportHistoryError(
                     f"Could not read report history from {self.results_path}: {exc}"
@@ -84,24 +100,49 @@ class ReportRun:
         return self._results
 
 
-def discover_report_runs(runs_dir: Path) -> list[ReportRun]:
+class ReportRuns(list[ReportRun]):
+    """Usable history plus at most 20 local discovery diagnostics."""
+
+    def __init__(self, records=(), *, warnings=()):
+        super().__init__(records)
+        self.warnings = list(warnings)[:20]
+
+
+def discover_report_runs(
+    runs_dir: Path, *, on_warning: Callable[[str], None] | None = None
+) -> ReportRuns:
     """Discover compact run summaries and lazily load full selected artifacts."""
     if not runs_dir.is_dir():
-        return []
+        return ReportRuns()
 
+    from graphcheck.application.artifacts import latest_publication_lock
+
+    with latest_publication_lock(runs_dir):
+        records = _discover_report_runs(runs_dir)
+    if on_warning is not None:
+        for warning in records.warnings:
+            on_warning(warning)
+    return records
+
+
+def _discover_report_runs(runs_dir: Path) -> ReportRuns:
+    direct = _direct_report_runs(runs_dir)
     by_id: dict[str, ReportRun] = {}
-    for record in _direct_report_runs(runs_dir):
+    for record in direct:
         current = by_id.get(record.id)
         if current is None or _preferred_record(record) > _preferred_record(current):
             by_id[record.id] = record
 
-    return sorted(by_id.values(), key=_recency, reverse=True)
+    return ReportRuns(sorted(by_id.values(), key=_recency, reverse=True), warnings=direct.warnings)
 
 
 def find_report_run(records: list[ReportRun], run_id: str) -> ReportRun:
     for record in records:
         if record.id == run_id or record.directory.name == run_id:
             return record
+    for warning in getattr(records, "warnings", ()):
+        if repr(run_id) in warning:
+            raise ReportHistoryError(warning)
     raise ReportHistoryError(
         f"Run {run_id!r} was not found. Run `graphcheck report --list` to see available IDs."
     )
@@ -109,24 +150,28 @@ def find_report_run(records: list[ReportRun], run_id: str) -> ReportRun:
 
 def format_report_history(records: list[ReportRun]) -> str:
     if not records:
-        return "No report history found."
+        return "\n".join(["No report history found.", *getattr(records, "warnings", ())])
 
     rows = [
         (
             record.id,
+            record.summary.previous_run_id or "—",
             record.summary.finished_at,
             record.summary.coverage_status.value,
             _summary_suite_scores(record.summary),
         )
         for record in records
     ]
-    headers = ("REPORT NAME", "FINISHED AT", "COVERAGE STATUS", "SUITE SCORES")
-    widths = [max(len(headers[index]), *(len(row[index]) for row in rows)) for index in range(4)]
+    headers = ("REPORT NAME", "PREVIOUS RUN ID", "FINISHED AT", "COVERAGE STATUS", "SUITE SCORES")
+    widths = [
+        max(len(header), *(len(row[index]) for row in rows)) for index, header in enumerate(headers)
+    ]
     lines = [
         _format_row(headers, widths),
         _format_row(tuple("-" * width for width in widths), widths),
     ]
     lines.extend(_format_row(row, widths) for row in rows)
+    lines.extend(f"Warning: {warning}" for warning in getattr(records, "warnings", ()))
     return "\n".join(lines)
 
 
@@ -137,24 +182,68 @@ def report_name(results: Results) -> str:
     database = results.run.target.database if results.run.target is not None else "unknown"
     target = re.sub(r"[^A-Za-z0-9._-]+", "-", database).strip("._-") or "unknown"
     timestamp = parse_utc_timestamp(results.run.finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{target}_{timestamp}"
+    prefix = f"{target}_{timestamp}_"
+    if re.fullmatch(re.escape(prefix) + r"[0-9a-f]{32}", results.run.id):
+        return results.run.id
+    return prefix + hashlib.sha256(results.run.id.encode("utf-8")).hexdigest()[:32]
 
 
-def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
-    """Render suite-score and outcome changes from the first report to the second report."""
-    first_checks = {_identity(check): check for check in first.results.checks}
-    second_checks = {_identity(check): check for check in second.results.checks}
+@dataclass(frozen=True)
+class CheckDelta:
+    suite_id: str
+    check_id: str
+    name: str
+    before: str | None
+    after: str | None
+
+    def display(self) -> str:
+        outcome = (
+            f"{self.before} -> {self.after}"
+            if self.before and self.after
+            else (self.after or self.before)
+        )
+        return f"{self.suite_id}::{self.check_id}: {outcome}"
+
+
+@dataclass(frozen=True)
+class ReportComparison:
+    regressions: list[CheckDelta]
+    improvements: list[CheckDelta]
+    other_changes: list[CheckDelta]
+    added: list[CheckDelta]
+    removed: list[CheckDelta]
+    coverage_before: str
+    coverage_after: str
+    suite_scores: list[dict[str, str | int | None]]
+
+    @property
+    def regressed(self) -> bool:
+        return (
+            bool(self.regressions)
+            or any(change.after in {"fail", "warn", "errored"} for change in self.added)
+            or any(change.after == "fail" for change in self.other_changes)
+        )
+
+
+def compare_reports(first: ReportRun, second: ReportRun) -> ReportComparison:
+    """Compare outcomes once for both the report and changes commands."""
+    return _compare_results(first.results, second.results)
+
+
+def _compare_results(first: Results, second: Results) -> ReportComparison:
+    first_checks = {_identity(check): check for check in first.checks}
+    second_checks = {_identity(check): check for check in second.checks}
     shared = sorted(first_checks.keys() & second_checks.keys())
 
-    regressions: list[str] = []
-    improvements: list[str] = []
-    other_changes: list[str] = []
+    regressions: list[CheckDelta] = []
+    improvements: list[CheckDelta] = []
+    other_changes: list[CheckDelta] = []
     for identity in shared:
         before = first_checks[identity]
         after = second_checks[identity]
         if before.verdict is after.verdict:
             continue
-        change = f"{_display_identity(identity)}: {before.verdict.value} -> {after.verdict.value}"
+        change = CheckDelta(*identity, after.name, before.verdict.value, after.verdict.value)
         before_rank = _outcome_rank(before)
         after_rank = _outcome_rank(after)
         if after_rank > before_rank:
@@ -165,55 +254,79 @@ def format_report_comparison(first: ReportRun, second: ReportRun) -> str:
             other_changes.append(change)
 
     added = [
-        f"{_display_identity(identity)}: {second_checks[identity].verdict.value}"
+        CheckDelta(
+            *identity, second_checks[identity].name, None, second_checks[identity].verdict.value
+        )
         for identity in sorted(second_checks.keys() - first_checks.keys())
     ]
     removed = [
-        f"{_display_identity(identity)}: {first_checks[identity].verdict.value}"
+        CheckDelta(
+            *identity, first_checks[identity].name, first_checks[identity].verdict.value, None
+        )
         for identity in sorted(first_checks.keys() - second_checks.keys())
     ]
 
+    before_scores = {suite.id: suite.score for suite in first.suites}
+    after_scores = {suite.id: suite.score for suite in second.suites}
+    return ReportComparison(
+        regressions,
+        improvements,
+        other_changes,
+        added,
+        removed,
+        calculate_coverage_status(first).value,
+        calculate_coverage_status(second).value,
+        [
+            {"suite_id": key, "before": before_scores.get(key), "after": after_scores.get(key)}
+            for key in sorted(before_scores.keys() | after_scores.keys())
+        ],
+    )
+
+
+def format_report_comparison(
+    first: ReportRun, second: ReportRun, *, comparison: ReportComparison | None = None
+) -> str:
+    """Render suite-score and outcome changes from the first report to the second report."""
+    comparison = comparison or compare_reports(first, second)
     lines = [
         f"Comparing {first.id} -> {second.id}",
-        f"Coverage status: {calculate_coverage_status(first.results).value} -> "
-        f"{calculate_coverage_status(second.results).value}",
+        f"Coverage status: {comparison.coverage_before} -> {comparison.coverage_after}",
         "Suite scores:",
         *_suite_score_changes(first.results, second.results),
         "",
     ]
-    _append_section(lines, "Regressions", regressions)
-    _append_section(lines, "Improvements", improvements)
-    _append_section(lines, "Other verdict changes", other_changes)
-    _append_section(lines, "Added checks", added)
-    _append_section(lines, "Removed checks", removed)
+    for heading, changes in (
+        ("Regressions", comparison.regressions),
+        ("Improvements", comparison.improvements),
+        ("Other verdict changes", comparison.other_changes),
+        ("Added checks", comparison.added),
+        ("Removed checks", comparison.removed),
+    ):
+        _append_section(lines, heading, [change.display() for change in changes])
     return "\n".join(lines).rstrip()
 
 
 def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
     """Remove old immediate run directories while always preserving ``latest``."""
+    from graphcheck.application.artifacts import latest_publication_lock
+
     if keep < 1:
         raise ReportHistoryError("--keep must be at least 1.")
     if not runs_dir.is_dir():
-        return []
+        return ReportRuns()
+    with latest_publication_lock(runs_dir):
+        return _prune_report_runs(runs_dir, keep)
 
-    candidates: list[ReportRun] = []
-    for directory in runs_dir.iterdir():
-        if (
-            not directory.is_dir()
-            or directory.name.casefold() == "latest"
-            or directory.name.startswith(".")
-        ):
-            continue
-        results_path = directory / "results.json"
-        if results_path.is_file():
-            candidates.append(_load_report_run(results_path))
 
+def _prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
+    direct = _direct_report_runs(runs_dir)
+    candidates = [record for record in direct if record.directory.name.casefold() != "latest"]
     candidates.sort(key=_recency, reverse=True)
-    removed = candidates[keep:]
+    removed = ReportRuns(candidates[keep:], warnings=direct.warnings)
     resolved_runs = runs_dir.resolve()
     resolved_directories: list[Path] = []
     for record in removed:
-        if record.directory.is_symlink():
+        if record.directory.is_symlink() or record.directory.is_junction():
             raise ReportHistoryError(f"Refusing to prune linked path: {record.directory}")
         resolved_directory = record.directory.resolve()
         if resolved_directory.parent != resolved_runs:
@@ -229,11 +342,20 @@ def prune_report_runs(runs_dir: Path, keep: int) -> list[ReportRun]:
 
 def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
     """Delete selected logical reports and safely repoint the ``latest`` alias."""
+    from graphcheck.application.artifacts import latest_publication_lock
+
+    if not runs_dir.is_dir():
+        raise ReportHistoryError("No report history found.")
+    with latest_publication_lock(runs_dir):
+        return _delete_report_runs(runs_dir, run_ids)
+
+
+def _delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
     requested = tuple(dict.fromkeys(run_id for run_id in run_ids if run_id))
     if not requested:
         raise ReportHistoryError("Select at least one report to delete.")
 
-    records = discover_report_runs(runs_dir)
+    records = _discover_report_runs(runs_dir)
     by_id = {record.id: record for record in records}
     missing = [run_id for run_id in requested if run_id not in by_id]
     if missing:
@@ -256,7 +378,7 @@ def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
             destination = trash / target.name
             target.replace(destination)
             moved.append((target, destination))
-        remaining = discover_report_runs(resolved_runs)
+        remaining = _discover_report_runs(resolved_runs)
         if remaining and not (resolved_runs / "latest").exists():
             latest_staging = _stage_latest_alias(resolved_runs, remaining[0])
             latest_staging.replace(resolved_runs / "latest")
@@ -278,14 +400,14 @@ def delete_report_runs(runs_dir: Path, run_ids: list[str]) -> list[ReportRun]:
         shutil.rmtree(trash)
     except OSError as exc:
         raise ReportHistoryError(f"Could not finish deleting selected reports: {exc}") from exc
-    return [by_id[run_id] for run_id in requested]
+    return ReportRuns([by_id[run_id] for run_id in requested], warnings=direct_records.warnings)
 
 
-def _direct_report_runs(runs_dir: Path) -> list[ReportRun]:
+def _direct_report_runs(runs_dir: Path) -> ReportRuns:
     if not runs_dir.is_dir():
-        return []
+        return ReportRuns()
     resolved_runs = runs_dir.resolve()
-    records: list[ReportRun] = []
+    records = ReportRuns()
     try:
         directories = sorted(runs_dir.iterdir(), key=lambda path: path.name)
     except OSError as exc:
@@ -293,34 +415,37 @@ def _direct_report_runs(runs_dir: Path) -> list[ReportRun]:
             f"Could not enumerate report history in {runs_dir}: {exc}"
         ) from exc
     for directory in directories:
-        if not _safe_report_directory(resolved_runs, directory):
+        if directory.name.startswith("."):
             continue
-        results_path = directory / "results.json"
-        if (
-            not results_path.is_file()
-            or results_path.is_symlink()
-            or results_path.resolve().parent != directory.resolve()
-        ):
-            continue
-        summary_path = results_path.with_name(SUMMARY_FILENAME)
-        record = (
-            _load_summary_run(summary_path, results_path)
-            if summary_path.is_file()
-            and not summary_path.is_symlink()
-            and summary_path.resolve().parent == directory.resolve()
-            else _load_report_run(results_path)
-        )
-        records.append(record)
+        try:
+            if not _safe_report_directory(resolved_runs, directory):
+                if directory.is_symlink() or directory.is_junction():
+                    raise ValueError("unsafe linked directory")
+                continue
+            results_path = directory / "results.json"
+            if not _safe_artifact_file(directory, results_path):
+                raise ValueError("missing or unsafe results")
+            summary_path = results_path.with_name(SUMMARY_FILENAME)
+            record = (
+                _load_summary_run(summary_path, results_path, warnings=records.warnings)
+                if _safe_artifact_file(directory, summary_path)
+                else _load_report_run(results_path)
+            )
+            records.append(record)
+        except (OSError, ValueError):
+            if len(records.warnings) < 20:
+                records.warnings.append(
+                    f"Skipped unreadable, unsafe, or corrupt report {directory.name!r}."
+                )
     return records
 
 
 def _safe_report_directory(resolved_runs: Path, directory: Path) -> bool:
-    is_junction = getattr(directory, "is_junction", lambda: False)
     return (
         directory.is_dir()
         and not directory.name.startswith(".")
         and not directory.is_symlink()
-        and not is_junction()
+        and not directory.is_junction()
         and directory.resolve().parent == resolved_runs
     )
 
@@ -361,12 +486,14 @@ def _load_report_run(results_path: Path) -> ReportRun:
         directory=results_path.parent,
         results_path=results_path,
         report_path=results_path.with_name("report.html"),
-        results=results,
+        summary=report_summary(results),
         modified_ns=modified_ns,
     )
 
 
-def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
+def _load_summary_run(
+    summary_path: Path, results_path: Path, *, warnings: list[str] | None = None
+) -> ReportRun:
     try:
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
         if isinstance(payload, dict) and payload.get("schema_version") == "1.0":
@@ -374,6 +501,10 @@ def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
         summary = _parse_summary(payload)
         modified_ns = results_path.stat().st_mtime_ns
     except (KeyError, OSError, TypeError, ValueError):
+        if warnings is not None and len(warnings) < 20:
+            warnings.append(
+                f"Ignored invalid summary for report {results_path.parent.name!r}; reading results."
+            )
         return _load_report_run(results_path)
     return ReportRun(
         directory=results_path.parent,
@@ -387,6 +518,7 @@ def _load_summary_run(summary_path: Path, results_path: Path) -> ReportRun:
 def report_summary(results: Results) -> ReportSummary:
     return ReportSummary(
         id=results.run.id,
+        previous_run_id=results.run.previous_run_id,
         finished_at=results.run.finished_at,
         coverage_status=calculate_coverage_status(results),
         suite_scores=tuple(
@@ -395,18 +527,80 @@ def report_summary(results: Results) -> ReportSummary:
     )
 
 
-def report_summary_json(results: Results) -> str:
+def report_changes_summary(first: Results, second: Results) -> dict[str, object] | None:
+    """Summarize outcome changes and live run counts without retaining evidence or profiles."""
+    before, after = first.run.target, second.run.target
+    if (
+        first.run.redaction.applied
+        or second.run.redaction.applied
+        or first.run.id != second.run.previous_run_id
+        or first.run.id == second.run.id
+        or (before is not None and after is not None and before.database != after.database)
+    ):
+        return None
+    comparison = _compare_results(first, second)
+    changes = sorted(
+        [
+            *comparison.regressions,
+            *comparison.improvements,
+            *comparison.other_changes,
+            *comparison.added,
+        ],
+        key=lambda change: (change.suite_id, change.check_id),
+    )
+    groups = {
+        "new_failures": [
+            change
+            for change in changes
+            if change.after in {"fail", "errored"} and change.before not in {"fail", "errored"}
+        ],
+        "fixed_checks": [
+            change
+            for change in changes
+            if change.before in {"fail", "warn", "errored"} and change.after == "pass"
+        ],
+    }
+    counts = {}
+    if before is not None and after is not None:
+        for field in ("nodes", "relationships"):
+            old, new = getattr(before, field), getattr(after, field)
+            if old is not None and new is not None:
+                counts[field] = {"before": old, "after": new, "delta": new - old}
+    return {
+        "previous_run_id": first.run.id,
+        **{
+            key: [
+                {
+                    "suite_id": change.suite_id,
+                    "check_id": change.check_id,
+                    "before": change.before,
+                    "after": change.after,
+                }
+                for change in values[:SUMMARY_CHANGES_LIMIT]
+            ]
+            for key, values in groups.items()
+        },
+        "count_deltas": counts,
+        "dropped": {
+            key: max(0, len(values) - SUMMARY_CHANGES_LIMIT) for key, values in groups.items()
+        },
+    }
+
+
+def report_summary_json(results: Results, *, changes: dict[str, object] | None = None) -> str:
     summary = report_summary(results)
     return (
         json.dumps(
             {
                 "schema_version": "2.0",
                 "id": summary.id,
+                "previous_run_id": summary.previous_run_id,
                 "finished_at": summary.finished_at,
                 "coverage_status": summary.coverage_status.value,
                 "suite_scores": [
                     {"id": suite_id, "score": score} for suite_id, score in summary.suite_scores
                 ],
+                **({"changes": changes} if changes is not None else {}),
             },
             indent=2,
             sort_keys=True,
@@ -419,6 +613,9 @@ def _parse_summary(payload: object) -> ReportSummary:
     if not isinstance(payload, dict) or payload.get("schema_version") not in {"1.0", "2.0"}:
         raise ValueError("invalid report summary schema")
     run_id = payload["id"]
+    previous_run_id = payload.get("previous_run_id")
+    if previous_run_id is not None and not isinstance(previous_run_id, str):
+        raise ValueError("invalid previous run id")
     finished_at = payload["finished_at"]
     if not isinstance(run_id, str) or not isinstance(finished_at, str):
         raise ValueError("invalid report summary identity")
@@ -437,6 +634,7 @@ def _parse_summary(payload: object) -> ReportSummary:
     status_key = "status" if payload["schema_version"] == "1.0" else "coverage_status"
     return ReportSummary(
         id=run_id,
+        previous_run_id=previous_run_id,
         finished_at=finished_at,
         coverage_status=CoverageStatus(payload[status_key]),
         suite_scores=tuple(sorted(scores)),
@@ -494,10 +692,6 @@ def _format_row(values: tuple[str, ...], widths: list[int]) -> str:
 
 def _identity(check: CheckResult) -> tuple[str, str]:
     return (check.suite_id, check.id)
-
-
-def _display_identity(identity: tuple[str, str]) -> str:
-    return f"{identity[0]}::{identity[1]}"
 
 
 def _outcome_rank(check: CheckResult) -> int:

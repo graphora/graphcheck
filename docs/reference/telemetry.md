@@ -3,6 +3,12 @@
 GraphCheck telemetry is disabled by default. It starts only after a user explicitly runs
 `graphcheck telemetry enable`, and it can be stopped with `graphcheck telemetry disable`.
 Telemetry delivery is best-effort and never changes command output, artifacts, or exit behavior.
+Command shutdown allows up to 50 ms for delivery, then drops pending optional events. A daemon
+worker may still be finishing an in-flight request, but it cannot keep the process alive. Explicit
+adapter flushes can request a longer timeout; no durable spool or background service is created.
+
+For completeness batches, physical measurement cost is charged once to the first check; other
+members report only their own evidence-query costs. Check completion still counts every member.
 
 GraphCheck sends structural and aggregate product signals only. The PostHog project key is a
 public ingestion identifier; builds without that key store consent but do not send events.

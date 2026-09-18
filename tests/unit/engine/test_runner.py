@@ -144,6 +144,19 @@ class RichClient:
         raise AssertionError("rich C2 path must be preferred over legacy run_read")
 
 
+def test_missing_requested_suite_prevents_passing_a_partially_matched_selection():
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run(
+        [SuiteInput.from_yaml(PASSING_SUITE)],
+        selection_suites=["customer-quality", "missing-suite"],
+    )
+
+    assert result.checks[0].verdict is Verdict.PASS
+    assert result.run.run_status is RunStatus.PARTIAL
+    assert result.run.exit_code == 2
+    assert "missing-suite" in result.run.partial_reason
+
+
 class LazyCompetencyClient:
     def __init__(self, rows, columns=("node_element_id",)):
         self.rows = rows
@@ -294,6 +307,53 @@ def test_supplied_target_without_inventory_fails_before_checks():
     assert results.run.run_status is RunStatus.FAILED
     assert results.run.error is not None
     assert results.run.error.code == "engine.target_inventory_missing"
+
+
+@pytest.mark.parametrize("supplied", [False, True])
+@pytest.mark.parametrize("nodes,relationships", [(10_000_001, 0), (10_000_001, 9_500_001)])
+def test_oversize_target_stops_before_dispatch_with_actionable_diagnostic(
+    supplied, nodes, relationships
+):
+    target = TARGET.model_copy(update={"nodes": nodes, "relationships": relationships})
+    client = RichClient([], probe_result=target)
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target if supplied else None)
+    assert result.run.run_status is RunStatus.FAILED
+    assert result.run.exit_code == 3
+    assert result.run.error.code == "engine.graph_size_exceeded"
+    assert "smaller database or partition" in result.run.error.fix
+    assert not client.read_calls
+    assert not result.checks
+
+
+def test_supported_size_boundary_is_inclusive():
+    target = TARGET.model_copy(update={"nodes": 10_000_000, "relationships": 9_500_000})
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target)
+    assert result.run.run_status is RunStatus.COMPLETE
+    assert len(client.read_calls) == 1
+
+
+def test_relationship_count_is_workload_context_not_a_second_hard_limit():
+    target = TARGET.model_copy(update={"nodes": 100, "relationships": 10_000_001})
+    client = RichClient([_passing_conformance_result()])
+    result = Engine(client).run_yaml(PASSING_SUITE, target=target)
+    assert result.run.run_status is RunStatus.COMPLETE
+
+
+def test_benchmark_can_explicitly_bypass_size_guard_without_changing_workers_or_budget():
+    target = TARGET.model_copy(update={"nodes": 10_000_001, "relationships": 9_500_001})
+    client = RichClient([_passing_conformance_result()])
+    config = EngineConfig(enforce_size_limit=False)
+    result = Engine(client, config=config).run_yaml(PASSING_SUITE, target=target)
+    assert config.max_concurrency == 2
+    assert config.time_budget_s == 295
+    assert result.run.run_status is RunStatus.COMPLETE
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false"])
+def test_size_guard_setting_must_be_boolean(invalid):
+    with pytest.raises(ValueError, match="enforce_size_limit"):
+        EngineConfig(enforce_size_limit=invalid)
 
 
 def test_failing_conformance_collects_bounded_evidence_in_one_read_transaction():
@@ -740,7 +800,7 @@ def test_missing_drift_baseline_is_errored_before_query_execution():
     assert client.read_calls == []
 
 
-def test_present_measurement_from_partial_drift_baseline_can_complete():
+def test_present_measurement_from_partial_drift_baseline_retains_partial_status():
     client = RichClient(
         [
             RichResult(
@@ -774,9 +834,9 @@ def test_present_measurement_from_partial_drift_baseline_can_complete():
 
     results = _engine(client, baselines=baselines).run_yaml(DRIFT_SUITE, target=TARGET)
 
-    assert results.run.run_status is RunStatus.COMPLETE
-    assert results.run.partial_reason is None
-    assert results.run.exit_code == 0
+    assert results.run.run_status is RunStatus.PARTIAL
+    assert "partial baseline" in results.run.partial_reason
+    assert results.run.exit_code == 2
     assert results.checks[0].verdict is Verdict.PASS
     assert results.checks[0].measured["baseline"] == 100.0
     assert results.checks[0].measured["current"] == 100.0
@@ -1083,10 +1143,11 @@ competency:
 
     assert maximum_result.verdict is Verdict.FAIL
     assert duplicate_result.verdict is Verdict.FAIL
-    assert maximum.yielded == 3
+    assert maximum.yielded == 1
     assert duplicate.yielded == 2
     assert "rows" not in maximum_result.measured
-    assert {"unique", "contains", "equals"}.isdisjoint(maximum_result.measured)
+    assert {"unique", "contains"}.isdisjoint(maximum_result.measured)
+    assert maximum_result.measured["equals"] is False
     assert duplicate_result.measured["unique"] is False
 
 
@@ -1143,7 +1204,7 @@ competency:
   - id: equals
     question: Does the full result equal the pinned bag?
     query: MATCH (n) RETURN elementId(n) AS node_element_id
-    expect: {equals: [n-1]}
+    expect: {equals: [n-0, n-1, n-2, n-3]}
 """
 
     result = (
@@ -1158,3 +1219,87 @@ competency:
     assert result.verdict is Verdict.ERRORED
     assert result.error.code == "engine.result_limit_exceeded"
     assert client.yielded == 3
+
+
+@pytest.mark.parametrize("concurrency", [1, 2])
+@pytest.mark.parametrize(
+    "severity,current,exit_code", [("error", 100, 2), ("error", 50, 1), ("warn", 50, 2)]
+)
+def test_partial_baseline_retains_all_drift_verdicts_and_safe_telemetry(
+    concurrency, severity, current, exit_code
+):
+    from graphcheck.telemetry.collector import TelemetryCollector
+    from graphcheck.telemetry.events import PartialReasonCode
+
+    class Client:
+        def run_read_result(self, query, params, **kwargs):
+            row = {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": current,
+                "population": current,
+                "evidence": [],
+            }
+            return QueryResult([row], tuple(row), ())
+
+    suite = DRIFT_SUITE.replace("baseline: latest", "baseline: private-baseline")
+    suite += suite[suite.index("  - id:") :].replace("customer-count", "second-count")
+    suite = suite.replace("    metric:", f"    severity: {severity}\n    metric:")
+    collector = TelemetryCollector()
+    result = _engine(
+        Client(),
+        baselines={"private-baseline": {"status": "partial", "node_count": 100}},
+        config=EngineConfig(max_concurrency=concurrency),
+        event_sink=collector,
+    ).run_yaml(suite, target=TARGET)
+    assert result.run.run_status is RunStatus.PARTIAL
+    assert result.run.exit_code == exit_code
+    assert result.run.partial_reason.count("partial baseline") == 2
+    assert all(check.measured["baseline"] == 100 for check in result.checks)
+    assert all(
+        check.verdict
+        is (
+            Verdict.PASS
+            if current == 100
+            else Verdict.FAIL
+            if severity == "error"
+            else Verdict.WARN
+        )
+        for check in result.checks
+    )
+    assert collector.events[-1].partial_reason_codes == (PartialReasonCode.PARTIAL_BASELINE,)
+    assert "private-baseline" not in repr(collector.posthog_events())
+
+
+def test_partial_baseline_reason_survives_later_query_failure():
+    client = RichClient([GraphCheckError("query.failed", "injected failure", "retry")])
+    result = _engine(
+        client, baselines={"latest": {"status": "partial", "node_count": 100}}
+    ).run_yaml(DRIFT_SUITE, target=TARGET)
+    assert result.run.run_status is RunStatus.PARTIAL
+    assert "partial baseline" in result.run.partial_reason
+    assert result.checks[0].verdict is Verdict.ERRORED
+    assert result.run.exit_code == 1
+
+
+def test_reused_engine_gets_a_fresh_directory_baseline_view(tmp_path):
+    from graphcheck.engine.baseline import DirectoryBaselineProvider
+
+    class Client:
+        def run_read_result(self, query, params, **kwargs):
+            row = {
+                "schema_ok": True,
+                "missing_labels": [],
+                "missing_relationship_types": [],
+                "current": 100,
+                "population": 100,
+                "evidence": [],
+            }
+            return QueryResult([row], tuple(row), ())
+
+    (tmp_path / "a.json").write_text('{"node_count": 100}', encoding="utf-8")
+    engine = _engine(Client(), baselines=DirectoryBaselineProvider(tmp_path))
+    assert engine.run_yaml(DRIFT_SUITE, target=TARGET).checks[0].measured["baseline"] == 100
+    (tmp_path / "b.json").write_text('{"node_count": 200}', encoding="utf-8")
+    assert engine.run_yaml(DRIFT_SUITE, target=TARGET).checks[0].measured["baseline"] == 200

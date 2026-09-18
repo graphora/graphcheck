@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
 from graphcheck.contracts.results import EvidenceElement
@@ -45,11 +46,7 @@ class MappingBaselineProvider:
         if raw is None:
             return None
         if hasattr(raw, "model_dump"):
-            try:
-                raw = raw.model_dump(mode="python", by_alias=True)
-            except TypeError:
-                # Lightweight provider doubles may implement only the Pydantic v1-style subset.
-                raw = raw.model_dump(mode="python")
+            raw = raw.model_dump(mode="python", by_alias=True)
         if isinstance(raw, (int, float)):
             return _baseline_value(raw)
         if not isinstance(raw, Mapping):
@@ -79,28 +76,40 @@ class DirectoryBaselineProvider:
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
+        self._lock = Lock()
+        self._paths: dict[str, Path | None] = {}
+        self._sources: dict[Path, Mapping[str, object] | GraphCheckError] = {}
+
+    def fresh(self) -> DirectoryBaselineProvider:
+        """Return an independent view for a new engine run."""
+        return DirectoryBaselineProvider(self.directory)
 
     def resolve(
         self, reference: str, metric: str, target: Mapping[str, object]
     ) -> BaselineValue | None:
-        path = self._path_for(reference)
-        if path is None:
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise GraphCheckError(
-                "engine.baseline_invalid",
-                f"Baseline {path.name!r} could not be loaded: {exc}",
-                "Regenerate the baseline with `graphcheck profile` or select another snapshot.",
-            ) from exc
-        if not isinstance(raw, Mapping):
-            raise GraphCheckError(
-                "engine.baseline_invalid",
-                f"Baseline {path.name!r} must contain a JSON object.",
-                "Regenerate the baseline with a compatible C4 profiler.",
-            )
-        return MappingBaselineProvider({reference: raw}).resolve(reference, metric, target)
+        with self._lock:
+            if reference not in self._paths:
+                self._paths[reference] = self._path_for(reference)
+            path = self._paths[reference]
+            if path is None:
+                return None
+            if path not in self._sources:
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(raw, Mapping):
+                        raise ValueError("snapshot must contain a JSON object")
+                    self._sources[path] = raw
+                except (OSError, ValueError) as exc:
+                    self._sources[path] = GraphCheckError(
+                        "engine.baseline_invalid",
+                        f"Baseline {path.name!r} could not be loaded: {exc}",
+                        "Regenerate the baseline with `graphcheck profile` "
+                        "or select another snapshot.",
+                    )
+            source = self._sources[path]
+            if isinstance(source, GraphCheckError):
+                raise source
+            return MappingBaselineProvider({reference: source}).resolve(reference, metric, target)
 
     def _path_for(self, reference: str) -> Path | None:
         if not self.directory.is_dir():
@@ -153,6 +162,8 @@ def _resolve_candidate(
         candidate = statistics[metric]
         if metric == "property_coverage" and isinstance(candidate, list):
             return _property_coverage(candidate, target)
+        if metric == "degree_distribution" and isinstance(candidate, list):
+            return _degree_distribution(candidate, target)
         if metric == "node_count" and target.get("label") is not None:
             label_count = _label_count(raw, str(target["label"]))
             if label_count is not None:
@@ -169,6 +180,8 @@ def _resolve_candidate(
         return _label_count(raw, str(target["label"]))
     if metric == "relationship_count" and target.get("type") is not None:
         return _relationship_count(raw, str(target["type"]))
+    if metric == "schema_inventory":
+        return _schema_inventory_value(raw)
     return None
 
 
@@ -211,6 +224,65 @@ def _relationship_count(raw: Mapping[str, object], rel_type: str) -> object | No
     for item in relationships:
         if isinstance(item, Mapping) and item.get("name") == rel_type:
             return item.get("count")
+    return None
+
+
+def _escape_schema_component(value: str) -> str:
+    # Matches the live query's escaping (compiler._compile_schema_inventory) so a label
+    # or property name containing a literal "." can never collide with a different
+    # owner/property split that happens to produce the same joined string.
+    return value.replace("\\", "\\\\").replace(".", "\\.")
+
+
+def _schema_inventory_value(raw: Mapping[str, object]) -> dict[str, object] | None:
+    schema = raw.get("schema", raw.get("graph_schema"))
+    if not isinstance(schema, Mapping):
+        return None
+    labels = schema.get("labels")
+    relationship_types = schema.get("relationship_types")
+    if not isinstance(labels, list) or not isinstance(relationship_types, list):
+        return None
+    evidence = [
+        {"kind": "aggregate", "id": f"label:{item['name']}"}
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    ]
+    evidence.extend(
+        {"kind": "aggregate", "id": f"relationship_type:{item['name']}"}
+        for item in relationship_types
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    )
+    evidence.extend(
+        {
+            "kind": "aggregate",
+            "id": (
+                f"property:{_escape_schema_component(item['name'])}."
+                f"{_escape_schema_component(prop['name'])}"
+            ),
+        }
+        for item in labels
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+        for prop in (item.get("properties") or [])
+        if isinstance(prop, Mapping) and isinstance(prop.get("name"), str)
+    )
+    return {"value": 0, "evidence": evidence}
+
+
+def _degree_distribution(values: list[object], target: Mapping[str, object]) -> object | None:
+    label = target.get("label")
+    rel_type = target.get("type")
+    quantile = target.get("quantile")
+    direction = target.get("direction", "both")
+    for item in values:
+        if not isinstance(item, Mapping):
+            continue
+        if (
+            item.get("label") == label
+            and item.get("type") == rel_type
+            and item.get("quantile") == quantile
+            and item.get("direction", "both") == direction
+        ):
+            return item.get("value")
     return None
 
 

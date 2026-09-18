@@ -87,6 +87,65 @@
       "title": "DegreeDistribution",
       "type": "object"
     },
+    "DegreeDistributionCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "quantile": {
+          "enum": [
+            "p50",
+            "p95",
+            "max"
+          ],
+          "title": "Quantile",
+          "type": "string"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "quantile",
+        "direction",
+        "value"
+      ],
+      "title": "DegreeDistributionCoverage",
+      "type": "object"
+    },
     "GraphSchema": {
       "additionalProperties": false,
       "properties": {
@@ -131,6 +190,21 @@
     "IndexProfile": {
       "additionalProperties": false,
       "properties": {
+        "declared_order": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Declared Order"
+        },
         "labels_or_types": {
           "items": {
             "type": "string"
@@ -243,6 +317,14 @@
     "ProfileStatistics": {
       "additionalProperties": false,
       "properties": {
+        "degree_distribution": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DegreeDistributionCoverage"
+          },
+          "title": "Degree Distribution",
+          "type": "array"
+        },
         "node_count": {
           "minimum": 0,
           "title": "Node Count",
@@ -390,7 +472,10 @@
       "$ref": "#/$defs/GraphSchema"
     },
     "schema_version": {
-      "const": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

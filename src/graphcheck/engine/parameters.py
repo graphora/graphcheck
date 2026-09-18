@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Protocol
 
+from graphcheck.engine.executor import execute_query
 from graphcheck.engine.identifiers import node_pattern, property_access
 from graphcheck.errors import GraphCheckError
 
@@ -13,7 +12,6 @@ class ParameterTokenResolver(Protocol):
     def resolve(self, token: str, client: object, *, timeout_s: float | None) -> object: ...
 
 
-@dataclass(frozen=True)
 class GraphTokenResolver:
     """Resolve the graph-relative tokens frozen by SPEC-02."""
 
@@ -35,7 +33,7 @@ class GraphTokenResolver:
             f"             toLower(toString({status})) = 'active', true) "
             f"RETURN {customer_id} AS value ORDER BY toString({customer_id}) LIMIT 1"
         )
-        rows = _run_rows(client, query, timeout_s=timeout_s)
+        rows = execute_query(client, query, timeout_s=timeout_s).rows
         if not rows or rows[0].get("value") is None:
             raise GraphCheckError(
                 "engine.parameter_token_unresolved",
@@ -69,31 +67,3 @@ def resolve_parameters(
         else:
             resolved[key] = value
     return resolved
-
-
-def _run_rows(client: object, query: str, *, timeout_s: float | None) -> list[dict]:
-    rich = getattr(client, "run_read_result", None)
-    if callable(rich):
-        kwargs = {"timeout_s": timeout_s} if _accepts_timeout(rich) else {}
-        result = rich(query, {}, **kwargs)
-        return list(result.rows)
-    run_read = getattr(client, "run_read", None)
-    if not callable(run_read):
-        raise GraphCheckError(
-            "engine.connector_invalid",
-            "The connector does not expose the SPEC-03 run_read method.",
-            "Pass a configured Neo4jClient or another read-only C2-compatible connector.",
-        )
-    kwargs = {"timeout_s": timeout_s} if _accepts_timeout(run_read) else {}
-    return list(run_read(query, {}, **kwargs))
-
-
-def _accepts_timeout(method: object) -> bool:
-    try:
-        parameters = inspect.signature(method).parameters.values()  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.name == "timeout_s" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )

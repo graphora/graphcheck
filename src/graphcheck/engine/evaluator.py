@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -48,8 +49,11 @@ class CompetencyConsumption:
         self._columns: list[str] | None = None
         self._seen_rows: set[object] | None = set() if self.expected.unique is not None else None
         self._duplicate_found = False
+        self._equals_remaining = (
+            _bag(self.expected.equals) if self.expected.equals is not None else None
+        )
         self._contains_remaining = (
-            [_freeze(value) for value in self.expected.contains]
+            {_freeze(value) for value in self.expected.contains}
             if self.expected.contains is not None
             else None
         )
@@ -68,9 +72,12 @@ class CompetencyConsumption:
                 failed = True
         if self._contains_remaining is not None:
             actual = _freeze(_regression_value(row, self._columns))
-            self._contains_remaining = [
-                expected for expected in self._contains_remaining if expected != actual
-            ]
+            self._contains_remaining.discard(actual)
+        if self._equals_remaining is not None:
+            actual = _freeze(_regression_value(row, self._columns))
+            if self._equals_remaining[actual] <= 0:
+                failed = True
+            self._equals_remaining[actual] -= 1
         self.decisive = failed or self._all_assertions_pass_early()
         return self.decisive
 
@@ -158,6 +165,18 @@ class VerdictEvaluator:
 
         if spec.check in {"pii_name_match", "pii_value_match"}:
             return self._pii(compiled, row, spec.check)
+        if spec.check == "label_explosion":
+            return self._label_explosion(compiled, row)
+        if spec.check == "near_duplicate_entities":
+            return self._near_duplicate_entities(compiled, row)
+        if spec.check == "embedding_consistency":
+            return self._embedding_consistency(compiled, row)
+        if spec.check in {
+            "orphan_chunks",
+            "entity_without_provenance",
+            "dangling_extraction_relationships",
+        }:
+            return self._graphrag_provenance(compiled, row)
 
         if spec.check == "completeness":
             coverage = _number(row, "coverage", compiled)
@@ -165,22 +184,25 @@ class VerdictEvaluator:
             conforming = _integer(row, "conforming_count", compiled)
             violations = _integer(row, "violation_count", compiled)
             threshold = float(spec.with_.get("threshold", 1.0))
-            expected_coverage = 1.0 if population == 0 else conforming / population
-            if (
-                conforming + violations != population
-                or not 0.0 <= coverage <= 1.0
-                or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
-            ):
-                raise _bad_result(
-                    compiled,
-                    "population, conforming_count, violation_count, and coverage disagree",
-                )
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
             measured: dict[str, object] = {
                 "coverage": coverage,
                 "population": population,
                 "conforming": conforming,
                 "violations": violations,
             }
+            passed = coverage >= threshold
+        elif spec.check == "chunk_coverage":
+            violations = _integer(row, "violation_count", compiled)
+            population = _integer(row, "population", compiled, default=violations)
+            conforming = _integer(row, "conforming_count", compiled)
+            coverage = _number(row, "coverage", compiled)
+            threshold = float(spec.with_.get("threshold", 0.95))
+            _validate_coverage_summary(compiled, population, conforming, violations, coverage)
+            measured = {"violations": violations, "population": population}
+            for key, value in row.items():
+                if key not in _SUMMARY_INTERNAL_FIELDS and _is_measurement(value):
+                    measured.setdefault(key, value)
             passed = coverage >= threshold
         else:
             violations = _integer(row, "violation_count", compiled)
@@ -215,6 +237,185 @@ class VerdictEvaluator:
             compiled,
             explicit=row.get("evidence", []),
             total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence, estimate=estimate)
+
+    def _embedding_consistency(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        population = _integer(row, "population", compiled)
+        violations = _integer(row, "violation_count", compiled)
+        dimension = row.get("expected_dimension")
+        if violations > population or (
+            dimension is not None and (type(dimension) is not int or dimension <= 0)
+        ):
+            raise _bad_result(compiled, "invalid embedding count or reference dimension")
+        measured = {
+            "population": population,
+            "violations": violations,
+            "expected_dimension": dimension,
+        }
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records or len(records) > compiled.evidence_cap:
+            raise _bad_result(compiled, "embedding evidence must contain bounded findings")
+        for record in records:
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("node_id"), str)
+                or not record["node_id"]
+                or record.get("defect")
+                not in {"missing", "invalid_type", "empty", "nan", "zero", "wrong_dimension"}
+                or "dimension" not in record
+                or (
+                    record["dimension"] is not None
+                    and (type(record["dimension"]) is not int or record["dimension"] < 0)
+                )
+            ):
+                raise _bad_result(
+                    compiled, "embedding finding omitted its id, dimension, or defect"
+                )
+        findings = [
+            {key: record[key] for key in ("node_id", "dimension", "defect")} for record in records
+        ]
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} violation(s); reference dimension {dimension}. "
+            f"Findings: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _label_explosion(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        violations = _integer(row, "violation_count", compiled)
+        measured: dict[str, object] = {"violations": violations, "population": violations}
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records:
+            raise _bad_result(compiled, "label explosion evidence must contain findings")
+        findings = [
+            record["finding"]
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("finding"), dict)
+        ]
+        if len(findings) != len(records):
+            raise _bad_result(compiled, "label explosion finding omitted its name and count")
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} near-singleton(s). "
+            f"{json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _graphrag_provenance(self, compiled: CompiledCheck, row: Mapping[str, Any]) -> Evaluation:
+        violations, population = (
+            _integer(row, "violation_count", compiled),
+            _integer(row, "population", compiled),
+        )
+        if violations > population:
+            raise _bad_result(compiled, "violation count exceeds population")
+        measured = {"violations": violations, "population": population}
+        if not violations:
+            return Evaluation(True, measured)
+        records = row.get("evidence")
+        if not isinstance(records, list) or not records or len(records) > compiled.evidence_cap:
+            raise _bad_result(compiled, "provenance evidence must contain bounded findings")
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("missing_path"), str):
+                raise _bad_result(compiled, "provenance finding omitted its missing path")
+            if any(
+                not isinstance(record.get(field), str) or not record[field]
+                for field in compiled.evidence_id_fields
+            ):
+                raise _bad_result(compiled, "provenance finding omitted an element id")
+        findings = [
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"pointer", "source", "target"}
+            }
+            for record in records
+        ]
+        measured["findings"] = findings
+        evidence = _build_evidence(
+            f"{compiled.name}: {violations} violation(s). Missing paths: "
+            f"{json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            rows=records,
+            total_count=violations,
+        )
+        return Evaluation(False, measured, evidence=evidence)
+
+    def _near_duplicate_entities(
+        self, compiled: CompiledCheck, row: Mapping[str, Any]
+    ) -> Evaluation:
+        from graphcheck.engine.graphrag_pack import MAX_NAME_LENGTH, duplicate_groups
+
+        population, sample_size = (
+            _integer(row, "population", compiled),
+            _integer(row, "sample_size", compiled),
+        )
+        candidates = row.get("candidates")
+        if (
+            sample_size > population
+            or (population and not sample_size)
+            or sample_size > int(compiled.params["sample_size"])
+        ):
+            raise _bad_result(compiled, "invalid duplicate sample size")
+        if not isinstance(candidates, list) or len(candidates) != sample_size:
+            raise _bad_result(compiled, "duplicate candidate count disagrees with sample size")
+        seen = set()
+        for candidate in candidates:
+            if (
+                not isinstance(candidate, dict)
+                or not isinstance(candidate.get("name"), str)
+                or len(candidate["name"]) > MAX_NAME_LENGTH
+            ):
+                raise _bad_result(compiled, "invalid duplicate name candidate")
+            pointer = _pointer_from_value(candidate.get("pointer"))
+            if (
+                pointer is None
+                or pointer.kind != "node"
+                or candidate.get("node_id") != pointer.id
+                or pointer.id in seen
+            ):
+                raise _bad_result(
+                    compiled, "duplicate candidate has a missing or repeated element id"
+                )
+            seen.add(pointer.id)
+        groups = duplicate_groups(candidates, float(compiled.expected["threshold"]))
+        ids = {node_id for group in groups for node_id in group["node_ids"]}
+        # Pair discovery depends on sampling both endpoints: a binomial Wilson CI is invalid.
+        estimate = (
+            Estimate(sample_size=sample_size, population=population, confidence=0.95, ci=None)
+            if sample_size < population
+            else False
+        )
+        findings = groups[: compiled.evidence_cap]
+        measured = {
+            "population": population,
+            "sample_size": sample_size,
+            "violations": len(ids),
+            "duplicate_groups": len(groups),
+            "findings": findings,
+            "findings_truncated": len(findings) < len(groups),
+            "completeness_notice": "Only pairs within the eligible name sample were compared; "
+            "no population duplicate rate or confidence interval is inferred.",
+        }
+        if not groups:
+            return Evaluation(True, measured, estimate=estimate)
+        pointers = [candidate["pointer"] for candidate in candidates if candidate["node_id"] in ids]
+        evidence = _build_evidence(
+            f"{compiled.name}; sample_size={sample_size}, population={population}. "
+            f"Duplicate groups: {json.dumps(findings, ensure_ascii=False)}",
+            compiled,
+            explicit=pointers,
+            total_count=len(ids),
         )
         return Evaluation(False, measured, evidence=evidence, estimate=estimate)
 
@@ -381,22 +582,26 @@ class VerdictEvaluator:
 
         actual_values = (
             _regression_values(rows, actual_columns)
-            if expected.contains is not None or (expected.equals is not None and complete)
+            if expected.contains is not None or expected.equals is not None
             else []
         )
         if expected.contains is not None:
-            contains_ok = all(_contains(actual_values, value) for value in expected.contains)
+            frozen_values = {_freeze(value) for value in actual_values}
+            contains_ok = all(_freeze(value) in frozen_values for value in expected.contains)
             if complete or contains_ok:
                 measured["contains"] = contains_ok
             if complete and not contains_ok:
                 failures.append("result does not contain every pinned value")
-        if expected.equals is not None and complete:
+        if expected.equals is not None:
             # Neo4j does not guarantee row order without ORDER BY. `equals` therefore compares
             # the complete result as a duplicate-preserving bag, avoiding graph-stable verdicts
             # that change only because the server returned rows in another order.
-            equals_ok = _bag(actual_values) == _bag(expected.equals)
-            measured["equals"] = equals_ok
-            if not equals_ok:
+            actual_bag, expected_bag = _bag(actual_values), _bag(expected.equals)
+            equals_failed = any(count > expected_bag[value] for value, count in actual_bag.items())
+            equals_ok = actual_bag == expected_bag
+            if complete or equals_failed:
+                measured["equals"] = equals_ok
+            if equals_failed or (complete and not equals_ok):
                 failures.append("result does not equal the pinned values")
 
         if not failures:
@@ -428,12 +633,33 @@ class VerdictEvaluator:
             )
         row = _single_summary_row(compiled, rows)
         _require_schema(compiled, row, graph_empty=False)
-        current = _number(row, "current", compiled)
-        previous = baseline.value
-        if spec.metric == "property_coverage" and (
-            not 0.0 <= current <= 100.0 or not 0.0 <= previous <= 100.0
-        ):
-            raise _bad_result(compiled, "property_coverage values must use percent units [0, 100]")
+        if spec.metric == "schema_inventory":
+            current, previous, explicit, total_count = _schema_inventory_diff(row, baseline)
+            is_aggregate_scope = True
+        else:
+            current = _number(row, "current", compiled)
+            previous = baseline.value
+            if spec.metric == "property_coverage" and (
+                not 0.0 <= current <= 100.0 or not 0.0 <= previous <= 100.0
+            ):
+                raise _bad_result(
+                    compiled, "property_coverage values must use percent units [0, 100]"
+                )
+            explicit = [*row.get("evidence", []), *baseline.evidence]
+            total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
+            # degree_distribution's p50/p95 targets describe an aggregate scope, same as
+            # node_count/relationship_count; only its max quantile names a real offending
+            # node, so it is excluded here (see #124).
+            is_aggregate_scope = spec.metric in {"node_count", "relationship_count"} or (
+                spec.metric == "degree_distribution" and spec.target.get("quantile") != "max"
+            )
+            if is_aggregate_scope:
+                # Counts describe a measurement scope, not a set of currently offending elements.
+                # Keep any baseline/current pointers as supplemental context, but put the
+                # honest scope
+                # first so a small evidence cap can never replace it with an arbitrary survivor.
+                explicit.insert(0, _aggregate_count_drift_pointer(spec))
+                total_count = 1
         delta = current - previous
         percent = None if previous == 0 else 100.0 * delta / abs(previous)
         measured: dict[str, object] = {
@@ -446,21 +672,13 @@ class VerdictEvaluator:
         failures = _drift_failures(current, previous, spec.tolerance)
         if not failures:
             return Evaluation(True, measured)
-        explicit = [*row.get("evidence", []), *baseline.evidence]
-        total_count = max(1, _coerce_nonnegative_int(row.get("population", 0)))
-        if spec.metric in {"node_count", "relationship_count"}:
-            # Counts describe a measurement scope, not a set of currently offending elements.
-            # Keep any baseline/current pointers as supplemental context, but put the honest scope
-            # first so a small evidence cap can never replace it with an arbitrary survivor.
-            explicit.insert(0, _aggregate_count_drift_pointer(spec))
-            total_count = 1
         message = f"{compiled.name}: " + "; ".join(failures)
         evidence = _build_evidence(
             message,
             compiled,
             explicit=explicit,
             total_count=total_count,
-            allow_aggregate=spec.metric in {"node_count", "relationship_count"},
+            allow_aggregate=is_aggregate_scope,
         )
         return Evaluation(False, measured, evidence=evidence)
 
@@ -560,6 +778,21 @@ def _bad_result(compiled: CompiledCheck, detail: str) -> GraphCheckError:
         f"Check {compiled.check.id!r} cannot be evaluated: {detail}.",
         "Fix the compiler/query so it returns the documented C1 result shape.",
     )
+
+
+def _validate_coverage_summary(
+    compiled: CompiledCheck, population: int, conforming: int, violations: int, coverage: float
+) -> None:
+    expected_coverage = 1.0 if population == 0 else conforming / population
+    if (
+        conforming + violations != population
+        or not 0.0 <= coverage <= 1.0
+        or not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        raise _bad_result(
+            compiled,
+            "population, conforming_count, violation_count, and coverage disagree",
+        )
 
 
 def _pii_matches(
@@ -670,7 +903,12 @@ def _columns_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _freeze(value: object) -> object:
-    pointer = _pointer_from_value(value)
+    # Ordinary Cypher maps compare by value, even when their fields resemble evidence pointers.
+    pointer = (
+        None
+        if isinstance(value, Mapping) and not hasattr(value, "element_id")
+        else _pointer_from_value(value)
+    )
     if pointer is not None:
         return (pointer.kind, pointer.id)
     temporal = _freeze_temporal(value)
@@ -752,11 +990,6 @@ def _regression_value(row: Mapping[str, Any], columns: Sequence[str]) -> object:
     return row.get(columns[0]) if len(columns) == 1 else {key: row.get(key) for key in columns}
 
 
-def _contains(values: Sequence[object], expected: object) -> bool:
-    frozen_expected = _freeze(expected)
-    return any(_freeze(value) == frozen_expected for value in values)
-
-
 def _bag(values: Sequence[object]) -> Counter:
     return Counter(_freeze(value) for value in values)
 
@@ -800,8 +1033,11 @@ def _build_evidence(
     if not unique:
         raise GraphCheckError(
             "engine.evidence_missing",
-            f"Check {compiled.check.id!r} failed but returned no evidence pointer.",
-            "Project graph entities or `*_id` columns so every finding identifies its source.",
+            f"Check {compiled.check.id!r} failed but returned no evidence pointer. {message}",
+            "Return a graph entity or elementId() AS node_element_id, rel_element_id, or "
+            "relationship_element_id. Business IDs and arbitrary *_id aliases are not evidence. "
+            "For count assertions, return graph entities and assert rows, or retain a real "
+            "graph witness for the failing aggregate.",
         )
     total = max(total_count, unique_count)
     return Evidence(
@@ -873,7 +1109,12 @@ def _pointers_from_ids(values: Mapping[str, object]) -> list[EvidenceElement]:
 def _pointer_from_value(value: object) -> EvidenceElement | None:
     if isinstance(value, EvidenceElement):
         return value
-    if isinstance(value, Mapping) and value.get("kind") in {"node", "rel"}:
+    if (
+        isinstance(value, Mapping)
+        and getattr(value, "element_id", None) is None
+        and isinstance(value.get("kind"), str)
+        and value["kind"] in {"node", "rel"}
+    ):
         identifier = value.get("id")
         if identifier is None:
             return None
@@ -909,6 +1150,34 @@ def _aggregate_count_drift_pointer(spec: DriftCheck) -> EvidenceElement:
         labels=[str(label)] if label is not None else None,
         type=str(rel_type) if rel_type is not None else None,
     )
+
+
+def _schema_inventory_diff(
+    row: Mapping[str, Any], baseline: BaselineValue
+) -> tuple[float, float, list[EvidenceElement], int]:
+    def _live(key: str) -> set[str]:
+        return {str(name) for name in (row.get(key) or [])}
+
+    def _baseline(prefix: str) -> set[str]:
+        return {
+            pointer.id.split(":", 1)[1]
+            for pointer in baseline.evidence
+            if pointer.kind == "aggregate" and pointer.id.startswith(prefix)
+        }
+
+    dimensions = (
+        ("label", _live("labels"), _baseline("label:")),
+        ("relationship_type", _live("relationship_types"), _baseline("relationship_type:")),
+        ("property", _live("properties"), _baseline("property:")),
+    )
+    explicit: list[EvidenceElement] = []
+    for name, current, previous in dimensions:
+        for item in sorted(current - previous):
+            explicit.append(EvidenceElement(kind="aggregate", id=f"{name}_added:{item}"))
+        for item in sorted(previous - current):
+            explicit.append(EvidenceElement(kind="aggregate", id=f"{name}_removed:{item}"))
+    total_count = len(explicit)
+    return float(total_count), 0.0, explicit, total_count
 
 
 def _drift_failures(current: float, baseline: float, tolerance: Mapping[str, object]) -> list[str]:

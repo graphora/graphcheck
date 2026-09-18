@@ -177,6 +177,14 @@ class FakeNeo4jClient:
             "RETURN n[$property] AS value LIMIT 1"
         ):
             return [{"value": 1 if params == {"property": "id"} else "Ada"}]
+        if query.startswith("MATCH (n:") and "edge_count" in query:
+            return [{"relType": "OWNS", "edge_count": 2}]
+        if query.startswith("MATCH (n:") and "OPTIONAL MATCH" in query:
+            return [{"relType": None, "degree": 0, "nodes_at_degree": 1}]
+        if query.startswith("MATCH (n:") and "nodes_at_degree" in query:
+            return [{"degree": 1, "nodes_at_degree": 1}]
+        if query.startswith("MATCH (n)") and "nodes_at_degree" in query:
+            return [{"degree": 1, "nodes_at_degree": 1}]
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -595,7 +603,8 @@ def test_profile_batches_inventory_and_reuses_it_for_coverage() -> None:
     baseline = profile(cast(Neo4jClient, client))
 
     assert baseline.status is ProfileStatus.COMPLETE
-    assert len(client.calls) == 8
+    # 8 pre-existing + 2 pair-ranking + 16 from degree_distribution collection
+    assert len(client.calls) == 26
     assert sum(query.startswith("CALL {\n  MATCH (n:") for query, _ in client.calls) == 2
     assert sum(query.startswith("CALL {\n  MATCH ()-[r:") for query, _ in client.calls) == 2
     assert not any("WHERE n[$property]" in query for query, _ in client.calls)
@@ -674,7 +683,7 @@ def test_profile_returns_valid_partial_baseline_when_wall_clock_budget_is_exceed
     assert baseline.graph_schema.relationship_types == []
     assert baseline.graph_schema.constraints == []
     assert baseline.graph_schema.indexes == []
-    assert baseline.statistics.property_coverage == []
+    assert len(baseline.statistics.property_coverage) == 3
     assert baseline.fingerprint == profile_fingerprint(
         baseline.graph_schema,
         baseline.statistics,
@@ -840,7 +849,8 @@ def _assert_collected_profile_sections(
         baseline.statistics.property_coverage,
     )
     assert [bool(section) for section in sections] == [
-        index < completed_sections for index in range(len(sections))
+        (completed_sections > 0 if index == 4 else index < completed_sections)
+        for index in range(len(sections))
     ]
 
 
@@ -887,3 +897,131 @@ def test_merged_property_coverage_is_canonically_sorted() -> None:
 
     identities = [(item.owner, item.owner_name, item.property) for item in coverage]
     assert identities == sorted(identities)
+
+
+@pytest.mark.parametrize("stage", ["label", "relationship", "constraints", "indexes"])
+def test_partial_profiles_retain_successful_inventory_and_coverage(stage):
+    class Client(FakeNeo4jClient):
+        def run_read(self, query, params=None, **kwargs):
+            if (
+                (stage == "label" and query.startswith("CALL {\n  MATCH (n:`Customer`)"))
+                or (
+                    stage == "relationship"
+                    and query.startswith("CALL {\n  MATCH ()-[r:`OWNS`]->()")
+                )
+                or (stage == "constraints" and query == "SHOW CONSTRAINTS")
+                or (stage == "indexes" and query == "SHOW INDEXES")
+            ):
+                raise GraphCheckError("query.failed", "injected inventory failure", "retry")
+            result = super().run_read(query, params, **kwargs)
+            if query.startswith("CALL {\n  MATCH ()-[r:`HAS_ACCOUNT`]->()"):
+                result[0]["properties"] = [{"name": "since", "populated_count": 1}]
+            return result
+
+    baseline = profile(Client())
+    assert baseline.status is ProfileStatus.PARTIAL
+    assert baseline.graph_schema.labels[0].name == "Account"
+    coverage = {
+        (item.owner_name, item.property): item.coverage
+        for item in baseline.statistics.property_coverage
+    }
+    assert coverage["Account", "id"] == 100
+    if stage != "label":
+        assert baseline.graph_schema.relationship_types[0].name == "HAS_ACCOUNT"
+        assert coverage["HAS_ACCOUNT", "since"] == 50
+    if stage in {"constraints", "indexes"}:
+        assert len(baseline.graph_schema.relationship_types) == 2
+        assert coverage["OWNS", "role"] == 60
+    BaselineProfile.model_validate_json(baseline.model_dump_json(by_alias=True))
+
+
+def test_percentile_from_histogram_matches_known_values():
+    histogram = [
+        (0, 3),
+        (1, 459),
+        (2, 1117),
+        (3, 694),
+        (4, 113),
+        (5, 16),
+        (6, 32),
+        (7, 24),
+        (8, 6),
+        (16, 7),
+        (17, 20),
+        (18, 12),
+        (19, 1),
+    ]
+    assert profiler_module._percentile_from_histogram(histogram, 0.5) == 2.0
+    assert profiler_module._percentile_from_histogram(histogram, 0.95) == 4.0
+
+
+def test_percentile_from_histogram_empty_returns_zero():
+    assert profiler_module._percentile_from_histogram([], 0.5) == 0.0
+
+
+class _CappingFakeClient:
+    def __init__(self):
+        self.histogram_queries = 0
+        self.histogram_query_allowed_types = []
+
+    def run_read(self, query, params=None, *, timeout_s=None):
+        if "edge_count" in query:
+            return [
+                {"relType": "TypeA", "edge_count": 100},
+                {"relType": "TypeB", "edge_count": 50},
+                {"relType": "TypeC", "edge_count": 1},
+            ]
+        if "OPTIONAL MATCH" in query:
+            self.histogram_queries += 1
+            allowed = frozenset((params or {}).get("allowed_types", []))
+            self.histogram_query_allowed_types.append(allowed)
+            return [
+                {"relType": rel_type, "degree": 10, "nodes_at_degree": 10}
+                for rel_type in ("TypeA", "TypeB", "TypeC")
+                if rel_type in allowed
+            ]
+        return [{"degree": 1, "nodes_at_degree": 10}]
+
+
+def test_collect_degree_distribution_targets_caps_label_type_pairs_by_edge_count():
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+
+    records, partial_reason_code = profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, _CappingFakeClient()),
+        labels,
+        [],
+        _pair_cap=2,
+    )
+
+    kept_types = {
+        record.type for record in records if record.label == "Foo" and record.type is not None
+    }
+    assert kept_types == {"TypeA", "TypeB"}
+    assert partial_reason_code == "degree_incomplete"
+
+
+def test_collect_degree_distribution_targets_bounds_pairs_before_collecting_histograms():
+    """The cap must limit database work, not just serialized output."""
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+    client = _CappingFakeClient()
+
+    profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, client), labels, [], _pair_cap=0
+    )
+
+    assert client.histogram_queries == 0
+
+
+def test_collect_degree_distribution_targets_filters_types_server_side_when_capped():
+    """One label with three types and _pair_cap=1 must only query the kept type in Cypher,
+    not fetch every type's histogram and discard the rest in Python."""
+    labels = [LabelProfile(name="Foo", count=10, properties=[], degree_distribution=None)]
+    client = _CappingFakeClient()
+
+    profiler_module.collect_degree_distribution_targets(
+        cast(Neo4jClient, client), labels, [], _pair_cap=1
+    )
+
+    assert client.histogram_queries == 3
+    for allowed in client.histogram_query_allowed_types:
+        assert allowed == frozenset({"TypeA"})

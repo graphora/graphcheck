@@ -47,7 +47,13 @@ class CompletenessWith(_WithBase):
 
 @register("cardinality")
 class CardinalityWith(_WithBase):
-    from_label: Identifier
+    from_label: Identifier = Field(
+        description=(
+            "Label of nodes whose relationship count is checked, including when direction is in. "
+            "For one sender per Transaction, use from_label=Transaction, to_label=Account, "
+            "direction=in."
+        )
+    )
     rel_type: Identifier
     to_label: Identifier
     direction: Literal["out", "in", "any"] = "out"
@@ -58,6 +64,7 @@ class CardinalityWith(_WithBase):
 class NoOrphansWith(_WithBase):
     label: Identifier
     rel_type: Identifier | None = None
+    to_label: Identifier | None = None
     direction: Literal["out", "in", "any"] = "any"
 
 
@@ -211,3 +218,7 @@ class PiiValueMatchWith(_PiiWithBase):
         if value is not None and len(value) != len(set(value)):
             raise ValueError("PII properties must not contain duplicate entries")
         return value
+
+
+# Keep the registry model-only; this import registers the optional GraphRAG payloads.
+from graphcheck.packs import graphrag as graphrag  # noqa: E402

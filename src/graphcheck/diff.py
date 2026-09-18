@@ -28,6 +28,7 @@ class DiffReport:
     indexes: dict[str, Any]
     statistics: dict[str, Any]
     summary: dict[str, Any]
+    properties: dict[str, Any]
     a_partial_reason: str | None = None
     b_partial_reason: str | None = None
 
@@ -65,6 +66,11 @@ def _count_collection(
 
 def _definition(item: Any) -> dict[str, Any]:
     return {
+        **(
+            {"declared_order": item.declared_order}
+            if getattr(item, "declared_order", None) is not None
+            else {}
+        ),
         "name": item.name,
         "labels_or_types": list(item.labels_or_types),
         "properties": list(item.properties),
@@ -78,9 +84,14 @@ def _definition_collection(
     a = {item.name: item for item in a_items}
     b = {item.name: item for item in b_items}
     added, removed, unchanged = set(b) - set(a), set(a) - set(b), 0
+    metadata_changed = []
     for name in set(a) & set(b):
-        if a[name] == b[name]:
+        before, after = _definition(a[name]), _definition(b[name])
+        old_order, new_order = before.pop("declared_order", None), after.pop("declared_order", None)
+        if before == after and (old_order == new_order or old_order is None or new_order is None):
             unchanged += 1
+            if old_order != new_order:
+                metadata_changed.append({"name": name, "from": old_order, "to": new_order})
         else:
             added.add(name)
             removed.add(name)
@@ -88,6 +99,11 @@ def _definition_collection(
         "added": [_definition(b[name]) for name in sorted(added)],
         "removed": [] if suppress_removed else [_definition(a[name]) for name in sorted(removed)],
         "unchanged": unchanged,
+        **(
+            {"metadata_changed": sorted(metadata_changed, key=lambda item: item["name"])}
+            if any(hasattr(item, "declared_order") for item in [*a_items, *b_items])
+            else {}
+        ),
     }
 
 
@@ -104,7 +120,10 @@ def compare(
             "Comparison is inconclusive because one or more baselines are partial.",
             "Generate complete baseline profiles before running `graphcheck diff`.",
         )
-    if baseline_a.schema_version != baseline_b.schema_version:
+    if baseline_a.schema_version != baseline_b.schema_version and {
+        baseline_a.schema_version,
+        baseline_b.schema_version,
+    } != {"1.0", "1.1"}:
         raise SchemaVersionMismatch(
             "cannot diff baselines with different schema_version "
             f"(a={baseline_a.schema_version}, b={baseline_b.schema_version})"
@@ -164,6 +183,34 @@ def compare(
     }
     a_labels = {x.name: x for x in baseline_a.graph_schema.labels}
     b_labels = {x.name: x for x in baseline_b.graph_schema.labels}
+    shared_labels = a_labels.keys() & b_labels.keys()
+    a_props = {
+        (name, prop.name): prop.type for name in shared_labels for prop in a_labels[name].properties
+    }
+    b_props = {
+        (name, prop.name): prop.type for name in shared_labels for prop in b_labels[name].properties
+    }
+    properties = {
+        "changed": [
+            {
+                "label": label,
+                "property": prop,
+                "from": a_props[label, prop],
+                "to": b_props[label, prop],
+            }
+            for label, prop in sorted(a_props.keys() & b_props.keys())
+            if a_props[label, prop] != b_props[label, prop]
+        ],
+        "added": [
+            {"label": label, "property": prop, "to": b_props[label, prop]}
+            for label, prop in sorted(b_props.keys() - a_props.keys())
+        ],
+        "removed": [
+            {"label": label, "property": prop, "from": a_props[label, prop]}
+            for label, prop in sorted(a_props.keys() - b_props.keys())
+        ],
+        "unchanged": sum(a_props[key] == b_props[key] for key in a_props.keys() & b_props.keys()),
+    }
     degree: dict[str, Any] = {}
     for name in sorted(a_labels.keys() & b_labels.keys()):
         old, new = a_labels[name].degree_distribution, b_labels[name].degree_distribution
@@ -188,6 +235,7 @@ def compare(
         "degree_distribution": degree,
     }
     summary = {
+        "properties": {key: len(properties[key]) for key in ("changed", "added", "removed")},
         "labels": {
             "changed": len(labels["changed"]),
             "added": len(labels["added"]),
@@ -226,7 +274,7 @@ def compare(
         )
     )
     return DiffReport(
-        baseline_a.schema_version,
+        "1.1",
         Path(baseline_a_name).name,
         Path(baseline_b_name).name,
         str(baseline_a.status),
@@ -239,6 +287,7 @@ def compare(
         indexes,
         statistics,
         summary,
+        properties,
         baseline_a.partial_reason,
         baseline_b.partial_reason,
     )
@@ -287,17 +336,37 @@ def render_human(report: DiffReport) -> str:
         partial = True
     if partial:
         lines.append("Collections missing due to partial status are not reported as removed.")
+    for item in report.indexes.get("metadata_changed", []):
+        lines.append(
+            f"Index {item['name']} declared order metadata: {item['from']} -> {item['to']}"
+        )
     if not report.drift_detected:
         return "\n".join((*lines, "", "No drift detected."))
     sections = [
         _render_counts("Labels", report.labels),
         _render_counts("Relationships", report.relationship_types),
     ]
+    property_lines = [
+        f"{item['label']}.{item['property']} type: {item['from']} -> {item['to']}"
+        for item in report.properties["changed"]
+    ]
+    property_lines.extend(
+        f"+ {item['label']}.{item['property']} type: {item['to']} (added)"
+        for item in report.properties["added"]
+    )
+    property_lines.extend(
+        f"- {item['label']}.{item['property']} type: {item['from']} (removed)"
+        for item in report.properties["removed"]
+    )
+    sections.append(["Properties", *property_lines] if property_lines else [])
     for title, collection in (("Constraints", report.constraints), ("Indexes", report.indexes)):
         body = []
         for sign, key in (("+", "added"), ("-", "removed")):
             for item in collection[key]:
-                target, props = ", ".join(item["labels_or_types"]), ", ".join(item["properties"])
+                target, props = (
+                    ", ".join(item["labels_or_types"]),
+                    ", ".join(item.get("declared_order", item["properties"])),
+                )
                 body.append(f"{sign} {item['name']} [{target}({props}), {item['type']}] ({key})")
         sections.append([title, *body] if body else [])
     stats: list[str] = []
@@ -332,6 +401,14 @@ def render_human(report: DiffReport) -> str:
             lines.extend(("", *section))
     summary = report.summary
     parts: list[str] = []
+    if any(summary["properties"].values()):
+        parts.append(
+            ", ".join(
+                f"{count} properties {action}"
+                for action, count in summary["properties"].items()
+                if count
+            )
+        )
     labels = summary["labels"]
     if any(labels.values()):
         noun = "label" if labels["changed"] == 1 else "labels"
@@ -399,6 +476,7 @@ def render_json(report: DiffReport) -> str:
         "fingerprint_changed": report.fingerprint_changed,
         "drift_detected": report.drift_detected,
         "labels": report.labels,
+        "properties": report.properties,
         "relationship_types": report.relationship_types,
         "constraints": {
             "added": report.constraints["added"],
@@ -407,6 +485,7 @@ def render_json(report: DiffReport) -> str:
         "indexes": {
             "added": report.indexes["added"],
             "removed": report.indexes["removed"],
+            "metadata_changed": report.indexes.get("metadata_changed", []),
         },
         "statistics": statistics,
         "summary": report.summary,

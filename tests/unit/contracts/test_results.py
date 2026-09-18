@@ -27,7 +27,8 @@ from graphcheck.contracts.results import (
     score_value,
     totals,
 )
-from graphcheck.contracts.schemas import SCHEMAS_DIR, results_schema
+from graphcheck.contracts.schemas import results_schema
+from tests import SCHEMAS_DIR
 
 
 def test_verdict_values():
@@ -457,11 +458,15 @@ def test_duplicate_suite_id_rejected():
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize(
+    "name", ["clean", "complete", "partial", "generated-only", "failed", "lineage"]
+)
 def test_fixture_validates_against_schema_and_round_trips(name):
     raw = json.loads((FIXTURES / f"results.{name}.json").read_text())
     jsonschema.validate(raw, results_schema())  # structural (JSON Schema)
     model = Results.model_validate(raw)  # + derived invariants (Pydantic)
+    for key in ("previous_run_id", "baseline_ref", "config_hash"):
+        raw["run"].setdefault(key, None)  # Additive fields are absent in historical 2.0 fixtures.
     assert json.loads(model.model_dump_json(by_alias=True, exclude_none=False)) == raw
 
 

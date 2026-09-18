@@ -6,11 +6,11 @@ from collections.abc import Hashable
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from graphcheck.contracts.results import RunTarget
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 FINGERPRINT_ALGORITHM = "sha256"
 
 
@@ -60,6 +60,23 @@ class IndexProfile(_Strict):
     type: str
     labels_or_types: list[str]
     properties: list[str]
+    declared_order: list[str] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        return {
+            key: value
+            for key, value in handler(self).items()
+            if key != "declared_order" or value is not None
+        }
+
+    @model_validator(mode="after")
+    def _declared_order_matches_properties(self) -> IndexProfile:
+        if self.declared_order is not None:
+            if self.type != "RANGE" or sorted(self.declared_order) != self.properties:
+                raise ValueError("declared_order must contain the same RANGE index properties")
+            _require_unique("declared_order", self.declared_order)
+        return self
 
 
 class GraphSchema(_Strict):
@@ -89,14 +106,23 @@ class PropertyCoverage(_Strict):
     coverage: float = Field(ge=0, le=100)
 
 
+class DegreeDistributionCoverage(_Strict):
+    label: str | None = None
+    type: str | None = None
+    quantile: Literal["p50", "p95", "max"]
+    direction: Literal["in", "out", "both"]
+    value: float = Field(ge=0)
+
+
 class ProfileStatistics(_Strict):
     node_count: int = Field(ge=0)
     relationship_count: int = Field(ge=0)
     property_coverage: list[PropertyCoverage]
+    degree_distribution: list[DegreeDistributionCoverage] = []
 
 
 class BaselineProfile(_Strict):
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     status: ProfileStatus
     partial_reason: str | None
     target: RunTarget
@@ -216,6 +242,8 @@ class BaselineProfile(_Strict):
         )
 
         for index in self.graph_schema.indexes:
+            if self.schema_version == "1.0" and index.declared_order is not None:
+                raise ValueError("declared_order requires baseline schema_version 1.1")
             _require_sorted(
                 f"schema.indexes[{index.name!r}].labels_or_types",
                 index.labels_or_types,

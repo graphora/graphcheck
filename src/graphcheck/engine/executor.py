@@ -147,10 +147,6 @@ def execute_query(
     )
 
 
-def _accepts_timeout(method: Callable[..., object]) -> bool:
-    return _parameters_accept(_parameters(method), "timeout_s", variadic=True)
-
-
 def _accepts_parameter(method: Callable[..., object], name: str, *, variadic: bool = False) -> bool:
     return _parameters_accept(_parameters(method), name, variadic=variadic)
 

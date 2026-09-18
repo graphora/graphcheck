@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -176,19 +177,18 @@ def redacted_run_id(finished_at: str, sensitive: set[str] | None = None) -> str:
 
     sensitive = sensitive or set()
     timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    candidate = f"redacted_{timestamp}"
-    if candidate not in sensitive:
-        return candidate
-    collision = 1
-    while f"redacted_collision{collision}_{timestamp}" in sensitive:
-        collision += 1
-    return f"redacted_collision{collision}_{timestamp}"
+    candidate = f"redacted_{uuid.uuid4().hex}_{timestamp}"
+    while candidate in sensitive:
+        candidate = f"redacted_{uuid.uuid4().hex}_{timestamp}"
+    return candidate
 
 
 def _is_redacted_run_id(value: str, finished_at: str) -> bool:
     timestamp = parse_utc_timestamp(finished_at).strftime("%Y%m%dT%H%M%S%fZ")
-    return value == f"redacted_{timestamp}" or bool(
-        re.fullmatch(rf"redacted_collision[1-9][0-9]*_{timestamp}", value)
+    return (
+        bool(re.fullmatch(rf"redacted_[0-9a-f]{{32}}_{timestamp}", value))
+        or value == f"redacted_{timestamp}"
+        or bool(re.fullmatch(rf"redacted_collision[1-9][0-9]*_{timestamp}", value))
     )
 
 
@@ -206,6 +206,8 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
     sensitive = _sensitive_source_literals(payload)
     payload["run"]["redaction"] = {"policy": RedactionPolicy.MASK, "applied": True}
     payload["run"]["id"] = redacted_run_id(payload["run"]["finished_at"], sensitive)
+    for key in ("previous_run_id", "baseline_ref", "config_hash"):
+        payload["run"][key] = None
     _alias_identifiers(payload, sensitive)
     if payload["run"]["partial_reason"] is not None:
         payload["run"]["partial_reason"] = REDACTION_MASK
@@ -230,7 +232,10 @@ def redact_results(data: Results | dict[str, Any] | str | Path) -> Results:
                 if element["type"] is not None:
                     element["type"] = REDACTION_MASK
         _mask_error(check["error"])
-    redacted = Results.model_validate(payload)
+    redacted = Results.model_validate(
+        payload, context={"historical_schema_version": source._historical_schema_version}
+    )
+    redacted._historical_schema_version = source._historical_schema_version
     verify_redacted_results(redacted)
     _verify_no_sensitive_literals(
         redacted.model_dump(mode="python", by_alias=True, exclude_none=False), sensitive
@@ -267,6 +272,11 @@ def verify_redacted_results(data: Results | dict[str, Any] | str | Path) -> Resu
         raise ValueError("redaction verification failed: run.redaction is not applied mask mode")
     if not _is_redacted_run_id(results.run.id, results.run.finished_at):
         raise ValueError("redaction verification failed: run.id is not target-neutral")
+    if any(
+        getattr(results.run, key) is not None
+        for key in ("previous_run_id", "baseline_ref", "config_hash")
+    ):
+        raise ValueError("redaction verification failed: run lineage must be cleared")
     if results.run.partial_reason is not None:
         _verify_masked(results.run.partial_reason, "run.partial_reason")
     if results.run.error is not None:

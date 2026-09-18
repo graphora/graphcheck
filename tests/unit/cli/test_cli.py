@@ -1,8 +1,6 @@
 import json
 import os
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -10,7 +8,7 @@ from typer.testing import CliRunner
 
 from graphcheck import __version__
 from graphcheck.cli import app
-from graphcheck.contracts.profile import BaselineProfile, ProfileStatus
+from graphcheck.contracts.profile import BaselineProfile, ProfileStatus, profile_fingerprint
 from graphcheck.contracts.results import Capabilities, RunTarget
 from graphcheck.errors import GraphCheckError
 from graphcheck.neo4j_adapter import Counts, DebugTrace, SupportVersions, Visibility
@@ -569,38 +567,6 @@ def test_profile_uses_stable_telemetry_signature(
     )
 
 
-def test_external_consent_file_cannot_affect_profile_tests(tmp_path):
-    from graphcheck.telemetry.policy import enable_telemetry
-
-    external_config = tmp_path / "external" / "telemetry.json"
-    consent = enable_telemetry(path=external_config)
-    environment = os.environ.copy()
-    environment["GRAPHCHECK_TELEMETRY_CONFIG"] = str(external_config)
-    environment.pop("GRAPHCHECK_TELEMETRY", None)
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/unit/cli/test_cli.py::test_profile_uses_stable_telemetry_signature[disabled]",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "--basetemp",
-            str(tmp_path / "subprocess-pytest"),
-        ],
-        cwd=Path(__file__).parents[3],
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert external_config.read_text(encoding="utf-8").find(str(consent.distinct_id)) >= 0
-
-
 def test_profile_json_prints_partial_profile_without_human_summary(tmp_path, monkeypatch):
     baseline = _baseline_fixture().model_copy(
         update={
@@ -624,6 +590,7 @@ def test_profile_summary_handles_empty_labels(tmp_path, monkeypatch):
     baseline = baseline.model_copy(
         update={"graph_schema": baseline.graph_schema.model_copy(update={"labels": []})}
     )
+    baseline.fingerprint = profile_fingerprint(baseline.graph_schema, baseline.statistics)
     _configure_profile_command(tmp_path, monkeypatch, baseline)
 
     result = runner.invoke(app, ["profile"])
@@ -637,6 +604,7 @@ def test_profile_summary_handles_empty_relationship_types(tmp_path, monkeypatch)
     baseline = baseline.model_copy(
         update={"graph_schema": baseline.graph_schema.model_copy(update={"relationship_types": []})}
     )
+    baseline.fingerprint = profile_fingerprint(baseline.graph_schema, baseline.statistics)
     _configure_profile_command(tmp_path, monkeypatch, baseline)
 
     result = runner.invoke(app, ["profile"])

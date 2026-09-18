@@ -1,6 +1,7 @@
 # Examples
 
 - [`minimal/`](minimal/) contains a small GraphCheck project for adapting to an existing Neo4j database.
+- [`graphrag/`](graphrag/) contains a copyable five-check suite for document/chunk/entity graphs.
 - [`fraud-ring/`](fraud-ring/) is a self-contained Docker quickstart with intentionally failing checks.
 - [`monitoring/`](monitoring/) provides the reference Prometheus and Grafana stack.
 

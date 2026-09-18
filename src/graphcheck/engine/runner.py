@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import math
 import threading
@@ -10,7 +9,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 
 from graphcheck import __version__
@@ -35,17 +34,20 @@ from graphcheck.contracts.results import (
 from graphcheck.engine.baseline import (
     BaselineProvider,
     BaselineValue,
+    DirectoryBaselineProvider,
     MappingBaselineProvider,
     require_baseline,
 )
 from graphcheck.engine.compiler import (
+    COMPLETENESS_BATCH_SIZE,
     CompiledCheck,
     CypherCompiler,
     expected_for,
     name_for,
 )
 from graphcheck.engine.evaluator import CompetencyConsumption, Evaluation, VerdictEvaluator
-from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor
+from graphcheck.engine.executor import ExecutionResult, ReadOnlyExecutor, _accepts_parameter
+from graphcheck.engine.limits import require_supported_size
 from graphcheck.engine.parameters import (
     GraphTokenResolver,
     ParameterTokenResolver,
@@ -55,6 +57,8 @@ from graphcheck.engine.sampling import SamplingPolicy
 from graphcheck.errors import GraphCheckError, GraphCheckTimeoutError
 from graphcheck.packs import PACK_VERSION
 from graphcheck.packs.catalog import builtin_pack_catalog
+from graphcheck.packs.graphrag import GRAPHRAG_CHECK_NAMES
+from graphcheck.provenance import config_hash
 from graphcheck.scoring import calculate_score, calculate_suite_scores
 from graphcheck.telemetry.events import (
     CheckProcessed,
@@ -133,6 +137,7 @@ class EngineConfig:
     result_row_limit: int = 100_000
     eager_competency_evaluation: bool = False
     max_concurrency: int = 2
+    enforce_size_limit: bool = True
     sampling: SamplingPolicy = field(
         default_factory=lambda: SamplingPolicy(
             exhaustive_limit=100_000,
@@ -169,6 +174,8 @@ class EngineConfig:
             raise ValueError("result_row_limit must be a positive integer")
         if not isinstance(self.eager_competency_evaluation, bool):
             raise ValueError("eager_competency_evaluation must be boolean")
+        if not isinstance(self.enforce_size_limit, bool):
+            raise ValueError("enforce_size_limit must be boolean")
 
 
 @dataclass
@@ -214,7 +221,9 @@ class Engine:
         self._id_factory = id_factory or uuid.uuid4
         self._progress_callback = progress_callback
         probe = getattr(client, "probe", None)
-        self._probe_accepts_timeout = callable(probe) and _accepts_timeout(probe)
+        self._probe_accepts_timeout = callable(probe) and _accepts_parameter(
+            probe, "timeout_s", variadic=True
+        )
         self._event_sink = event_sink
         self._telemetry_clock = telemetry_clock
         self._telemetry_id_factory = telemetry_id_factory
@@ -306,10 +315,13 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         """Run checks and contain all event-sink failures at the engine boundary."""
 
         self._reset_telemetry_state()
+        if isinstance(self.baselines, DirectoryBaselineProvider):
+            self.baselines = self.baselines.fresh()
         try:
             return self._run_with_events(
                 suites,
@@ -318,6 +330,7 @@ class Engine:
                 fail_fast=fail_fast,
                 selection_suites=selection_suites,
                 _initial_partial_reasons=_initial_partial_reasons,
+                deadline=deadline,
             )
         except Exception as exc:
             if (
@@ -349,6 +362,7 @@ class Engine:
         fail_fast: bool = False,
         selection_suites: Sequence[str] | None = None,
         _initial_partial_reasons: Sequence[str] = (),
+        deadline: float | None = None,
     ) -> Results:
         requested_tags = list(dict.fromkeys(tags))
         inputs = [
@@ -373,7 +387,11 @@ class Engine:
             ]
         started_at = _timestamp(self._clock())
         started_perf = self._monotonic()
-        deadline = started_perf + self.config.time_budget_s
+        deadline = (
+            min(deadline, started_perf + self.config.time_budget_s)
+            if deadline is not None
+            else started_perf + self.config.time_budget_s
+        )
         self._telemetry_deadline = deadline
         run_id = str(self._id_factory())
         selected_checks = [check for item in inputs for check in item.suite.checks]
@@ -431,6 +449,8 @@ class Engine:
         self._telemetry_stage = EngineStage.PROBE
         try:
             resolved_target = self._resolve_target_with_events(target, deadline)
+            if self.config.enforce_size_limit:
+                require_supported_size(resolved_target)
         except GraphCheckError as exc:
             return self._failed_run(
                 run_id,
@@ -482,6 +502,13 @@ class Engine:
                 )
 
         partial_reasons: list[str] = list(dict.fromkeys(_initial_partial_reasons))
+        missing_suites = sorted(set(recorded_suite_ids) - set(suite_ids))
+        if missing_suites:
+            partial_reasons.append(
+                f"Requested suites were not found: {', '.join(missing_suites)}. "
+                "Fix: correct --suite values or restore the missing suite files."
+            )
+            self._add_partial_code(PartialReasonCode.SUITE_INPUT_INVALID)
         capability_check = getattr(self.compiler, "missing_capabilities", None)
 
         def prepare(
@@ -594,46 +621,44 @@ class Engine:
                 if prepare(index, suite_input, check, check_deadline=False)
             ]
             outcomes: dict[int, str | None] = {}
-            if self.config.max_concurrency == 1:
-                for index, suite_input, check in runnable:
-                    result, reason, timings = self._run_check_if_time(
-                        check,
-                        check_sequence=index + 1,
-                        suite_id=suite_input.suite.suite,
-                        suite_sha=suite_input.source_sha,
-                        target=resolved_target,
-                        deadline=deadline,
-                    )
+            groups: list[list[tuple]] = []
+            batches: dict[tuple[str, str], list[tuple]] = {}
+            for task in runnable:
+                _, suite_input, check = task
+                label = (
+                    self.compiler.completeness_label(check)
+                    if type(self.compiler) is CypherCompiler
+                    else None
+                )
+                key = (suite_input.suite.suite, label)
+                if label is None:
+                    groups.append([task])
+                else:
+                    if key not in batches or len(batches[key]) == COMPLETENESS_BATCH_SIZE:
+                        batches[key] = []
+                        groups.append(batches[key])
+                    batches[key].append(task)
+
+            def record_group(group_results):
+                for index, suite_input, check, outcome in group_results:
+                    result, reason, timings = outcome
                     outcomes[index] = reason
-                    record_result(
-                        index,
-                        result,
-                        suite_input.suite.suite,
-                        check.id,
-                        timings=timings,
-                    )
-            elif runnable:
+                    record_result(index, result, suite_input.suite.suite, check.id, timings=timings)
+
+            if self.config.max_concurrency == 1:
+                for group in groups:
+                    record_group(self._run_task_group(group, resolved_target, deadline))
+            elif groups:
                 with ThreadPoolExecutor(
-                    max_workers=min(self.config.max_concurrency, len(runnable)),
+                    max_workers=min(self.config.max_concurrency, len(groups)),
                     thread_name_prefix="graphcheck",
                 ) as pool:
-                    futures = {
-                        pool.submit(
-                            self._run_check_if_time,
-                            check,
-                            check_sequence=index + 1,
-                            suite_id=suite_input.suite.suite,
-                            suite_sha=suite_input.source_sha,
-                            target=resolved_target,
-                            deadline=deadline,
-                        ): (index, suite_input.suite.suite, check.id)
-                        for index, suite_input, check in runnable
-                    }
+                    futures = [
+                        pool.submit(self._run_task_group, group, resolved_target, deadline)
+                        for group in groups
+                    ]
                     for future in as_completed(futures):
-                        index, suite_id, check_id = futures[future]
-                        result, reason, timings = future.result()
-                        outcomes[index] = reason
-                        record_result(index, result, suite_id, check_id, timings=timings)
+                        record_group(future.result())
             for index in sorted(outcomes):
                 if outcomes[index] is not None:
                     _append_once(partial_reasons, outcomes[index])
@@ -664,6 +689,100 @@ class Engine:
         self._emit_run_finished(results, started_perf)
         return results
 
+    def _run_task_group(self, group, target, deadline):
+        def run_member(task, prepared=None):
+            index, suite_input, check = task
+            return (
+                *task,
+                self._run_check_if_time(
+                    check,
+                    check_sequence=index + 1,
+                    suite_id=suite_input.suite.suite,
+                    suite_sha=suite_input.source_sha,
+                    target=target,
+                    deadline=deadline,
+                    prepared=prepared,
+                ),
+            )
+
+        if len(group) == 1 or self._monotonic() >= deadline:
+            return [run_member(task) for task in group]
+        batch = None
+        started = (_timestamp(self._clock()), self._monotonic())
+        allow_missing_schema = (
+            getattr(target, "nodes", None) == 0 and getattr(target, "relationships", None) == 0
+        )
+        try:
+            batch = self.compiler.compile_completeness_batch([task[2] for task in group])
+            with self.executor.transaction(
+                timeout_s=_remaining(deadline, self._monotonic()),
+                allow_missing_schema=allow_missing_schema,
+            ) as transaction:
+                # Charge the physical measurement once, to the first member. Later members
+                # carry only their own evidence-query costs in the existing event contract.
+                token = self._active_check_context.set((group[0][0] + 1, group[0][2]))
+                try:
+                    execution = self._execute_query_with_event(
+                        batch.query,
+                        batch.params,
+                        role=QueryRole.CHECK_MEASUREMENT,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                        allow_missing_schema=allow_missing_schema,
+                    )
+                finally:
+                    self._active_check_context.reset(token)
+                if len(execution.rows) != 1:
+                    raise GraphCheckError(
+                        "engine.invalid_query_result",
+                        "A completeness batch must return one aggregate row.",
+                        "Check the shared completeness measurement query.",
+                    )
+                row = execution.rows[0]
+                population = row.get("population")
+                if (
+                    type(population) is not int
+                    or population < 0
+                    or any(
+                        type(row.get(column)) is not int or not 0 <= row[column] <= population
+                        for _, column in batch.members
+                    )
+                ):
+                    raise GraphCheckError(
+                        "engine.invalid_query_result",
+                        "A completeness batch returned invalid counters.",
+                        "Check the shared completeness measurement query.",
+                    )
+                outcomes = []
+                for task, (compiled, column) in zip(group, batch.members, strict=True):
+                    conforming = row[column]
+                    member_row = {
+                        **row,
+                        "conforming_count": conforming,
+                        "violation_count": population - conforming,
+                        "coverage": conforming / population if population else 1.0,
+                        "evidence": [],
+                    }
+                    member_execution = replace(
+                        execution,
+                        rows=[member_row],
+                        columns=tuple(member_row),
+                        read_guard_ms=execution.read_guard_ms if task is group[0] else None,
+                    )
+                    outcomes.append(
+                        run_member(task, (compiled, member_execution, transaction, *started))
+                    )
+                return outcomes
+        except Exception as exc:
+            return [
+                run_member(task, (compiled, exc, None, *started))
+                for task, (compiled, _) in zip(
+                    group,
+                    batch.members if batch is not None else [(None, "")] * len(group),
+                    strict=True,
+                )
+            ]
+
     def _run_check(
         self,
         check,
@@ -672,9 +791,10 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
+        prepared: tuple | None = None,
     ) -> tuple[CheckResult, str | None, _CheckTimings]:
-        check_started_at = _timestamp(self._clock())
-        check_started_perf = self._monotonic()
+        check_started_at = prepared[3] if prepared is not None else _timestamp(self._clock())
+        check_started_perf = prepared[4] if prepared is not None else self._monotonic()
         timings = _CheckTimings()
         compiled: CompiledCheck | None = None
         resolved_params: dict[str, object] | None = None
@@ -683,8 +803,18 @@ class Engine:
         graph_empty = (
             getattr(target, "nodes", None) == 0 and getattr(target, "relationships", None) == 0
         )
-        allow_missing_schema = graph_empty and isinstance(check.spec, ConformanceCheck)
+        is_graphrag = (
+            isinstance(check.spec, ConformanceCheck) and check.spec.check in GRAPHRAG_CHECK_NAMES
+        )
+        allow_missing_schema = (graph_empty or is_graphrag) and isinstance(
+            check.spec, ConformanceCheck
+        )
         try:
+            if is_graphrag and (reason := self._graphrag_absence(check, deadline)):
+                result = _skipped_result(
+                    check, suite_id, SkipReason.MODEL_ABSENT, explanation=reason
+                )
+                return result, None, timings
             self._telemetry_stage = EngineStage.COMPILE
             stage_started = self._timing_start()
             sample_seed = self.config.sampling.check_seed(
@@ -692,7 +822,13 @@ class Engine:
                 suite_sha=suite_sha,
                 check_id=check.id,
             )
-            compiled = self.compiler.compile(check, sample_seed=sample_seed)
+            compiled = (
+                prepared[0]
+                if prepared is not None
+                else self.compiler.compile(check, sample_seed=sample_seed)
+            )
+            if compiled is None and prepared is not None:
+                raise prepared[1]
             timings.compile_ms = self._timing_finish(stage_started)
             if isinstance(check.spec, CompetencyCheck):
                 self._telemetry_stage = EngineStage.RESOLVE_PARAMS
@@ -723,6 +859,11 @@ class Engine:
                     check.spec.metric,
                     check.spec.target,
                 )
+                if baseline.partial:
+                    partial_reason = (
+                        f"check {suite_id}/{check.id} used partial baseline {check.spec.baseline!r}"
+                    )
+                    self._add_partial_code(PartialReasonCode.PARTIAL_BASELINE)
                 timings.baseline_resolution_ms = self._timing_finish(stage_started)
             self._telemetry_stage = EngineStage.QUERY
             consumption = (
@@ -731,7 +872,21 @@ class Engine:
                 and not self.config.eager_competency_evaluation
                 else None
             )
-            if compiled.evidence_query is None:
+            if prepared is not None:
+                _, execution, transaction, *_ = prepared
+                if isinstance(execution, Exception):
+                    raise execution
+                if _evidence_required(compiled, execution.rows):
+                    evidence_execution = self._execute_query_with_event(
+                        compiled.evidence_query,
+                        compiled.evidence_params or resolved_params,
+                        role=QueryRole.EVIDENCE_COLLECTION,
+                        timeout_s=_remaining(deadline, self._monotonic()),
+                        executor=transaction,
+                        allow_missing_schema=allow_missing_schema,
+                    )
+                    execution = _merge_evidence(compiled, execution, evidence_execution)
+            elif compiled.evidence_query is None:
                 execution = self._execute_query_with_event(
                     compiled.query,
                     resolved_params,
@@ -769,7 +924,7 @@ class Engine:
                     "engine.result_limit_exceeded",
                     "The competency query reached the configured result-row safety ceiling "
                     "before its assertions became decisive.",
-                    "Narrow the query or increase result_row_limit after reviewing "
+                    "Narrow the query or increase engine.result_row_limit after reviewing "
                     "its memory cost.",
                 )
             timings.read_guard_ms = execution.read_guard_ms
@@ -879,10 +1034,11 @@ class Engine:
         suite_sha: str,
         target: RunTarget,
         deadline: float,
+        prepared: tuple | None = None,
     ) -> tuple[CheckResult, str | None, _CheckTimings]:
         token = self._active_check_context.set((check_sequence, check))
         try:
-            if self._monotonic() >= deadline:
+            if prepared is None and self._monotonic() >= deadline:
                 return (
                     _skipped_result(check, suite_id, SkipReason.NOT_RUN),
                     _deadline_reason(self.config.time_budget_s),
@@ -894,6 +1050,7 @@ class Engine:
                 suite_sha=suite_sha,
                 target=target,
                 deadline=deadline,
+                prepared=prepared,
             )
         finally:
             self._active_check_context.reset(token)
@@ -999,6 +1156,69 @@ class Engine:
             resolved,
             sampling_population_ms,
         )
+
+    def _graphrag_absence(self, check, deadline: float) -> str | None:
+        from graphcheck.engine.graphrag_pack import (
+            configured_model,
+            graph_population_query,
+            model_presence_query,
+        )
+
+        model = configured_model(check.spec.with_)
+        if model is None:
+            return (
+                "GraphRAG model is not configured; set packs.graphrag.model in graphcheck.yml "
+                "or the check's with fields."
+            )
+        query, params = model_presence_query(model)
+        result = self._execute_query_with_event(
+            query,
+            params,
+            role=QueryRole.TARGET_PROBE,
+            timeout_s=_remaining(deadline, self._monotonic()),
+            allow_missing_schema=True,
+        )
+        if (
+            len(result.rows) != 1
+            or not isinstance(result.rows[0].get("missing_labels"), list)
+            or any(label not in params["labels"] for label in result.rows[0]["missing_labels"])
+        ):
+            raise GraphCheckError(
+                "engine.invalid_query_result",
+                "GraphRAG model preflight returned invalid label populations.",
+                "Fix the connector's model preflight result.",
+            )
+        missing = result.rows[0]["missing_labels"]
+        if missing:
+            return (
+                "GraphRAG model is absent: no nodes with configured label(s) "
+                f"{', '.join(map(repr, missing))}."
+            )
+        if check.spec.check == "label_explosion":
+            min_population = int(check.spec.with_.get("min_population", 50))
+            pop_query, pop_params = graph_population_query()
+            pop_result = self._execute_query_with_event(
+                pop_query,
+                pop_params,
+                role=QueryRole.TARGET_PROBE,
+                timeout_s=_remaining(deadline, self._monotonic()),
+                allow_missing_schema=True,
+            )
+            if len(pop_result.rows) != 1 or not isinstance(
+                pop_result.rows[0].get("node_count"), int
+            ):
+                raise GraphCheckError(
+                    "engine.invalid_query_result",
+                    "GraphRAG label_explosion population preflight returned an invalid count.",
+                    "Fix the connector's node-count preflight result.",
+                )
+            node_count = pop_result.rows[0]["node_count"]
+            if node_count < min_population:
+                return (
+                    f"label_explosion needs at least {min_population} nodes to distinguish "
+                    f"genuine label explosion from a small graph; found {node_count}."
+                )
+        return None
 
     def _reset_telemetry_state(self) -> None:
         self._telemetry = None
@@ -1185,7 +1405,7 @@ class Engine:
             read_guard_cache_hit=execution.read_guard_cache_hit,
             notification_count=execution.notification_count,
         )
-        active_check = self._active_check_context.get()
+        active_check = None if role is QueryRole.TARGET_PROBE else self._active_check_context.get()
         if active_check is not None and execution.read_guard_ms is not None:
             with self._telemetry_state_lock:
                 self._telemetry_read_guard_ms_by_check.setdefault(active_check[0], []).append(
@@ -1250,7 +1470,11 @@ class Engine:
         read_guard_durations = self._telemetry_read_guard_ms_by_check.get(check_sequence, [])
         if result.verdict is Verdict.SKIPPED:
             processing_outcome = ProcessingOutcome.SKIPPED
-            skip_reason = TelemetrySkipReason(result.skip_reason.value)
+            skip_reason = (
+                TelemetrySkipReason.UNSUPPORTED
+                if result.skip_reason is SkipReason.MODEL_ABSENT
+                else TelemetrySkipReason(result.skip_reason.value)
+            )
             error_code = None
             duration_ms = None
         elif result.verdict is Verdict.ERRORED:
@@ -1333,7 +1557,8 @@ class Engine:
             engine_errors = sum(check.verdict is Verdict.ERRORED for check in results.checks)
             generated = sum(check.skip_reason is SkipReason.GENERATED for check in results.checks)
             unsupported = sum(
-                check.skip_reason is SkipReason.UNSUPPORTED for check in results.checks
+                check.skip_reason in {SkipReason.UNSUPPORTED, SkipReason.MODEL_ABSENT}
+                for check in results.checks
             )
             not_run = sum(check.skip_reason is SkipReason.NOT_RUN for check in results.checks)
         run_error_code = (
@@ -1457,6 +1682,15 @@ class Engine:
             schema_version=SCHEMA_VERSION,
             run={
                 "id": run_id,
+                "config_hash": config_hash(
+                    {
+                        "engine": asdict(self.config),
+                        "suites": sorted(suite_ids),
+                        "tags": sorted(tags),
+                        "fail_fast": fail_fast,
+                        "sources": sorted((suite["id"], suite["source_sha"]) for suite in suites),
+                    }
+                ),
                 "started_at": started_at,
                 "finished_at": finished_at,
                 "graphcheck_version": __version__,
@@ -1502,6 +1736,14 @@ class Engine:
             schema_version=SCHEMA_VERSION,
             run={
                 "id": run_id,
+                "config_hash": config_hash(
+                    {
+                        "engine": asdict(self.config),
+                        "suites": sorted(suite_ids),
+                        "tags": sorted(tags),
+                        "fail_fast": fail_fast,
+                    }
+                ),
                 "started_at": started_at,
                 "finished_at": _timestamp(self._clock()),
                 "graphcheck_version": __version__,
@@ -1661,7 +1903,9 @@ def _telemetry_outcome(exc: Exception, raw_code: str | None) -> EventOutcome:
     return EventOutcome.ERROR
 
 
-def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
+def _skipped_result(
+    check, suite_id: str, reason: SkipReason, *, explanation: str | None = None
+) -> CheckResult:
     return CheckResult(
         id=check.id,
         suite_id=suite_id,
@@ -1676,7 +1920,10 @@ def _skipped_result(check, suite_id: str, reason: SkipReason) -> CheckResult:
         compiled_query=None,
         params=None,
         measured=None,
-        expected=expected_for(check),
+        expected={
+            **expected_for(check),
+            **({"not_evaluated_reason": explanation} if explanation else {}),
+        },
         estimate=False,
         evidence=None,
         error=None,
@@ -1715,7 +1962,7 @@ def _remaining(deadline: float, now: float) -> float:
     if remaining <= 0:
         raise GraphCheckTimeoutError(
             "engine.timeout",
-            "The run time budget was exhausted while executing a check.",
+            "The run execution time budget was exhausted.",
             "Narrow the selection, enable sampling, or increase the external job budget.",
         )
     return remaining
@@ -1785,14 +2032,3 @@ def _unexpected_error(stage: str, exc: Exception) -> CheckError:
 def _append_once(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
-
-
-def _accepts_timeout(method: object) -> bool:
-    try:
-        parameters = inspect.signature(method).parameters.values()  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.name == "timeout_s" or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    )

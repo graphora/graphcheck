@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from textwrap import dedent
 from typing import Literal
 
@@ -15,6 +16,9 @@ from graphcheck.contracts.results import Pattern
 from graphcheck.engine.identifiers import node_pattern, property_access, relationship_pattern
 from graphcheck.errors import GraphCheckError
 from graphcheck.packs.catalog import PackCatalog, builtin_pack_catalog
+
+_VALID_QUANTILES = {"p50", "p95", "max"}
+_VALID_DIRECTIONS = {"in", "out", "both"}
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,16 @@ class ConformancePlan:
     evidence_condition: EvidenceCondition | None = None
 
 
+COMPLETENESS_BATCH_SIZE = 32
+
+
+@dataclass(frozen=True)
+class CompiledCompletenessBatch:
+    query: str
+    params: dict[str, object]
+    members: tuple[tuple[CompiledCheck, str], ...]
+
+
 ConformanceCompiler = Callable[[dict[str, object], int, int], ConformancePlan]
 _CONFORMANCE_COMPILERS: dict[str, ConformanceCompiler] = {}
 
@@ -111,6 +125,15 @@ def _node_pointer(variable: str) -> str:
 
 def _rel_pointer(variable: str) -> str:
     return f"{{kind: 'rel', id: elementId({variable}), type: type({variable})}}"
+
+
+def _degree_edge_pattern(direction: str, relationship_type: str | None) -> str:
+    relationship = relationship_pattern("", relationship_type)
+    if direction == "out":
+        return f"(n)-{relationship}->()"
+    if direction == "in":
+        return f"(n)<-{relationship}-()"
+    return f"(n)-{relationship}-()"
 
 
 @register_conformance_compiler("completeness")
@@ -230,6 +253,59 @@ class CypherCompiler:
             raise ValueError("evidence_cap must be a positive integer")
         self.evidence_cap = evidence_cap
         self.pack_catalog = pack_catalog or builtin_pack_catalog()
+
+    def completeness_label(self, check: LoadedCheck) -> str | None:
+        definition = self.pack_catalog.checks.get("completeness")
+        if (
+            type(self) is CypherCompiler
+            and self.pack_catalog is builtin_pack_catalog()
+            and definition is not None
+            and (definition.pack, definition.template, definition.sampled)
+            == ("core", "completeness", False)
+            and _CONFORMANCE_COMPILERS.get("completeness") is _compile_completeness
+            and isinstance(check.spec, ConformanceCheck)
+            and check.spec.check == "completeness"
+            and not check.generated
+        ):
+            return str(check.spec.with_["label"]).strip()
+        return None
+
+    def compile_completeness_batch(self, checks: list[LoadedCheck]) -> CompiledCompletenessBatch:
+        labels = {self.completeness_label(check) for check in checks}
+        if not 2 <= len(checks) <= COMPLETENESS_BATCH_SIZE or None in labels or len(labels) != 1:
+            raise ValueError("a completeness batch requires 2–32 built-in checks on one label")
+        members = [self.compile(check) for check in checks]
+        properties = list(
+            dict.fromkeys(str(check.spec.with_["property"]).strip() for check in checks)
+        )
+        columns = {name: f"conforming_{index}" for index, name in enumerate(properties)}
+        mapping = {check.id: columns[str(check.spec.with_["property"]).strip()] for check in checks}
+        counters = ", ".join(
+            f"count({property_access('n', name)}) AS {column}" for name, column in columns.items()
+        )
+        query = (
+            "// completeness outputs: "
+            + json.dumps(mapping, ensure_ascii=True)
+            + "\n"
+            + _SCHEMA_CATALOG
+            + "\nCALL { MATCH "
+            + node_pattern("n", next(iter(labels)))
+            + " RETURN count(n) AS population, "
+            + counters
+            + " }\nRETURN "
+            + _SCHEMA_PROJECTION
+            + ", population, "
+            + ", ".join(columns.values())
+        )
+        params = dict(members[0].params)
+        return CompiledCompletenessBatch(
+            query,
+            params,
+            tuple(
+                (replace(member, query=query, params=params), mapping[member.check.id])
+                for member in members
+            ),
+        )
 
     def compile(self, check: LoadedCheck, *, sample_seed: int = 0) -> CompiledCheck:
         if check.pattern is Pattern.CONFORMANCE:
@@ -356,12 +432,15 @@ class CypherCompiler:
             "node_count": self._compile_node_count,
             "relationship_count": self._compile_relationship_count,
             "property_coverage": self._compile_property_coverage,
+            "degree_distribution": self._compile_degree_distribution,
+            "schema_inventory": self._compile_schema_inventory,
         }.get(spec.metric)
         if compiler is None:
             raise GraphCheckError(
                 "engine.metric_unsupported",
                 f"Drift metric {spec.metric!r} has no C1 query compiler.",
-                "Use node_count, relationship_count, or property_coverage, "
+                "Use node_count, relationship_count, property_coverage, "
+                "or degree_distribution, schema_inventory, "
                 "or install its provider.",
             )
         query, params = compiler(spec)
@@ -420,6 +499,114 @@ class CypherCompiler:
         return query, {
             "required_labels": [],
             "required_relationship_types": required_types,
+        }
+
+    def _compile_degree_distribution(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target) - {"label", "type", "quantile", "direction"}
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        label = spec.target.get("label")
+        rel_type = spec.target.get("type")
+        quantile = spec.target.get("quantile")
+        direction = spec.target.get("direction", "both")
+        if label is None and rel_type is None:
+            raise _bad_target(spec.metric, "target requires at least one of label or type")
+        if label is not None and (not isinstance(label, str) or not label.strip()):
+            raise _bad_target(spec.metric, "target.label must be a non-blank string")
+        if rel_type is not None and (not isinstance(rel_type, str) or not rel_type.strip()):
+            raise _bad_target(spec.metric, "target.type must be a non-blank string")
+        if quantile not in _VALID_QUANTILES:
+            raise _bad_target(
+                spec.metric, f"target.quantile must be one of {sorted(_VALID_QUANTILES)}"
+            )
+        if direction not in _VALID_DIRECTIONS:
+            raise _bad_target(
+                spec.metric,
+                f"target.direction must be one of {sorted(_VALID_DIRECTIONS)}",
+            )
+        if label is None and rel_type is not None and direction == "both":
+            raise _bad_target(
+                spec.metric,
+                "target.direction must be 'in' or 'out' when target.type is given "
+                "without target.label",
+            )
+        required_labels = [label] if label is not None else []
+        required_types = [rel_type] if rel_type is not None else []
+        edge = _degree_edge_pattern(direction, rel_type)
+        if label is not None:
+            match_clause = f"MATCH {node_pattern('n', label)}"
+            with_clause = f"WITH n, COUNT {{ {edge} }} AS degree"
+        else:
+            match_clause = f"MATCH {edge}"
+            with_clause = f"WITH DISTINCT n, COUNT {{ {edge} }} AS degree"
+        if quantile == "max":
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN max(degree) AS current, count(n) AS population
+                }}
+                CALL (current) {{
+                  {match_clause}
+                  {with_clause}
+                  WHERE degree = current
+                  WITH n ORDER BY elementId(n) ASC LIMIT $evidence_cap
+                  RETURN collect({_node_pointer("n")}) AS evidence
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, evidence
+                """
+            ).strip()
+        else:
+            percentile = 0.5 if quantile == "p50" else 0.95
+            query = dedent(
+                f"""
+                {_SCHEMA_CATALOG}
+                CALL {{
+                  {match_clause}
+                  {with_clause}
+                  RETURN percentileDisc(degree, {percentile}) AS current, count(n) AS population
+                }}
+                RETURN {_SCHEMA_PROJECTION}, current, population, [] AS evidence
+                """
+            ).strip()
+        return query, {
+            "evidence_cap": self.evidence_cap,
+            "required_labels": required_labels,
+            "required_relationship_types": required_types,
+        }
+
+    def _compile_schema_inventory(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
+        unknown = set(spec.target)
+        if unknown:
+            raise _unknown_target(spec.metric, unknown)
+        query = dedent(
+            """
+            CALL {
+              CALL db.labels() YIELD label
+              RETURN collect(label) AS labels
+            }
+            CALL {
+              CALL db.relationshipTypes() YIELD relationshipType
+              RETURN collect(relationshipType) AS relationship_types
+            }
+            CALL {
+              CALL db.schema.nodeTypeProperties()
+              YIELD nodeLabels, propertyName
+              WHERE propertyName IS NOT NULL
+              UNWIND nodeLabels AS owner
+              WITH DISTINCT
+                replace(replace(owner, '\\\\', '\\\\\\\\'), '.', '\\\\.') AS owner_key,
+                replace(replace(propertyName, '\\\\', '\\\\\\\\'), '.', '\\\\.') AS property_key
+              RETURN collect(owner_key + '.' + property_key) AS properties
+            }
+            RETURN true AS schema_ok, labels, relationship_types, properties
+            """
+        ).strip()
+        return query, {
+            "required_labels": [],
+            "required_relationship_types": [],
         }
 
     def _compile_property_coverage(self, spec: DriftCheck) -> tuple[str, dict[str, object]]:
@@ -569,9 +756,10 @@ def _register_builtin_pack_compilers() -> None:
     # The pack registry remains model-only. Importing the C1 bridge installs compiler
     # callbacks for the template names carried by C3's data-only core pack.
     from graphcheck.engine import core_pack as loaded_core_pack
+    from graphcheck.engine import graphrag_pack as loaded_graphrag_pack
     from graphcheck.engine import pii_pack as loaded_pii_pack
 
-    del loaded_core_pack, loaded_pii_pack
+    del loaded_core_pack, loaded_graphrag_pack, loaded_pii_pack
 
 
 _register_builtin_pack_compilers()

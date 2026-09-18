@@ -1,14 +1,8 @@
-from dataclasses import dataclass
-
 import pytest
 
 from graphcheck.engine.parameters import GraphTokenResolver, resolve_parameters
 from graphcheck.errors import GraphCheckError
-
-
-@dataclass(frozen=True)
-class RichRows:
-    rows: list[dict[str, object]]
+from graphcheck.neo4j_adapter import QueryResult
 
 
 class RichClient:
@@ -18,7 +12,7 @@ class RichClient:
 
     def run_read_result(self, query, params, *, timeout_s=None):
         self.calls.append((query, params, timeout_s))
-        return RichRows(self.rows)
+        return QueryResult(self.rows, ("value",), ())
 
 
 class LegacyClient:

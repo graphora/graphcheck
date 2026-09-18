@@ -139,6 +139,10 @@ For Enterprise/Developer, an administrator assigns Neo4j's built-in `reader` rol
 used by GraphCheck. That account must have no other assigned role except the automatic `PUBLIC`
 role. GraphCheck therefore rejects `admin`, `architect`, `publisher`, `editor`, and custom roles.
 
+Both `profiles.yml` and `graphcheck.yml` must be UTF-8 YAML mappings with unique keys at every
+depth. Configuration diagnostics omit input values and YAML excerpts so malformed files do not
+expose credentials in command output.
+
 Edit `profiles.yml`. This Enterprise/Developer example uses an account assigned the built-in
 `reader` role:
 
@@ -282,7 +286,7 @@ verdicts, scores, run-level counts, keys, and container structure while replacin
 parameter, expected, and measured literals; check names and provenance; partial reasons; diagnostic
 messages and fixes; source hashes and target identifiers; and evidence messages/element values with
 `[REDACTED]`. Suite, check, and tag identifiers receive consistent ordered aliases so their
-relationships remain intact. Redacted artifacts use a target-neutral `redacted_<timestamp>` run ID.
+relationships remain intact. Redacted artifacts use a target-neutral `redacted_<random-id>_<timestamp>` run ID.
 Redaction also compares the final artifact with its collected source literals, allowing collisions
 only in explicitly safe structural fields such as timestamps, versions, enums, and error codes.
 Every mask-mode JSON and HTML write verifies the mask, alias, and neutral-ID policy before export.
@@ -300,6 +304,68 @@ graphcheck redact .graphcheck/runs/<run-id> --output export/results.json
 
 Without `--output`, the command writes `results.redacted.json` beside the source and never
 overwrites the original.
+
+## Comparing runs
+
+```console
+graphcheck report --history
+graphcheck changes
+graphcheck changes --since previous --json
+graphcheck changes --since <run-id> --json
+```
+
+`report --history` (also `--list`) shows each run's previous-run ID. New runs link to the last
+published run under the publication lock, including concurrent CLI and MCP runs. A missing
+previous link is shown as `—`. Deleting or pruning a run does not rewrite its successors' links.
+
+`changes` compares the latest published run to its linked predecessor by default. For older
+artifacts without a previous-run field, it uses the two newest runs. `--since <run-id>` selects
+another stored run to compare to latest. A missing predecessor produces an actionable error;
+select a retained run explicitly after pruning. Runs from different databases are rejected.
+
+The text and JSON output combine verdict changes, added and removed checks, coverage, suite
+scores, profile differences, and evidence element IDs. Profile differences reuse `graphcheck diff`;
+outcome differences reuse `report --compare`. JSON keys and delta lists have stable ordering and
+contain no comparison timestamp, so repeated comparisons of the same stored inputs are byte-identical.
+
+Each run records the filename of the latest existing timestamped profile in `run.baseline_ref`,
+resolved before execution. Running checks does not trigger profiling or change drift-check baseline
+selection. To compare graph changes, run `graphcheck profile` before each run:
+
+```console
+graphcheck profile --json
+graphcheck run
+# After changing the graph:
+graphcheck profile --json
+graphcheck run
+graphcheck changes --json
+```
+
+Without a saved profile, `baseline_ref` is null. If either run lacks a reference or has a partial
+profile, `changes` marks profile deltas unavailable while still comparing outcomes and evidence.
+Two runs referencing the same profile have no profile delta, even if the graph changed between runs.
+Missing, invalid, or mismatched referenced profile files are errors. Retain the referenced profiles
+with run history.
+
+Evidence identity is `(kind, element ID)`, scoped by `(suite ID, check ID)`. Aggregate measurement
+pointers are excluded. Each check shares the smaller input evidence cap across appeared and
+disappeared IDs; appeared IDs come first, and both lists are sorted. `dropped` counts known retained
+evidence deltas omitted at that cap. It does not estimate unseen IDs. Input truncation is reported
+separately: differences describe the stored evidence samples, not necessarily all graph changes.
+An absent evidence list (including a skipped or errored check) is an empty stored sample, not proof
+that the graph was repaired. Redacted inputs have no comparable element IDs.
+
+`changes` has its own exit policy:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | No outcome regression; existing failures, fixes, and profile/evidence changes alone do not fail the command |
+| `1` | A verdict regressed, a new failing/warning/errored check appeared, or a check newly reached `fail` |
+| `2` | The requested runs or referenced profiles could not be read or compared, or arguments were invalid |
+
+Verdict regressions use the same ranking as `report --compare`: pass, skipped, warn,
+warning-severity error, then failure/error-severity error. Profile availability and coverage are
+reported independently; exit `0` does not assert that both runs had complete coverage or profiles.
 
 ## Exit codes
 
@@ -482,3 +548,37 @@ rights.
 ## License
 
 Apache-2.0. See [LICENSE](../../LICENSE).
+
+
+### Result row ceiling and audit consistency
+
+Set the competency row ceiling in `graphcheck.yml`:
+
+```yaml
+engine:
+  result_row_limit: 200000
+```
+
+The default is 100000; only positive integers are accepted. CLI and MCP apply the same setting.
+Raising it increases memory use and does not bound the size of an individual row. Narrowing
+queries is usually preferable. Decisive equality failures stop early; equality success needs the
+complete result stream.
+
+Connection/credential preflight and checks share a 295-second execution allowance, with a
+nominal five-second reporting margin. Timeouts are cooperative and do not forcibly terminate
+connector, cleanup, or filesystem work. Measurement and evidence share a read transaction,
+but Neo4j's read-committed isolation allows concurrent writes to change observations between
+reads, even within one transaction/query. Disappearing failure evidence produces an explicit
+`engine.evidence_missing` error. Use a quiescent database or externally created stable copy when
+you need a reproducible audit.
+
+History IDs include a unique suffix so coincident completion timestamps preserve both runs.
+Use `graphcheck report --list` to find IDs, including older report names. Managed readers
+coordinate with publication and deletion. External filesystem readers should use immutable
+history paths, or retry if `latest` is being replaced. Corrupt history records are skipped with
+warnings; healthy neighbors remain accessible and pruning preserves unknown records.
+
+New baseline profiles use schema 1.1 to retain declared RANGE index property order. Legacy 1.0
+baselines remain readable with unknown order. Diffs now explain stored property additions,
+removals, and sampled type changes as well as known index reorders. A sampled property type
+is an observation, not proof that all values have that type.

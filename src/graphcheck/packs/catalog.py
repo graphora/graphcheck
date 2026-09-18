@@ -10,6 +10,7 @@ import yaml
 from graphcheck.packs.metadata import (
     CapabilityRequirement,
     CorePackMetadata,
+    GraphRAGPackMetadata,
     PiiPackMetadata,
     load_pack_metadata_yaml,
 )
@@ -68,6 +69,8 @@ def load_pack_catalog(
             if pii_metadata is not None:
                 raise PackCatalogError("more than one PII pack metadata file was found")
             pii_metadata = metadata
+            pack_checks = metadata.checks.items()
+        elif isinstance(metadata, GraphRAGPackMetadata):
             pack_checks = metadata.checks.items()
         else:  # pragma: no cover - the discriminated metadata adapter is exhaustive
             continue

@@ -45,6 +45,9 @@ first upload — the name `graphcheck` is claimed only on the first successful p
    ```
 
    The filename must contain the version you are about to tag. If it does not, step 1 was missed.
+   Inspect both archives against the [distribution contents policy](../../CONTRIBUTING.md#distribution-contents).
+   The source archive must contain all inputs needed to rebuild the wheel, including the three
+   archived results schemas, and must exclude local caches and repository-only tooling.
 5. Create a GitHub Release whose tag is `v<version>` (for example `v0.1.0`), targeting the merge
    commit from step 3. Publishing the release triggers the workflow.
 

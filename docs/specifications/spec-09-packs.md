@@ -315,12 +315,20 @@ evidence, console output, JSON, or HTML artifacts.
 
 The value matcher filters to actual string properties with null-safe conversion predicates before
 population counting and sampling. Lists and other valid Neo4j property types are excluded rather
-than causing a conversion error. Population and selection share one graph snapshot, so the sample
+than causing a conversion error. Population and selection share one query, subject to read-committed isolation, so the sample
 size and confidence interval describe the algorithm that actually ran.
 
 Every failing PII result contains node evidence pointers. Missing/malformed candidates, a broken
 query, timeout, schema warning, population/result disagreement, invalid checksum metadata, or
 missing pointer produces `errored`; none can become a pass or a silent skip.
+
+## GraphRAG pack
+
+`src/graphcheck/packs/graphrag.yml` declares `orphan_chunks`,
+`entity_without_provenance`, `dangling_extraction_relationships`, and
+`near_duplicate_entities`. See [GraphRAG configuration and semantics](../graphrag.md) for
+the configurable model, sampling limits, evidence contract, and new semantics requiring
+separate approval, including the `model_absent` skip and zero-exit policy.
 
 ## Runtime consumption
 

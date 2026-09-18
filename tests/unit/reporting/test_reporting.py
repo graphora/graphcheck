@@ -20,6 +20,7 @@ from graphcheck.reporting.html import (
     render_validated_html_report_fragments,
 )
 from graphcheck.reporting.writer import load_results, results_json, write_results
+from tests import SCHEMAS_DIR
 
 FIXTURES = Path(__file__).parents[1] / "contracts" / "fixtures"
 
@@ -29,19 +30,7 @@ def _fixture(name: str) -> Path:
 
 
 def _historical_results_schema(version: str) -> dict:
-    schema = deepcopy(results_schema())
-    schema["properties"]["schema_version"]["const"] = version
-    run = schema["$defs"]["Run"]
-    run["properties"]["status"] = run["properties"].pop("run_status")
-    run["required"][run["required"].index("run_status")] = "status"
-    if version in {"1.0", "1.1"}:
-        target = schema["$defs"]["ResultsTarget"]
-        for field in ("labels", "relationship_types"):
-            target["properties"].pop(field)
-            target["required"].remove(field)
-    if version == "1.0":
-        schema["$defs"]["EvidenceElement"]["properties"]["kind"]["enum"].remove("aggregate")
-    return schema
+    return json.loads((SCHEMAS_DIR / f"results-{version}.schema.json").read_text(encoding="utf-8"))
 
 
 class _CheckCardParser(HTMLParser):
@@ -78,7 +67,9 @@ def _next_steps_fragment(rendered: str) -> str:
     return rendered[start:end]
 
 
-@pytest.mark.parametrize("name", ["clean", "complete", "partial", "generated-only", "failed"])
+@pytest.mark.parametrize(
+    "name", ["clean", "complete", "partial", "generated-only", "failed", "lineage"]
+)
 def test_writer_round_trips_existing_results_fixtures(name: str):
     source = _fixture(name)
     model = load_results(source)
@@ -93,12 +84,9 @@ def test_writer_round_trips_existing_results_fixtures(name: str):
 
 @pytest.mark.parametrize("historical_version", ["1.0", "1.1", "1.2"])
 def test_writer_emits_output_valid_for_declared_historical_schema(historical_version):
-    raw = json.loads(_fixture("complete").read_text(encoding="utf-8"))
-    raw["schema_version"] = historical_version
-    raw["run"]["status"] = raw["run"].pop("run_status")
-    if historical_version in {"1.0", "1.1"}:
-        raw["run"]["target"].pop("labels")
-        raw["run"]["target"].pop("relationship_types")
+    raw = json.loads(
+        (FIXTURES / "historical" / historical_version / "results.json").read_text(encoding="utf-8")
+    )
 
     output = json.loads(results_json(raw))
 

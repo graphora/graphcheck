@@ -2,7 +2,7 @@
 
 # GraphCheck
 
-[![Release](https://img.shields.io/badge/release-v0.2.0-5b5bd6)](https://github.com/graphora/graphcheck/releases)
+[![Release](https://img.shields.io/badge/release-v0.4.0-5b5bd6)](https://github.com/graphora/graphcheck/releases)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2ea44f)](LICENSE)
 
@@ -34,6 +34,8 @@ the **[full user guide](docs/guides/user-guide.md)**.
 
 GraphCheck requires Python 3.12, 3.13, or 3.14 and a supported Neo4j server. See the
 [compatibility matrix](docs/reference/compatibility.md) for the tested Neo4j and Cypher versions.
+The audit ceiling is **10 million nodes**, see [supported graph size](docs/reference/compatibility.md#supported-graph-size)
+for measured runtimes, sampling, and the transaction-memory limitation observed with PII at 10M.
 
 Install the published CLI and scaffold a project:
 
@@ -152,11 +154,21 @@ Suite YAML is strict: duplicate keys, unknown fields, invalid payloads, and inco
 fail before execution. Runtime evaluation is rule-based; generated check suggestions remain inert
 until a person reviews and activates them.
 
-For the full contracts, see the [check YAML specification](docs/specifications/spec-02-check-yaml.md),
-[`results.json` specification](docs/specifications/spec-01-results-json.md), and
-[engine and CLI specification](docs/specifications/spec-04-engine.md). The
-[agent guide](docs/guides/agents.md), [telemetry disclosure](docs/reference/telemetry.md),
-and [contributor guide](CONTRIBUTING.md) cover integration and operational workflows.
+For document/chunk/entity graphs, enable the optional [GraphRAG pack](docs/graphrag.md) with
+`graphcheck init --pack graphrag`. It checks provenance, embedding consistency, and sampled duplicate names using your
+configured labels, relationships, and properties.
+
+For authoring and execution details, see the [user guide](docs/guides/user-guide.md) and
+[JSON Schemas](docs/schemas/). The [agent guide](docs/guides/agents.md),
+[telemetry disclosure](docs/reference/telemetry.md), and [contributor guide](CONTRIBUTING.md)
+cover integration and operational workflows.
+
+## Support
+
+See the [Neo4j compatibility matrix](docs/reference/compatibility.md) for supported servers and
+the [artifact compatibility policy](docs/reference/artifact-compatibility.md) for schema support,
+deprecation deadlines, and migration of saved `results.json` files. Schema versions are independent
+of CLI versions; the current and previous schemas remain readable.
 
 ## Non-goals
 
