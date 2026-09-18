@@ -1,6 +1,2 @@
 *.sh text eol=lf
 docs/samples/reports/*.html text eol=lf
-tools/agent-authoring-benchmark/context/** -text whitespace=cr-at-eol
-tools/agent-authoring-benchmark/raw/** -text whitespace=cr-at-eol
-tools/agent-authoring-benchmark/task-set.json -text whitespace=cr-at-eol
-tools/agent-authoring-benchmark/PROMPT.md -text whitespace=cr-at-eol

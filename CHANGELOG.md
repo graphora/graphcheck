@@ -6,13 +6,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Added
 
-- Added a reproducible fraud-ring agent-authoring benchmark with raw Luna, Terra, and Sol
-  submissions and separate validity, loading, execution, and verdict scores. The agent guide and
-  schema descriptions now explain regression value shapes, evidence identities, and count scope;
-  missing-evidence diagnostics identify accepted element aliases and retain the failed assertion.
+- The agent guide and schema descriptions now explain regression value shapes, evidence identities,
+  and count scope, with a complete aggregate-witness example in the guide. Missing-evidence
+  diagnostics identify accepted element aliases and retain the failed assertion.
 
-- Published a 10-million-node audit ceiling with full core/PII benchmark results and sampling
-  thresholds. Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
+- Published a 10-million-node audit ceiling and sampling thresholds.
+  Larger graphs fail before check dispatch with `engine.graph_size_exceeded` and a
   `Fix:` diagnostic; the reference 2 GiB transaction-memory limit cannot complete PII at 10M.
 
 - Published the [artifact compatibility policy](docs/reference/artifact-compatibility.md), with
@@ -78,6 +77,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
   distinguishes newly available index-order metadata from known definition changes.
 
 ### Changed
+
+- Source distributions now contain only application sources, runtime compatibility schemas, and
+  release metadata/documentation. Repository tooling, tests, examples, and local caches are excluded.
+- Schema file generation moves to `tools/generate_schemas.py`; runtime schema generation and
+  validation remain available. Removed unused Python helpers `default_profiles`, `print_profile`,
+  and `count_band`, plus the repository-only `SCHEMAS_DIR` constant and `write_*schema*` helpers
+  from `graphcheck.contracts.schemas`.
 
 - Reading pre-2.0 results emits one `results.schema_deprecated` warning on stderr per artifact
   read. Removal is planned for CLI 0.5.0, postponed while the current/previous-schema guarantee

@@ -490,10 +490,6 @@ def _partial_profile(
     return baseline
 
 
-def print_profile(client: Neo4jClient) -> None:
-    print(profile(client).model_dump_json(indent=2, by_alias=True))
-
-
 def _observed_profile_call[T](
     observer: ProfileTelemetryObserver | None,
     stage: str,
