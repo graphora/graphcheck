@@ -268,3 +268,28 @@ def test_chunk_coverage_passes_when_every_chunk_has_an_entity(neo4j_profile, tmp
     with _seeded_graph(neo4j_profile, cypher):
         _assert_cli_exit(_cli(tmp_path, "run", "--suite", "hostile-chunk-coverage"), 0)
         assert _run_payload(tmp_path)["checks"][0]["verdict"] == "pass"
+
+
+@pytest.mark.parametrize("relationships", [False, True])
+def test_label_explosion_passes_without_rare_labels_or_types(
+    neo4j_profile, tmp_path, relationships
+):
+    _project(tmp_path, neo4j_profile, "graphrag.yml")
+    suite = {
+        "suite": "label-explosion",
+        "conformance": [
+            {"id": "label_explosion", "check": "label_explosion", "with": MODEL.model_dump()}
+        ],
+    }
+    (tmp_path / "checks/label-explosion.yml").write_text(yaml.safe_dump(suite), encoding="utf-8")
+    # Exceed the population floor so a clean graph is evaluated instead of skipped.
+    cypher = "UNWIND range(1, 20) AS i CREATE (d:Document), (c:Chunk), (e:__Entity__)"
+    if relationships:
+        cypher += " CREATE (d)-[:PART_OF]->(c), (c)-[:HAS_ENTITY]->(e)"
+    with _seeded_graph(neo4j_profile, cypher):
+        run = _cli(tmp_path, "run", "--suite", "label-explosion")
+        check = _run_payload(tmp_path)["checks"][0]
+        assert check["verdict"] == "pass", check["error"]
+        _assert_cli_exit(run, 0)
+        assert check["measured"] == {"violations": 0, "population": 0}
+        assert check["evidence"] is None and check["error"] is None

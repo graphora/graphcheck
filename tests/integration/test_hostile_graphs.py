@@ -643,7 +643,8 @@ def test_public_scale_cli_matrix_is_bounded_and_graceful(
         _assert_safe(run, case["pack_expected_exit_code"], data_failure=True)
         checks = {check["id"]: check for check in _run_payload(tmp_path)["checks"]}
         assert set(checks) == set(GRAPHRAG_CHECK_NAMES)
-        assert all(check["verdict"] in {"pass", "fail"} for check in checks.values())
+        for check in checks.values():
+            assert check["verdict"] in {"pass", "fail"}, check
         check = checks["near_duplicate_entities"]
         assert check["verdict"] == "pass", check["error"]
         assert check["measured"]["population"] == case["nodes"]

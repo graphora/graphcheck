@@ -426,11 +426,13 @@ def _compile_label_explosion(config: dict, evidence_cap: int, sample_seed: int) 
         "required_labels": [],
         "required_relationship_types": [],
     }
+    # Aggregate before projecting constants so an empty scan still yields one summary row.
     return ConformancePlan(
         query=(
             f"{scan}"
-            "RETURN true AS schema_ok, count(*) AS violation_count, "
-            "count(*) AS population, [] AS evidence"
+            "WITH count(*) AS violation_count\n"
+            "RETURN true AS schema_ok, violation_count, "
+            "violation_count AS population, [] AS evidence"
         ),
         params=params,
         expected={"singletons": 0},
